@@ -1,0 +1,17 @@
+# convert.fw — Unit conversions
+#
+# Try:
+#   fwiz convert(celsius=?, fahrenheit=212)
+#   fwiz convert(fahrenheit=?, celsius=100)
+#   fwiz convert(km=?, miles=26.2)
+#   fwiz convert(kg=?, pounds=150)
+
+# Temperature
+fahrenheit = celsius * 9 / 5 + 32
+
+# Distance
+km = miles * 1.60934
+meters = km * 1000
+
+# Weight
+kg = pounds * 0.453592
