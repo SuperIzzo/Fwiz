@@ -1,0 +1,24 @@
+# physics.fw — Classical mechanics formulas
+#
+# Try:
+#   fwiz physics(force=?, mass=10)
+#   fwiz physics(mass=?, force=98.1)
+#   fwiz physics(time=?, distance=100, speed=25)
+#   fwiz --steps physics(kinetic_energy=?, mass=5, velocity=10)
+
+# Constants
+g = 9.81
+pi = 3.14159265
+
+# Newton's second law
+force = mass * g
+
+# Kinematics
+distance = speed * time
+
+# Kinetic energy: KE = ½mv²
+kinetic_energy = 0.5 * mass * velocity ^ 2
+
+# Circular motion
+circumference = 2 * pi * radius
+area = pi * radius ^ 2

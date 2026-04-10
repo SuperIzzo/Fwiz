@@ -1,0 +1,18 @@
+# finance.fw — Common financial calculations
+#
+# Try:
+#   fwiz finance(total=?, price=29.99, qty=3)
+#   fwiz finance(price=?, total=100, qty=4)
+#   fwiz --steps finance(profit_margin=?, revenue=1000, cost=750)
+
+# Tax rate (default 20%)
+tax_rate = 0.20
+
+# Simple pricing
+subtotal = price * qty
+tax = subtotal * tax_rate
+total = subtotal + tax
+
+# Profit
+profit = revenue - cost
+profit_margin = profit / revenue * 100

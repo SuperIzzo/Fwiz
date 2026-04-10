@@ -1,0 +1,13 @@
+# navigation.fw — Distance and travel time
+#
+# Uses two definitions of distance (Euclidean and speed*time)
+# so you can query travel time from coordinates.
+#
+# Try:
+#   fwiz navigation(time=?, speed=60, x1=0, y1=0, x2=30, y2=40)
+#   fwiz --steps navigation(time=?, speed=60, x1=0, y1=0, x2=30, y2=40)
+#   fwiz navigation(speed=?, time=2, x1=0, y1=0, x2=100, y2=0)
+
+# Two definitions of distance — fwiz substitutes one into the other
+distance = speed * time
+distance = sqrt((x1 - x2) ^ 2 + (y1 - y2) ^ 2)

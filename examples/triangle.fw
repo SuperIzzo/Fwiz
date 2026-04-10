@@ -1,0 +1,61 @@
+# triangle.fw — Complete triangle solver
+#
+# Sides: a, b, c       Angles: A, B, C (degrees, opposite respective sides)
+#
+# Give any valid combination and solve for the rest:
+#
+#   SAS:  fwiz triangle(c=?, a=3, b=4, C=90)
+#   SSS:  fwiz triangle(A=?, B=?, C=?, a=3, b=4, c=5)
+#   ASA:  fwiz triangle(a=?, b=?, A=60, B=60, c=10)
+#   AAS:  fwiz triangle(b=?, c=?, A=36.87, B=53.13, a=3)
+#   Area: fwiz triangle(area=?, a=3, b=4, c=5)
+#
+# Multi-return:
+#   fwiz triangle(c=?side, area=?A, a=3, b=4, C=90)
+#
+# With steps:
+#   fwiz --steps triangle(C=?, a=3, b=4, c=5)
+
+# --- Constants ---
+pi = 3.14159265358979
+deg = 0.01745329251994
+rdeg = 57.2957795130823
+
+# --- Angle sum ---
+# Listed first: simplest relationship, tried before heavier formulas.
+# The solver recurses to find missing angles via law of cosines below.
+A = 180 - B - C
+B = 180 - A - C
+C = 180 - A - B
+
+# --- Law of cosines: sides ---
+# Given two sides and the included angle (SAS), solve for the third side.
+a = sqrt(b^2 + c^2 - 2*b*c*cos(A * deg))
+b = sqrt(a^2 + c^2 - 2*a*c*cos(B * deg))
+c = sqrt(a^2 + b^2 - 2*a*b*cos(C * deg))
+
+# --- Law of cosines: angles ---
+# Given three sides (SSS), solve for any angle.
+A = acos((b^2 + c^2 - a^2) / (2*b*c)) * rdeg
+B = acos((a^2 + c^2 - b^2) / (2*a*c)) * rdeg
+C = acos((a^2 + b^2 - c^2) / (2*a*b)) * rdeg
+
+# --- Law of sines ---
+# Given a side-angle pair and another angle (AAS/ASA), solve for sides.
+a = b * sin(A * deg) / sin(B * deg)
+a = c * sin(A * deg) / sin(C * deg)
+b = a * sin(B * deg) / sin(A * deg)
+b = c * sin(B * deg) / sin(C * deg)
+c = a * sin(C * deg) / sin(A * deg)
+c = b * sin(C * deg) / sin(B * deg)
+
+# --- Area ---
+# Multiple formulas so the solver can pick whichever has data available.
+area = a * b * sin(C * deg) / 2
+area = b * c * sin(A * deg) / 2
+area = a * c * sin(B * deg) / 2
+
+# --- Heron's formula ---
+# Area from three sides, no angles needed.
+s = (a + b + c) / 2
+area = sqrt(s * (s - a) * (s - b) * (s - c))

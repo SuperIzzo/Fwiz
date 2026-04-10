@@ -1,0 +1,11 @@
+# geometry.fw — Rectangle calculations
+#
+# Try:
+#   fwiz geometry(area=?, perimeter=?, width=5, height=3)
+#   fwiz geometry(area=?a, perimeter=?p, width=5, height=3)
+#   fwiz geometry(width=?, area=15, height=3)
+#   fwiz geometry(diagonal=?, width=3, height=4)
+
+area = width * height
+perimeter = 2 * width + 2 * height
+diagonal = sqrt(width ^ 2 + height ^ 2)
