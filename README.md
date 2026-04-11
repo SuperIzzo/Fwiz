@@ -40,8 +40,9 @@ The `.fw` extension is added automatically if omitted. Use `=?` to query a varia
 ### Run tests
 
 ```bash
-make test       # functional tests (678 tests)
+make test       # functional tests (1240+ tests)
 make sanitize   # memory safety checks (ASan + UBSan)
+make analyze    # static analysis (clang-tidy, zero warnings)
 ```
 
 ---
@@ -348,4 +349,7 @@ See the `examples/` directory:
 - **navigation.fw** — Travel time from coordinates (multi-equation substitution)
 - **convert.fw** — Temperature, distance, weight conversions
 - **geometry.fw** — Rectangle area, perimeter, diagonal (multi-return)
-- **triangle.fw** — Complete triangle solver: any 3 knowns → all unknowns (demonstrates equation ordering and recursive backtracking)
+- **triangle.fw** — Complete triangle solver: any 3 knowns → all unknowns
+- **rectangle.fw** — Simple area formula (used by box.fw via formula calls)
+- **box.fw** — Box surface area and volume via cross-file formula calls to rectangle.fw
+- **factorial.fw** — Recursive factorial with conditional base case (demonstrates Turing completeness)
