@@ -137,8 +137,8 @@ public:
             ExprPtr resolved = expr;
             for (auto& v : vars) {
                 if (v == target) return;
-                if (bindings.count(v)) {
-                    resolved = substitute(resolved, v, Expr::Num(bindings.at(v)));
+                if (auto it = bindings.find(v); it != bindings.end()) {
+                    resolved = substitute(resolved, v, Expr::Num(it->second));
                 } else {
                     try {
                         auto b2 = bindings;
@@ -223,7 +223,7 @@ public:
             for (auto& [k, v] : bindings)
                 trace.step("    " + k + " = " + fmt_num(v));
         }
-        if (bindings.count(target)) return bindings.at(target);
+        if (auto it = bindings.find(target); it != bindings.end()) return it->second;
 
         return solve_recursive(target, bindings, {}, 0);
     }
@@ -408,27 +408,25 @@ private:
     {
         std::map<std::string, double> sub;
 
-        auto try_get = [&](const std::string& parent_var) -> bool {
-            if (parent_bindings.count(parent_var)) {
-                return true;
+        // Try to get a parent variable's value — from bindings or by solving
+        auto try_bind = [&](const std::string& sub_var, const std::string& parent_var) {
+            if (auto it = parent_bindings.find(parent_var); it != parent_bindings.end()) {
+                sub[sub_var] = it->second;
             } else if (resolve_unknowns) {
                 try {
-                    solve_recursive(parent_var, parent_bindings, visited, depth + 1);
-                    return true;
-                } catch (...) { return false; }
+                    double val = solve_recursive(parent_var, parent_bindings, visited, depth + 1);
+                    sub[sub_var] = val;
+                } catch (...) { return; }
             }
-            return false;
         };
 
-        for (auto& [sub_var, parent_var] : call.bindings) {
-            if (parent_var == skip_parent_var) continue;
-            if (try_get(parent_var))
-                sub[sub_var] = parent_bindings.at(parent_var);
+        for (auto& [sv, pv] : call.bindings) {
+            if (pv != skip_parent_var) try_bind(sv, pv);
         }
 
         // Bridge: output_var -> query_var
-        if (call.output_var != skip_parent_var && try_get(call.output_var))
-            sub[call.query_var] = parent_bindings.at(call.output_var);
+        if (call.output_var != skip_parent_var)
+            try_bind(call.query_var, call.output_var);
 
         return sub;
     }
@@ -524,8 +522,8 @@ private:
         ExprPtr resolved = expr;
         for (auto& v : vars) {
             if (v == target) return nullptr;
-            if (bindings.count(v)) {
-                resolved = substitute(resolved, v, bindings.at(v));
+            if (auto it = bindings.find(v); it != bindings.end()) {
+                resolved = substitute(resolved, v, it->second);
             } else {
                 auto sub_expr = derive_recursive(v, bindings, visited, depth + 1);
                 if (sub_expr)
@@ -547,7 +545,7 @@ private:
     ExprPtr derive_recursive(const std::string& target,
                              std::map<std::string, ExprPtr>& bindings,
                              std::set<std::string> visited, int depth) const {
-        if (bindings.count(target)) return bindings.at(target);
+        if (auto it = bindings.find(target); it != bindings.end()) return it->second;
         if (visited.count(target)) return nullptr;
         visited.insert(target);
 
@@ -559,9 +557,9 @@ private:
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 std::map<std::string, ExprPtr> sub_binds;
                 for (auto& [sv, pv] : c.call->bindings)
-                    if (bindings.count(pv)) sub_binds[sv] = bindings.at(pv);
-                if (bindings.count(c.call->output_var))
-                    sub_binds[c.call->query_var] = bindings.at(c.call->output_var);
+                    if (auto it = bindings.find(pv); it != bindings.end()) sub_binds[sv] = it->second;
+                if (auto it = bindings.find(c.call->output_var); it != bindings.end())
+                    sub_binds[c.call->query_var] = it->second;
                 try {
                     auto& sub_sys = load_sub_system(c.call->file_stem);
                     for (auto& [k, v] : sub_sys.defaults)
@@ -582,9 +580,9 @@ private:
     double solve_recursive(const std::string& target,
                            std::map<std::string, double>& bindings,
                            std::set<std::string> visited, int depth) const {
-        if (bindings.count(target)) {
-            trace.calc("known: " + target + " = " + fmt_num(bindings.at(target)), depth + 1);
-            return bindings.at(target);
+        if (auto it = bindings.find(target); it != bindings.end()) {
+            trace.calc("known: " + target + " = " + fmt_num(it->second), depth + 1);
+            return it->second;
         }
         if (visited.count(target))
             throw std::runtime_error(
@@ -663,9 +661,9 @@ private:
         ExprPtr resolved = expr;
         for (auto& v : vars) {
             if (v == target) return false;
-            if (bindings.count(v)) {
-                trace.calc("substitute " + v + " = " + fmt_num(bindings.at(v)), depth + 2);
-                resolved = substitute(resolved, v, Expr::Num(bindings.at(v)));
+            if (auto it = bindings.find(v); it != bindings.end()) {
+                trace.calc("substitute " + v + " = " + fmt_num(it->second), depth + 2);
+                resolved = substitute(resolved, v, Expr::Num(it->second));
             } else {
                 trace.step("need: " + v, depth + 2);
                 try {

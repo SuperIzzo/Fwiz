@@ -282,7 +282,7 @@ inline std::string expr_to_string(const Expr& e) {
     return "?";
 }
 // Pointer overloads
-inline int precedence(ExprPtr e) { return e ? precedence(*e) : 0; }
+inline int precedence(ExprPtr e) { return e ? precedence(*e) : 5; }
 inline std::string expr_to_string(ExprPtr e) { return e ? expr_to_string(*e) : "?"; }
 
 // ============================================================================
@@ -347,17 +347,18 @@ inline double evaluate(ExprPtr e) {
 // ---- Flattening helpers ----
 
 // Decompose expr into (base, exponent) — e.g. x^3 → (x, 3), x → (x, 1)
-inline std::pair<ExprPtr, double> split_pow(const ExprPtr& e) {
-    if (e->type == ExprType::BINOP && e->op == BinOp::POW
-        && e->right->type == ExprType::NUM)
+inline std::pair<ExprPtr, double> split_pow(ExprPtr e) {
+    assert(e && "split_pow: null expression");
+    if (e->type == ExprType::BINOP && e->op == BinOp::POW && is_num(e->right))
         return {e->left, e->right->num};
     return {e, 1.0};
 }
 
 // Flatten an additive chain (ADD/SUB) into (coefficient, base) terms.
 // Each term represents coeff * base. Bare constants have base=nullptr.
-inline void flatten_additive(const ExprPtr& e, double sign,
+inline void flatten_additive(ExprPtr e, double sign,
                              std::vector<std::pair<double, ExprPtr>>& terms) {
+    assert(e && "flatten_additive: null expression");
     if (e->type == ExprType::NUM) {
         terms.push_back({sign * e->num, nullptr});
     } else if (e->type == ExprType::UNARY_NEG) {
@@ -409,9 +410,10 @@ inline ExprPtr rebuild_additive(const std::vector<std::pair<double, ExprPtr>>& t
 // Flatten a MUL chain into (base, exponent) factors.
 // Only flattens through MUL, not DIV (to preserve division structure).
 // Numeric constants are collected into a single coefficient.
-inline void flatten_multiplicative(const ExprPtr& e,
+inline void flatten_multiplicative(ExprPtr e,
                                    double& coeff,
                                    std::vector<std::pair<ExprPtr, double>>& factors) {
+    assert(e && "flatten_multiplicative: null expression");
     if (e->type == ExprType::NUM) {
         coeff *= e->num;
     } else if (e->type == ExprType::UNARY_NEG) {
