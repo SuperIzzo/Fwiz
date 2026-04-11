@@ -56,8 +56,8 @@ struct FormulaCall {
     std::string file_stem;    // e.g. "rectangle"
     std::string query_var;    // internal to sub-system, e.g. "area"
     std::string output_var;   // exposed to parent scope, e.g. "floor"
-    // sub_system_var -> parent_var
-    std::map<std::string, std::string> bindings;
+    // sub_system_var -> parent expression (evaluated at call time)
+    std::map<std::string, ExprPtr> bindings;
 };
 
 class FormulaSystem {
@@ -82,8 +82,8 @@ public:
         for (auto& [k, v] : defaults) vars.insert(k);
         for (auto& fc : formula_calls) {
             vars.insert(fc.output_var);
-            for (auto& [sub_var, parent_var] : fc.bindings)
-                vars.insert(parent_var);
+            for (auto& [sub_var, expr] : fc.bindings)
+                collect_vars(expr, vars);
         }
         return vars;
     }
@@ -135,7 +135,7 @@ public:
                 trace.step("  default: " + k + " = " + fmt_num(v));
             for (auto& fc : formula_calls) {
                 std::string s = "  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var;
-                for (auto& [sv, pv] : fc.bindings) { s += ", "; s += sv; s += "="; s += pv; }
+                for (auto& [sv, expr] : fc.bindings) { s += ", "; s += sv; s += "="; s += expr_to_string(expr); }
                 trace.step(s + ")");
             }
         }
@@ -307,16 +307,27 @@ private:
                     i += 3;
                 }
             }
-            // Check for binding: IDENT EQUALS IDENT
-            else if (i + 2 < rparen_pos
-                     && tok[i + 1].type == TokenType::EQUALS
-                     && tok[i + 2].type == TokenType::IDENT) {
-                call.bindings[tok[i].text] = tok[i + 2].text;
-                i += 3;
+            // Check for binding: IDENT EQUALS expr (up to next COMMA or RPAREN)
+            else if (i + 1 < rparen_pos && tok[i + 1].type == TokenType::EQUALS) {
+                std::string sub_var = tok[i].text;
+                // Collect tokens from after = until COMMA or RPAREN
+                size_t expr_start = i + 2;
+                size_t expr_end = expr_start;
+                int pd = 0;
+                while (expr_end < rparen_pos) {
+                    if (tok[expr_end].type == TokenType::LPAREN) pd++;
+                    else if (tok[expr_end].type == TokenType::RPAREN) pd--;
+                    else if (tok[expr_end].type == TokenType::COMMA && pd == 0) break;
+                    expr_end++;
+                }
+                std::vector<Token> expr_tok(tok.begin() + expr_start, tok.begin() + expr_end);
+                expr_tok.push_back({TokenType::END, "", 0});
+                call.bindings[sub_var] = Parser(expr_tok).parse_expr();
+                i = expr_end;
             }
-            // Shorthand binding: bare IDENT
+            // Shorthand binding: bare IDENT → Var with same name
             else {
-                call.bindings[tok[i].text] = tok[i].text;
+                call.bindings[tok[i].text] = Expr::Var(tok[i].text);
                 i++;
             }
         }
@@ -406,14 +417,14 @@ private:
             size_t op_pos = std::string::npos;
             size_t op_len = 0;
 
-            // Check two-char operators first
+            // Two-char operators first, then single-char
             for (auto& [s, o, l] : std::vector<std::tuple<std::string, CondOp, size_t>>{
-                {">=", CondOp::GE, 2}, {"<=", CondOp::LE, 2}, {"!=", CondOp::NE, 2},
+                {"==", CondOp::EQ, 2}, {">=", CondOp::GE, 2}, {"<=", CondOp::LE, 2}, {"!=", CondOp::NE, 2},
                 {">", CondOp::GT, 1}, {"<", CondOp::LT, 1}, {"=", CondOp::EQ, 1}
             }) {
                 auto p = clause_str.find(s);
                 if (p != std::string::npos && (op_pos == std::string::npos || p < op_pos)) {
-                    // Make sure we don't match >= when looking for >
+                    // For single-char ops, skip if part of a two-char op
                     if (l == 1 && p + 1 < clause_str.size() && clause_str[p+1] == '=') continue;
                     if (l == 1 && s == "=" && p > 0 && (clause_str[p-1] == '>' || clause_str[p-1] == '<' || clause_str[p-1] == '!')) continue;
                     op_pos = p;
@@ -585,25 +596,45 @@ private:
     {
         std::map<std::string, double> sub;
 
-        // Try to get a parent variable's value — from bindings or by solving
-        auto try_bind = [&](const std::string& sub_var, const std::string& parent_var) {
-            if (auto it = parent_bindings.find(parent_var); it != parent_bindings.end()) {
-                sub[sub_var] = it->second;
-            } else if (resolve_unknowns) {
-                try {
-                    double val = solve_recursive(parent_var, parent_bindings, visited, depth + 1);
-                    sub[sub_var] = val;
-                } catch (...) { return; }
+        // Evaluate a binding expression against parent bindings
+        auto eval_binding = [&](const std::string& sub_var, ExprPtr expr) {
+            // Substitute known parent bindings into the expression
+            ExprPtr resolved = expr;
+            std::set<std::string> vars;
+            collect_vars(expr, vars);
+            for (auto& v : vars) {
+                if (auto it = parent_bindings.find(v); it != parent_bindings.end()) {
+                    resolved = substitute(resolved, v, Expr::Num(it->second));
+                } else if (resolve_unknowns) {
+                    try {
+                        double val = solve_recursive(v, parent_bindings, visited, depth + 1);
+                        resolved = substitute(resolved, v, Expr::Num(val));
+                    } catch (...) { return; }
+                } else { return; }
             }
+            try {
+                sub[sub_var] = evaluate(*simplify(resolved));
+            } catch (...) { return; }
         };
 
-        for (auto& [sv, pv] : call.bindings) {
-            if (pv != skip_parent_var) try_bind(sv, pv);
+        for (auto& [sv, expr] : call.bindings) {
+            // Check if we should skip this binding (for reverse formula call)
+            // For simple Var bindings, check if the var name matches skip
+            if (!skip_parent_var.empty() && is_var(expr) && expr->name == skip_parent_var) continue;
+            eval_binding(sv, expr);
         }
 
         // Bridge: output_var -> query_var
-        if (call.output_var != skip_parent_var)
-            try_bind(call.query_var, call.output_var);
+        if (call.output_var != skip_parent_var) {
+            if (auto it = parent_bindings.find(call.output_var); it != parent_bindings.end())
+                sub[call.query_var] = it->second;
+            else if (resolve_unknowns) {
+                try {
+                    double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1);
+                    sub[call.query_var] = val;
+                } catch (...) {}
+            }
+        }
 
         return sub;
     }
@@ -680,10 +711,10 @@ private:
                 }
             }
 
-        // Strategy 5: reverse formula call
+        // Strategy 5: reverse formula call (only for simple Var bindings)
         for (auto& call : formula_calls)
-            for (auto& [sub_var, parent_var] : call.bindings)
-                if (parent_var == target)
+            for (auto& [sub_var, expr] : call.bindings)
+                if (is_var(expr) && expr->name == target)
                     if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
                         target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
                         &call, sub_var, nullptr}))
@@ -735,8 +766,18 @@ private:
                 if (result) { bindings[target] = result; found = result; return true; }
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 std::map<std::string, ExprPtr> sub_binds;
-                for (auto& [sv, pv] : c.call->bindings)
-                    if (auto it = bindings.find(pv); it != bindings.end()) sub_binds[sv] = it->second;
+                for (auto& [sv, expr] : c.call->bindings) {
+                    // Substitute known symbolic bindings into the expression
+                    ExprPtr resolved = expr;
+                    std::set<std::string> vars;
+                    collect_vars(expr, vars);
+                    bool all_resolved = true;
+                    for (auto& v : vars)
+                        if (auto it = bindings.find(v); it != bindings.end())
+                            resolved = substitute(resolved, v, it->second);
+                        else all_resolved = false;
+                    if (all_resolved) sub_binds[sv] = simplify(resolved);
+                }
                 if (auto it = bindings.find(c.call->output_var); it != bindings.end())
                     sub_binds[c.call->query_var] = it->second;
                 try {
