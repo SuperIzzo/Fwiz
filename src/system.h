@@ -112,6 +112,15 @@ public:
             if (first) { first = false; strip_bom(line); }
             line = trim(line);
             if (line.empty() || line[0] == '#') continue;
+            // Strip inline comments (# not inside parentheses)
+            { int pd = 0;
+              for (size_t ci = 0; ci < line.size(); ci++) {
+                  if (line[ci] == '(') pd++;
+                  else if (line[ci] == ')') pd--;
+                  else if (line[ci] == '#' && pd == 0) { line = trim(line.substr(0, ci)); break; }
+              }
+              if (line.empty()) continue;
+            }
             try { parse_line(line); }
             catch (const std::exception& e) {
                 trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
