@@ -10,14 +10,14 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (1240+)
+make test         # run all tests (1300+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
 
 Run: `./bin/fwiz [flags] <file>(<var>=?, <var>=?!, <var>=<value>, <var>=<expr>, ...)`
 
-Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive`
+Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive`, `--no-numeric`, `--precision N`
 
 ## Architecture
 
@@ -27,7 +27,11 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
-**Solver:** `enumerate_candidates()` generates candidates, shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results.
+**Solver:** `enumerate_candidates()` generates candidates (6 strategies), shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results.
+
+**Numeric solver:** Strategy 6 — adaptive grid scan with Newton/bisection refinement. Enabled by default. `try_resolve_numeric()` handles equation-based root-finding and system-probe fallback (for recursive formulas). Memoization via `numeric_memo_`. Results classified as exact (`=`) or approximate (`~`) via forward verification.
+
+**Derive unfolding:** Formula call bodies are inlined into parent expressions when possible, enabling algebraic solving through formula calls. Detects self-referencing calls and falls back to direct sub-system derivation.
 
 **Simplifier:** Additive and multiplicative flattening. Extend flattening logic, don't add pattern-match rules.
 
@@ -69,10 +73,17 @@ Expression bindings: `factorial(result=?prev, n=n-1)` — `n-1` evaluated in par
 
 ### Recursion
 ```
-result = 1 : n = 0
+result = 1 : n <= 0
 result = n * factorial(result=?prev, n=n-1) : n > 0
 ```
 Depth guard: `max_formula_depth` (default 1000).
+
+### Numeric solving
+Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive inverses) solved via adaptive grid scan + Newton/bisection. Exact results use `=`, approximate use `~`.
+- `--no-numeric` — algebraic only
+- `--precision N` — scan density (default 200)
+- Conditions narrow the search range: `x > 0` scans only positive values
+- Constants: `NUMERIC_DEFAULT_SAMPLES`, `NUMERIC_TOLERANCE`, `NUMERIC_SEED`
 
 ## Key conventions
 
