@@ -5012,6 +5012,130 @@ void test_valueset_operations() {
     }
 }
 
+// ---- Condition tests ----
+
+void test_condition_parsing() {
+    SECTION("Condition Parsing");
+
+    // Equation with simple condition
+    {
+        write_fw("/tmp/tcp1.fw", "y = sqrt(x) : x >= 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcp1.fw");
+        ASSERT(sys.equations.size() == 1, "one equation");
+        ASSERT(sys.equations[0].condition.has_value(), "has condition");
+    }
+
+    // Equation without condition (backwards compatible)
+    {
+        write_fw("/tmp/tcp2.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcp2.fw");
+        ASSERT(sys.equations.size() == 1, "one equation");
+        ASSERT(!sys.equations[0].condition.has_value(), "no condition");
+    }
+
+    // Compound condition with &&
+    {
+        write_fw("/tmp/tcp3.fw", "tax = income * 0.1 : income > 0 && income <= 50000\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcp3.fw");
+        ASSERT(sys.equations[0].condition.has_value(), "has compound condition");
+        ASSERT(sys.equations[0].condition->clauses.size() == 2, "two clauses");
+    }
+}
+
+void test_condition_solving() {
+    SECTION("Condition Solving");
+
+    // Condition passes: sqrt(x) with x >= 0
+    {
+        write_fw("/tmp/tcs1.fw", "y = sqrt(x) : x >= 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs1.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 9}}), 3, "condition passes: sqrt(9) = 3");
+    }
+
+    // Condition fails: equation skipped
+    {
+        write_fw("/tmp/tcs2.fw",
+            "y = sqrt(x) : x >= 0\n"
+            "y = 0 : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs2.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", -4}}), 0, "condition fails: fallback to y=0");
+    }
+
+    // Piecewise: tax brackets
+    {
+        write_fw("/tmp/tcs3.fw",
+            "tax = income * 0.1 : income <= 50000\n"
+            "tax = 5000 + (income - 50000) * 0.2 : income > 50000\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs3.fw");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 30000}}), 3000, "low bracket: 30000*0.1");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 80000}}), 11000, "high bracket: 5000+(80000-50000)*0.2");
+    }
+
+    // Compound condition: income > 0 && income <= 50000
+    {
+        write_fw("/tmp/tcs4.fw",
+            "tax = income * 0.1 : income > 0 && income <= 50000\n"
+            "tax = 0 : income <= 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs4.fw");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 30000}}), 3000, "compound: in range");
+        ASSERT_NUM(sys.resolve("tax", {{"income", -100}}), 0, "compound: out of range");
+    }
+
+    // No condition matches → error
+    {
+        write_fw("/tmp/tcs5.fw",
+            "y = 1 : x > 0\n"
+            "y = -1 : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs5.fw");
+        auto msg = get_error([&]() { sys.resolve("y", {{"x", 0}}); });
+        ASSERT(!msg.empty(), "x=0: no condition matches, throws");
+    }
+
+    // Condition with unknown variable: treated as satisfied (can't validate)
+    {
+        write_fw("/tmp/tcs6.fw", "y = x + 1 : z > 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs6.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "unknown condition var: treated as satisfied");
+    }
+
+    // All 6 comparison operators
+    {
+        write_fw("/tmp/tcs_ops.fw",
+            "a = 1 : x > 0\n"
+            "b = 1 : x >= 0\n"
+            "c = 1 : x < 0\n"
+            "d = 1 : x <= 0\n"
+            "e = 1 : x = 5\n"
+            "f = 1 : x != 5\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs_ops.fw");
+        ASSERT_NUM(sys.resolve("a", {{"x", 1}}), 1, "op >: passes");
+        ASSERT_NUM(sys.resolve("b", {{"x", 0}}), 1, "op >=: passes at 0");
+        ASSERT_NUM(sys.resolve("c", {{"x", -1}}), 1, "op <: passes");
+        ASSERT_NUM(sys.resolve("d", {{"x", 0}}), 1, "op <=: passes at 0");
+        ASSERT_NUM(sys.resolve("e", {{"x", 5}}), 1, "op =: passes");
+        ASSERT_NUM(sys.resolve("f", {{"x", 3}}), 1, "op !=: passes");
+    }
+
+    // Edge case: :: in equation (should not crash)
+    {
+        // A line like "y = x + 1 :: some note" — second : has empty condition
+        write_fw("/tmp/tcs_dcolon.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcs_dcolon.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "no colon: works normally");
+    }
+}
+
 // ---- Recursion depth guard tests ----
 
 void test_recursion_depth_guard() {
@@ -6113,6 +6237,10 @@ int main() {
     // ValueSet
     test_valueset_basic();
     test_valueset_operations();
+
+    // Conditions
+    test_condition_parsing();
+    test_condition_solving();
 
     // Recursion depth guard
     test_recursion_depth_guard();

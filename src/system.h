@@ -26,9 +26,24 @@ inline std::string trim(const std::string& s) {
 //  Formula system
 // ============================================================================
 
+enum class CondOp : uint8_t { GT, GE, LT, LE, EQ, NE, COUNT_ };
+enum class CondLogic : uint8_t { AND, OR };
+
+struct CondClause {
+    ExprPtr lhs;
+    ExprPtr rhs;
+    CondOp op;
+};
+
+struct Condition {
+    std::vector<CondClause> clauses;
+    std::vector<CondLogic> connectors; // size = clauses.size() - 1
+};
+
 struct Equation {
     std::string lhs_var;
     ExprPtr rhs;
+    std::optional<Condition> condition;
 };
 
 struct VerifyResult {
@@ -347,8 +362,142 @@ private:
         return {result, calls};
     }
 
+    // Parse a condition string like "x > 0" or "x > 0 && x < 100"
+    std::optional<Condition> parse_condition(const std::string& cond_str) {
+        if (cond_str.empty()) return std::nullopt;
+
+        Condition cond;
+        // Split on && and ||
+        std::string remaining = cond_str;
+        while (!remaining.empty()) {
+            // Find next && or ||
+            size_t and_pos = remaining.find("&&");
+            size_t or_pos = remaining.find("||");
+            size_t split = std::min(and_pos, or_pos);
+
+            std::string clause_str;
+            if (split == std::string::npos) {
+                clause_str = remaining;
+                remaining.clear();
+            } else {
+                clause_str = remaining.substr(0, split);
+                CondLogic logic = (split == and_pos) ? CondLogic::AND : CondLogic::OR;
+                if (!cond.clauses.empty()) cond.connectors.push_back(logic);
+                remaining = remaining.substr(split + 2);
+            }
+
+            clause_str = trim(clause_str);
+            if (clause_str.empty()) continue;
+
+            // Parse clause: expr op expr
+            // Find comparison operator
+            CondOp op = CondOp::EQ;
+            size_t op_pos = std::string::npos;
+            size_t op_len = 0;
+
+            // Check two-char operators first
+            for (auto& [s, o, l] : std::vector<std::tuple<std::string, CondOp, size_t>>{
+                {">=", CondOp::GE, 2}, {"<=", CondOp::LE, 2}, {"!=", CondOp::NE, 2},
+                {">", CondOp::GT, 1}, {"<", CondOp::LT, 1}, {"=", CondOp::EQ, 1}
+            }) {
+                auto p = clause_str.find(s);
+                if (p != std::string::npos && (op_pos == std::string::npos || p < op_pos)) {
+                    // Make sure we don't match >= when looking for >
+                    if (l == 1 && p + 1 < clause_str.size() && clause_str[p+1] == '=') continue;
+                    if (l == 1 && s == "=" && p > 0 && (clause_str[p-1] == '>' || clause_str[p-1] == '<' || clause_str[p-1] == '!')) continue;
+                    op_pos = p;
+                    op_len = l;
+                    op = o;
+                }
+            }
+
+            if (op_pos == std::string::npos) continue; // malformed clause, skip
+
+            std::string lhs_str = trim(clause_str.substr(0, op_pos));
+            std::string rhs_str = trim(clause_str.substr(op_pos + op_len));
+
+            auto lhs_tok = Lexer(lhs_str).tokenize();
+            auto rhs_tok = Lexer(rhs_str).tokenize();
+            Parser lhs_p(lhs_tok), rhs_p(rhs_tok);
+
+            cond.clauses.push_back({lhs_p.parse_expr(), rhs_p.parse_expr(), op});
+        }
+
+        // Add connector for first split if we missed it
+        if (cond.connectors.size() < cond.clauses.size() - 1 && cond.clauses.size() > 1) {
+            // Re-parse to get connectors right — simplify: default to AND
+            while (cond.connectors.size() < cond.clauses.size() - 1)
+                cond.connectors.push_back(CondLogic::AND);
+        }
+
+        return cond.clauses.empty() ? std::nullopt : std::optional<Condition>(cond);
+    }
+
+    // Check if a condition is satisfied given current bindings
+    bool check_condition(const Condition& cond,
+                         const std::map<std::string, double>& bindings) const {
+        auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
+            // Substitute known bindings into lhs and rhs
+            ExprPtr lhs = c.lhs, rhs = c.rhs;
+            std::set<std::string> vars;
+            collect_vars(lhs, vars);
+            collect_vars(rhs, vars);
+            for (auto& v : vars) {
+                if (auto it = bindings.find(v); it != bindings.end()) {
+                    lhs = substitute(lhs, v, Expr::Num(it->second));
+                    rhs = substitute(rhs, v, Expr::Num(it->second));
+                } else {
+                    return std::nullopt; // unknown variable — can't evaluate
+                }
+            }
+            try {
+                double l = evaluate(*simplify(lhs));
+                double r = evaluate(*simplify(rhs));
+                switch (c.op) {
+                    case CondOp::GT: return l > r;
+                    case CondOp::GE: return l >= r;
+                    case CondOp::LT: return l < r;
+                    case CondOp::LE: return l <= r;
+                    case CondOp::EQ: return std::abs(l - r) < EPSILON_ZERO;
+                    case CondOp::NE: return std::abs(l - r) >= EPSILON_ZERO;
+                    case CondOp::COUNT_: assert(false && "invalid CondOp"); return false;
+                }
+            } catch (...) { return std::nullopt; }
+            return std::nullopt;
+        };
+
+        bool result = true;
+        for (size_t i = 0; i < cond.clauses.size(); i++) {
+            auto val = eval_clause(cond.clauses[i]);
+            bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
+
+            if (i == 0) {
+                result = clause_result;
+            } else {
+                auto logic = cond.connectors[i - 1];
+                if (logic == CondLogic::AND) result = result && clause_result;
+                else                         result = result || clause_result;
+            }
+        }
+        return result;
+    }
+
     void parse_line(const std::string& line) {
-        auto tok = Lexer(line).tokenize();
+        // Split at ':' (not inside parentheses) for condition
+        std::string eq_part = line;
+        std::string cond_part;
+        int paren_depth = 0;
+        for (size_t i = 0; i < line.size(); i++) {
+            if (line[i] == '(') paren_depth++;
+            else if (line[i] == ')') paren_depth--;
+            else if (line[i] == ':' && paren_depth == 0) {
+                eq_part = line.substr(0, i);
+                cond_part = line.substr(i + 1);
+                break;
+            }
+        }
+
+        auto tok = Lexer(eq_part).tokenize();
         if (tok.size() < 2) return;
 
         // Extract formula calls before expression parsing
@@ -367,21 +516,23 @@ private:
             && mod_tok[3].type == TokenType::END)
             return;
 
-        // Default: "x = 42" or "x = -42"
-        if (mod_tok[2].type == TokenType::NUMBER && mod_tok[3].type == TokenType::END) {
-            defaults[lhs] = mod_tok[2].numval;
-            return;
-        }
-        if (mod_tok[2].type == TokenType::MINUS
-            && mod_tok[3].type == TokenType::NUMBER
-            && mod_tok[4].type == TokenType::END) {
-            defaults[lhs] = -mod_tok[3].numval;
-            return;
+        // Default: "x = 42" or "x = -42" (only if no condition)
+        if (cond_part.empty()) {
+            if (mod_tok[2].type == TokenType::NUMBER && mod_tok[3].type == TokenType::END) {
+                defaults[lhs] = mod_tok[2].numval;
+                return;
+            }
+            if (mod_tok[2].type == TokenType::MINUS
+                && mod_tok[3].type == TokenType::NUMBER
+                && mod_tok[4].type == TokenType::END) {
+                defaults[lhs] = -mod_tok[3].numval;
+                return;
+            }
         }
 
         // Equation: parse RHS as expression
         Parser p(std::vector<Token>(mod_tok.begin() + 2, mod_tok.end()));
-        equations.push_back({lhs, p.parse_expr()});
+        equations.push_back({lhs, p.parse_expr(), parse_condition(cond_part)});
     }
 
     // --- Sub-system loading ---
@@ -442,6 +593,7 @@ private:
         std::string desc;
         const FormulaCall* call;  // for formula candidates
         std::string sub_var;      // for FORMULA_REV: which sub-system var to solve
+        const Condition* condition; // condition from the source equation (may be null)
     };
 
     // Generates candidates for solving a target variable.
@@ -455,7 +607,8 @@ private:
         for (auto& eq : equations)
             if (eq.lhs_var == target)
                 if (handler(Candidate{CandidateType::EXPR, eq.rhs,
-                    target + " = " + expr_to_string(eq.rhs), nullptr, ""}))
+                    target + " = " + expr_to_string(eq.rhs), nullptr, "",
+                    eq.condition ? &*eq.condition : nullptr}))
                     return;
 
         // Strategy 2: target in RHS — algebraic inversion
@@ -466,7 +619,7 @@ private:
                 if (handler(Candidate{CandidateType::EXPR, sol,
                     target + " = " + expr_to_string(sol)
                     + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")",
-                    nullptr, ""}))
+                    nullptr, "", eq.condition ? &*eq.condition : nullptr}))
                     return;
         }
 
@@ -475,7 +628,7 @@ private:
             if (call.output_var == target)
                 if (handler(Candidate{CandidateType::FORMULA_FWD, nullptr,
                     target + " via " + call.file_stem + "(" + call.query_var + "=?)",
-                    &call, ""}))
+                    &call, "", nullptr}))
                     return;
 
         // Strategy 4: equate RHS of equations sharing a LHS variable
@@ -498,7 +651,7 @@ private:
                         if (handler(Candidate{CandidateType::EXPR, sol,
                             target + " = " + expr_to_string(sol)
                             + "  (via " + equations[i].lhs_var + ")",
-                            nullptr, ""}))
+                            nullptr, "", nullptr}))
                             return;
                 }
             }
@@ -509,7 +662,7 @@ private:
                 if (parent_var == target)
                     if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
                         target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
-                        &call, sub_var}))
+                        &call, sub_var, nullptr}))
                         return;
     }
 
@@ -630,16 +783,32 @@ private:
 
         bool solved = false;
         enumerate_candidates(target, [&](const Candidate& c) {
+            // Check condition BEFORE solving if all vars are known
+            if (c.condition && !check_condition(*c.condition, bindings)) {
+                trace.step("  condition failed (pre-check), skipping", depth + 1);
+                found_eq = true;
+                return false; // skip this candidate
+            }
+
+            bool ok = false;
             switch (c.type) {
                 case CandidateType::EXPR:
-                    if (try_expr(c.expr, c.desc)) { solved = true; return true; }
-                    break;
+                    ok = try_expr(c.expr, c.desc); break;
                 case CandidateType::FORMULA_FWD:
-                    if (try_formula(*c.call, c.call->query_var)) { solved = true; return true; }
-                    break;
+                    ok = try_formula(*c.call, c.call->query_var); break;
                 case CandidateType::FORMULA_REV:
-                    if (try_formula(*c.call, c.sub_var, target)) { solved = true; return true; }
-                    break;
+                    ok = try_formula(*c.call, c.sub_var, target); break;
+            }
+
+            if (ok) {
+                // Check condition AFTER solving (result now in bindings)
+                if (c.condition && !check_condition(*c.condition, bindings)) {
+                    trace.step("  condition failed (post-check), trying next", depth + 1);
+                    bindings.erase(target); // undo the result
+                    return false;
+                }
+                solved = true;
+                return true;
             }
             return false;
         }, &bindings);
