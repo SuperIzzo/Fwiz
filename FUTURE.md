@@ -234,6 +234,16 @@ For `y = sin(x)`, solving for `x`:
 
 The symbolic derivative only needs to be computed once. The iteration loop is pure numeric evaluation — fast. This turns fwiz's existing symbolic infrastructure into a general nonlinear solver.
 
+### Inverse solving priority chain
+
+When solving for a variable that can't be algebraically inverted:
+
+1. **Algebraic inversion** (existing) — instant, exact, for linear equations
+2. **Recursive backward unfolding** — for recursive functions, peel layers off by running the recursion in reverse. E.g. for `factorial(n=?, result=3628800)`: divide result by successive integers until base case. Uses equation structure, not brute force.
+3. **Newton's method** — numeric iteration with symbolic derivative for smooth nonlinear functions
+4. **Bisection** — fallback for monotonic functions where Newton's fails (discontinuities, etc.)
+5. **Bounded search** — last resort for discrete/non-monotonic functions, guided by ValueSet constraints
+
 ### Implementation sketch
 
 - Symbolic differentiation of expression trees (new capability in expr.h)
