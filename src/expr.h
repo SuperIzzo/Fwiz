@@ -11,7 +11,6 @@
 #include <deque>
 #include <optional>
 #include <stdexcept>
-#include <functional>
 
 // Thresholds used throughout the solver
 constexpr double EPSILON_ZERO = 1e-12;   // treat |x| < this as zero (coefficient guard, like-term combining)
@@ -84,14 +83,14 @@ inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) { auto e
 // ============================================================================
 
 // Reference versions (no null check needed)
-inline bool is_num(const Expr& e)     { return e.type == ExprType::NUM; }
-inline bool is_var(const Expr& e)     { return e.type == ExprType::VAR; }
-inline bool is_atomic(const Expr& e)  { return is_num(e) || is_var(e); }
-inline bool is_zero(const Expr& e)    { return is_num(e) && e.num == 0; }
-inline bool is_one(const Expr& e)     { return is_num(e) && e.num == 1; }
-inline bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
-inline bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
-inline bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
+constexpr bool is_num(const Expr& e)     { return e.type == ExprType::NUM; }
+constexpr bool is_var(const Expr& e)     { return e.type == ExprType::VAR; }
+constexpr bool is_atomic(const Expr& e)  { return is_num(e) || is_var(e); }
+constexpr bool is_zero(const Expr& e)    { return is_num(e) && e.num == 0; }
+constexpr bool is_one(const Expr& e)     { return is_num(e) && e.num == 1; }
+constexpr bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
+constexpr bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
+constexpr bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
 // Pointer versions (null-safe, for struct fields)
 inline bool is_num(const ExprPtr e)     { return e && is_num(*e); }
 inline bool is_var(const ExprPtr e)     { return e && is_var(*e); }
@@ -102,8 +101,8 @@ inline bool is_neg_one(const ExprPtr e) { return e && is_neg_one(*e); }
 inline bool is_neg(const ExprPtr e)     { return e && is_neg(*e); }
 inline bool is_neg_num(const ExprPtr e) { return e && is_neg_num(*e); }
 
-inline bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
-inline bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
+constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
+constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
 
 // ============================================================================
 //  BinOp metadata
@@ -112,15 +111,20 @@ inline bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp
 struct BinOpInfo {
     const char* symbol;
     int precedence;
-    std::function<double(double, double)> eval;
+    double (*eval)(double, double);
 };
+
+inline double eval_div(double l, double r) {
+    if (r == 0) throw std::runtime_error("Division by zero");
+    return l / r;
+}
 
 inline const BinOpInfo& binop_info(BinOp op) {
     static const BinOpInfo table[] = {
         {" + ", 1, [](double l, double r) { return l + r; }},
         {" - ", 1, [](double l, double r) { return l - r; }},
         {" * ", 2, [](double l, double r) { return l * r; }},
-        {" / ", 2, [](double l, double r) { if (r == 0) throw std::runtime_error("Division by zero"); return l / r; }},
+        {" / ", 2, eval_div},
         {"^",   4, [](double l, double r) { return std::pow(l, r); }},
     };
     return table[static_cast<int>(op)];
