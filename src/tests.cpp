@@ -4688,7 +4688,7 @@ void test_formula_call_parsing() {
         ASSERT_EQ(sys.formula_calls[0].output_var, "area", "form1: output_var = query_var");
         ASSERT(sys.formula_calls[0].bindings.count("width"), "form1: has width binding");
         ASSERT(sys.formula_calls[0].bindings.count("height"), "form1: has height binding");
-        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth", "form1: height=depth");
+        ASSERT_EQ(expr_to_string(sys.formula_calls[0].bindings.at("height")), "depth", "form1: height=depth");
         // Should also have the equation: volume = area * h
         ASSERT(sys.equations.size() == 1, "form1: one equation");
     }
@@ -4732,8 +4732,8 @@ void test_formula_call_parsing() {
         write_fw("/tmp/fcp5.fw", "fcp_rect(area=?, width, height=depth)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcp5.fw");
-        ASSERT_EQ(sys.formula_calls[0].bindings.at("width"), "width", "shorthand: width=width");
-        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth", "explicit: height=depth");
+        ASSERT_EQ(expr_to_string(sys.formula_calls[0].bindings.at("width")), "width", "shorthand: width=width");
+        ASSERT_EQ(expr_to_string(sys.formula_calls[0].bindings.at("height")), "depth", "explicit: height=depth");
     }
 }
 
@@ -5646,7 +5646,7 @@ void test_formula_call_additional() {
         sys.load_file("/tmp/fca_last.fw");
         ASSERT(sys.formula_calls.size() == 1, "last-binding: one call");
         ASSERT(sys.formula_calls[0].bindings.count("height"), "last-binding: has height binding");
-        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth",
+        ASSERT_EQ(expr_to_string(sys.formula_calls[0].bindings.at("height")), "depth",
             "last-binding: height=depth parsed correctly");
     }
 
@@ -5656,7 +5656,7 @@ void test_formula_call_additional() {
         FormulaSystem sys;
         sys.load_file("/tmp/fca_trail.fw");
         ASSERT(sys.formula_calls[0].bindings.count("width"), "trailing shorthand: has width");
-        ASSERT_EQ(sys.formula_calls[0].bindings.at("width"), "width",
+        ASSERT_EQ(expr_to_string(sys.formula_calls[0].bindings.at("width")), "width",
             "trailing shorthand: width=width");
     }
 }
