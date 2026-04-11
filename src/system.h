@@ -1,5 +1,6 @@
 #pragma once
 #include "expr.h"
+#include "fit.h"
 #include "lexer.h"
 #include "parser.h"
 #include "trace.h"
@@ -297,6 +298,63 @@ public:
         }
 
         return expr_to_string(result);
+    }
+
+    struct FitOutput {
+        std::string equation;
+        double r_squared = 0;
+        double max_error = 0;
+        bool exact = false;
+        ExprPtr expr = nullptr;
+    };
+
+    FitOutput fit(const std::string& target,
+                  const std::map<std::string, double>& numeric_bindings,
+                  const std::map<std::string, std::string>& symbolic_bindings) const {
+        ExprArena::Scope scope(arena);
+
+        // Identify the free variable (exactly one symbolic binding expected)
+        std::string free_var;
+        for (auto& [k, v] : symbolic_bindings) {
+            if (!free_var.empty())
+                throw std::runtime_error("--fit requires exactly one symbolic variable, got multiple");
+            free_var = v;
+        }
+        if (free_var.empty())
+            throw std::runtime_error("--fit requires a symbolic variable (e.g., x=x)");
+
+        // Find which symbolic binding key maps to the free var
+        std::string bind_key;
+        for (auto& [k, v] : symbolic_bindings) bind_key = k;
+
+        // Extract bounds for the free variable
+        std::map<std::string, double> bounds_bindings = numeric_bindings;
+        auto [lo, hi] = extract_bounds(bind_key, bounds_bindings);
+
+        // Build evaluation lambda
+        auto f = [&](double x) -> double {
+            try {
+                auto binds = numeric_bindings;
+                binds[bind_key] = x;
+                return resolve(target, binds);
+            } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+        };
+
+        auto samples = sample_function(f, lo, hi, numeric_samples);
+        if (samples.size() < 3)
+            throw std::runtime_error("Not enough valid samples for fitting (got "
+                + std::to_string(samples.size()) + ")");
+
+        auto result = fit_polynomial_auto(samples);
+        result.expr = poly_to_expr(result.coefficients, free_var);
+
+        FitOutput out;
+        out.equation = expr_to_string(result.expr);
+        out.r_squared = result.r_squared;
+        out.max_error = result.max_error;
+        out.exact = result.exact;
+        out.expr = result.expr;
+        return out;
     }
 
     double resolve(const std::string& target,
