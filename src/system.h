@@ -237,8 +237,36 @@ public:
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
-        trace.step("\nsolving for: " + target);
+        auto prepared = prepare_bindings(target, bindings);
+        if (auto it = prepared.find(target); it != prepared.end()) return it->second;
+        return solve_recursive(target, prepared, {}, 0);
+    }
 
+    std::vector<double> resolve_all(const std::string& target,
+                                     std::map<std::string, double> bindings) const {
+        ExprArena::Scope scope(arena);
+        auto prepared = prepare_bindings(target, bindings);
+        if (auto it = prepared.find(target); it != prepared.end()) return {it->second};
+        return solve_all(target, prepared, {}, 0);
+    }
+
+    double resolve_one(const std::string& target,
+                        std::map<std::string, double> bindings) const {
+        auto results = resolve_all(target, std::move(bindings));
+        if (results.empty())
+            throw std::runtime_error("Cannot solve for '" + target + "'");
+        if (results.size() > 1) {
+            std::string vals;
+            for (auto r : results) vals += (vals.empty() ? "" : ", ") + fmt_num(r);
+            throw std::runtime_error("Multiple solutions for '" + target + "': " + vals);
+        }
+        return results[0];
+    }
+
+private:
+    std::map<std::string, double> prepare_bindings(const std::string& target,
+                                                    std::map<std::string, double>& bindings) const {
+        trace.step("\nsolving for: " + target);
         for (auto& [k, v] : defaults) {
             if (k != target && !bindings.count(k)) {
                 bindings[k] = v;
@@ -250,12 +278,80 @@ public:
             for (auto& [k, v] : bindings)
                 trace.step("    " + k + " = " + fmt_num(v));
         }
-        if (auto it = bindings.find(target); it != bindings.end()) return it->second;
-
-        return solve_recursive(target, bindings, {}, 0);
+        return bindings;
     }
 
-private:
+    // Like solve_recursive but collects ALL valid results instead of stopping at first
+    std::vector<double> solve_all(const std::string& target,
+                                   std::map<std::string, double>& bindings,
+                                   std::set<std::string> visited, int depth) const {
+        if (auto it = bindings.find(target); it != bindings.end())
+            return {it->second};
+        if (visited.count(target)) return {};
+        visited.insert(target);
+
+        std::vector<double> results;
+        bool had_nan_inf = false;
+        std::set<std::string> missing;
+
+        auto try_expr_all = [&](const ExprPtr& expr, const std::string& label,
+                                const Condition* cond) {
+            auto b = bindings; // copy — each attempt gets fresh bindings
+            bool nan_inf = false;
+            if (try_resolve(expr, target, b, visited, depth, nan_inf, missing)) {
+                double val = b.at(target);
+                // Check equation condition
+                if (cond && !check_condition(*cond, b)) return;
+                // Check global conditions
+                for (auto& gc : global_conditions)
+                    if (!check_condition(gc, b)) return;
+                // Deduplicate
+                for (auto r : results)
+                    if (std::abs(r - val) < EPSILON_ZERO) return;
+                results.push_back(val);
+            }
+            if (nan_inf) had_nan_inf = true;
+        };
+
+        enumerate_candidates(target, [&](const Candidate& c) {
+            if (c.type == CandidateType::EXPR) {
+                // Check pre-condition
+                if (c.condition && !check_condition(*c.condition, bindings)) return false;
+                try_expr_all(c.expr, c.desc, c.condition);
+            } else if (c.type == CandidateType::FORMULA_FWD) {
+                if (formula_depth_ >= max_formula_depth) return false;
+                try {
+                    formula_depth_++;
+                    struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
+                    auto sub_binds = prepare_sub_bindings(*c.call, bindings, visited, depth);
+                    auto& sub_sys = load_sub_system(c.call->file_stem);
+                    sub_sys.max_formula_depth = max_formula_depth;
+                    double val = sub_sys.resolve(c.call->query_var, sub_binds);
+                    if (!std::isnan(val) && !std::isinf(val)) {
+                        for (auto r : results)
+                            if (std::abs(r - val) < EPSILON_ZERO) return false;
+                        // Check global conditions
+                        auto b = bindings; b[target] = val;
+                        for (auto& gc : global_conditions)
+                            if (!check_condition(gc, b)) return false;
+                        results.push_back(val);
+                    }
+                } catch (...) {}
+            }
+            // FORMULA_REV handled similarly but less common for multi-return
+            return false; // never stop — collect ALL results
+        }, &bindings);
+
+        if (results.empty() && !missing.empty()) {
+            std::string list;
+            for (auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
+            throw std::runtime_error("Cannot solve for '" + target + "': no value for " + list);
+        }
+        if (results.empty())
+            throw std::runtime_error("Cannot solve for '" + target + "'");
+
+        return results;
+    }
     static void strip_bom(std::string& line) {
         if (line.size() >= 3
             && (unsigned char)line[0] == 0xEF
@@ -954,9 +1050,15 @@ private:
 //  CLI query parsing
 // ============================================================================
 
+struct CLIQueryVar {
+    std::string variable;   // formula variable name
+    std::string alias;      // output name
+    bool strict = false;    // ?! mode — error if multiple results
+};
+
 struct CLIQuery {
     std::string filename;
-    std::vector<std::pair<std::string, std::string>> queries; // {variable, alias}
+    std::vector<CLIQueryVar> queries;
     std::map<std::string, double> bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
 };
@@ -1012,9 +1114,15 @@ inline CLIQuery parse_cli_query(const std::string& input,
             throw std::runtime_error("Missing variable name in '" + arg + "'");
 
         if (val.size() >= 1 && val[0] == '?') {
-            // Query: "x=?" or "x=?alias"
-            std::string alias = (val.size() > 1) ? trim(val.substr(1)) : name;
-            q.queries.push_back({name, alias});
+            // Query: "x=?" or "x=?!" or "x=?alias" or "x=?!alias"
+            bool strict = false;
+            std::string rest = val.substr(1);
+            if (!rest.empty() && rest[0] == '!') {
+                strict = true;
+                rest = rest.substr(1);
+            }
+            std::string alias = rest.empty() ? name : trim(rest);
+            q.queries.push_back({name, alias, strict});
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
         } else {

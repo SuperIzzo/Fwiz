@@ -652,13 +652,13 @@ void test_cli_parser() {
     {
         auto q = parse_cli_query("myformula(distance=?, time=5)");
         ASSERT_EQ(q.filename, "myformula.fw", "filename with .fw");
-        ASSERT_EQ(q.queries[0].first, "distance", "solve_for = distance");
+        ASSERT_EQ(q.queries[0].variable, "distance", "solve_for = distance");
         ASSERT_NUM(q.bindings.at("time"), 5, "time=5 binding");
     }
     {
         auto q = parse_cli_query("test.fw(x=?, y=3, z=10)");
         ASSERT_EQ(q.filename, "test.fw", "filename already has .fw");
-        ASSERT_EQ(q.queries[0].first, "x", "solve_for = x");
+        ASSERT_EQ(q.queries[0].variable, "x", "solve_for = x");
         ASSERT(q.bindings.size() == 2, "two bindings");
         ASSERT_NUM(q.bindings.at("y"), 3, "y=3");
         ASSERT_NUM(q.bindings.at("z"), 10, "z=10");
@@ -1275,21 +1275,21 @@ void test_cli_parser_edge() {
     // Spaces around equals and commas
     {
         auto q = parse_cli_query("f( x = ? , y = 5 )");
-        ASSERT_EQ(q.queries[0].first, "x", "spaces: solve_for");
+        ASSERT_EQ(q.queries[0].variable, "x", "spaces: solve_for");
         ASSERT_NUM(q.bindings.at("y"), 5, "spaces: binding");
     }
 
     // Only the query variable, no other bindings
     {
         auto q = parse_cli_query("f(x=?)");
-        ASSERT_EQ(q.queries[0].first, "x", "single var query");
+        ASSERT_EQ(q.queries[0].variable, "x", "single var query");
         ASSERT(q.bindings.empty(), "no bindings");
     }
 
     // Many bindings
     {
         auto q = parse_cli_query("f(z=?, a=1, b=2, c=3, d=4, e=5)");
-        ASSERT_EQ(q.queries[0].first, "z", "many bindings: solve_for");
+        ASSERT_EQ(q.queries[0].variable, "z", "many bindings: solve_for");
         ASSERT(q.bindings.size() == 5, "many bindings: count");
     }
 
@@ -1310,8 +1310,8 @@ void test_cli_parser_edge() {
     {
         auto q = parse_cli_query("f(x=?, y=?)");
         ASSERT(q.queries.size() == 2, "multiple ?: two queries");
-        ASSERT_EQ(q.queries[0].first, "x", "first query is x");
-        ASSERT_EQ(q.queries[1].first, "y", "second query is y");
+        ASSERT_EQ(q.queries[0].variable, "x", "first query is x");
+        ASSERT_EQ(q.queries[1].variable, "y", "second query is y");
     }
 
     // Filename with path
@@ -3252,7 +3252,7 @@ void test_cli_scientific_notation() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc6_1.fw");
         auto q = parse_cli_query("tc6_1(y=?, x=1e3)");
-        double r = sys.resolve(q.queries[0].first, q.bindings);
+        double r = sys.resolve(q.queries[0].variable, q.bindings);
         ASSERT_NUM(r, 1e6, "sci notation end-to-end: 1e3 * 1000 = 1e6");
     }
 }
@@ -3310,8 +3310,8 @@ void test_cli_multiple_query_targets() {
     {
         auto q = parse_cli_query("f(x=?, y=?)");
         ASSERT(q.queries.size() == 2, "x=? y=?: two queries");
-        ASSERT_EQ(q.queries[0].first, "x", "first query is x");
-        ASSERT_EQ(q.queries[1].first, "y", "second query is y");
+        ASSERT_EQ(q.queries[0].variable, "x", "first query is x");
+        ASSERT_EQ(q.queries[1].variable, "y", "second query is y");
         ASSERT(q.bindings.empty(), "no bindings");
     }
 
@@ -3319,23 +3319,23 @@ void test_cli_multiple_query_targets() {
     {
         auto q = parse_cli_query("f(x=?, y=?, z=?)");
         ASSERT(q.queries.size() == 3, "three queries");
-        ASSERT_EQ(q.queries[0].first, "x", "first is x");
-        ASSERT_EQ(q.queries[1].first, "y", "second is y");
-        ASSERT_EQ(q.queries[2].first, "z", "third is z");
+        ASSERT_EQ(q.queries[0].variable, "x", "first is x");
+        ASSERT_EQ(q.queries[1].variable, "y", "second is y");
+        ASSERT_EQ(q.queries[2].variable, "z", "third is z");
     }
 
     // Query mixed with bindings
     {
         auto q = parse_cli_query("f(x=?, y=5)");
         ASSERT(q.queries.size() == 1, "one query");
-        ASSERT_EQ(q.queries[0].first, "x", "x=? is query");
+        ASSERT_EQ(q.queries[0].variable, "x", "x=? is query");
         ASSERT_NUM(q.bindings.at("y"), 5, "y=5 is binding");
     }
 
     // Binding then query
     {
         auto q = parse_cli_query("f(y=5, x=?)");
-        ASSERT_EQ(q.queries[0].first, "x", "x=? after binding");
+        ASSERT_EQ(q.queries[0].variable, "x", "x=? after binding");
         ASSERT_NUM(q.bindings.at("y"), 5, "y=5 before query");
     }
 
@@ -3343,25 +3343,25 @@ void test_cli_multiple_query_targets() {
     {
         auto q = parse_cli_query("f(x=?ax, y=?by)");
         ASSERT(q.queries.size() == 2, "two aliased queries");
-        ASSERT_EQ(q.queries[0].first, "x", "first var is x");
-        ASSERT_EQ(q.queries[0].second, "ax", "first alias is ax");
-        ASSERT_EQ(q.queries[1].first, "y", "second var is y");
-        ASSERT_EQ(q.queries[1].second, "by", "second alias is by");
+        ASSERT_EQ(q.queries[0].variable, "x", "first var is x");
+        ASSERT_EQ(q.queries[0].alias, "ax", "first alias is ax");
+        ASSERT_EQ(q.queries[1].variable, "y", "second var is y");
+        ASSERT_EQ(q.queries[1].alias, "by", "second alias is by");
     }
 
     // Bare ? defaults alias to variable name
     {
         auto q = parse_cli_query("f(x=?)");
-        ASSERT_EQ(q.queries[0].first, "x", "bare ?: var is x");
-        ASSERT_EQ(q.queries[0].second, "x", "bare ?: alias defaults to x");
+        ASSERT_EQ(q.queries[0].variable, "x", "bare ?: var is x");
+        ASSERT_EQ(q.queries[0].alias, "x", "bare ?: alias defaults to x");
     }
 
     // Mixed aliased and bare queries
     {
         auto q = parse_cli_query("f(x=?result, y=?, m=5)");
         ASSERT(q.queries.size() == 2, "mixed: two queries");
-        ASSERT_EQ(q.queries[0].second, "result", "first aliased to result");
-        ASSERT_EQ(q.queries[1].second, "y", "second bare, alias=y");
+        ASSERT_EQ(q.queries[0].alias, "result", "first aliased to result");
+        ASSERT_EQ(q.queries[1].alias, "y", "second bare, alias=y");
         ASSERT_NUM(q.bindings.at("m"), 5, "m=5 binding");
     }
 }
@@ -3417,7 +3417,7 @@ void test_cli_long_query() {
             q += ", v" + std::to_string(i) + "=" + std::to_string(i * 2);
         q += ")";
         auto parsed = parse_cli_query(q);
-        ASSERT_EQ(parsed.queries[0].first, "target", "100 bindings: solve target");
+        ASSERT_EQ(parsed.queries[0].variable, "target", "100 bindings: solve target");
         ASSERT(parsed.bindings.size() == 100, "100 bindings: all parsed");
         ASSERT_NUM(parsed.bindings.at("v0"), 0, "100 bindings: v0=0");
         ASSERT_NUM(parsed.bindings.at("v99"), 198, "100 bindings: v99=198");
@@ -3434,7 +3434,7 @@ void test_cli_long_query() {
     {
         std::string var(500, 'v');
         auto q = parse_cli_query("f(" + var + "=?)");
-        ASSERT_EQ(q.queries[0].first, var, "500-char variable name");
+        ASSERT_EQ(q.queries[0].variable, var, "500-char variable name");
     }
 }
 
@@ -3444,7 +3444,7 @@ void test_cli_spacing_variants() {
     // No spaces at all
     {
         auto q = parse_cli_query("f(x=?,y=5,z=10)");
-        ASSERT_EQ(q.queries[0].first, "x", "no spaces: solve x");
+        ASSERT_EQ(q.queries[0].variable, "x", "no spaces: solve x");
         ASSERT_NUM(q.bindings.at("y"), 5, "no spaces: y=5");
         ASSERT_NUM(q.bindings.at("z"), 10, "no spaces: z=10");
     }
@@ -3452,7 +3452,7 @@ void test_cli_spacing_variants() {
     // Lots of spaces
     {
         auto q = parse_cli_query("f(  x = ?  ,  y = 5  ,  z = 10  )");
-        ASSERT_EQ(q.queries[0].first, "x", "many spaces: solve x");
+        ASSERT_EQ(q.queries[0].variable, "x", "many spaces: solve x");
         ASSERT_NUM(q.bindings.at("y"), 5, "many spaces: y=5");
         ASSERT_NUM(q.bindings.at("z"), 10, "many spaces: z=10");
     }
@@ -3460,7 +3460,7 @@ void test_cli_spacing_variants() {
     // Tabs
     {
         auto q = parse_cli_query("f(\tx\t=\t?\t,\ty\t=\t5\t)");
-        ASSERT_EQ(q.queries[0].first, "x", "tabs: solve x");
+        ASSERT_EQ(q.queries[0].variable, "x", "tabs: solve x");
         ASSERT_NUM(q.bindings.at("y"), 5, "tabs: y=5");
     }
 
@@ -3481,7 +3481,7 @@ void test_cli_end_to_end() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc6e1.fw");
         auto q = parse_cli_query("tc6e1(energy=?, mass=1)");
-        double r = sys.resolve(q.queries[0].first, q.bindings);
+        double r = sys.resolve(q.queries[0].variable, q.bindings);
         double expected = 299792458.0 * 299792458.0;
         ASSERT(std::abs(r - expected) / expected < 1e-10, "E=mc^2 with c=299792458");
     }
@@ -3492,7 +3492,7 @@ void test_cli_end_to_end() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc6e2.fw");
         auto q = parse_cli_query("tc6e2(y=?, x=-5)");
-        double r = sys.resolve(q.queries[0].first, q.bindings);
+        double r = sys.resolve(q.queries[0].variable, q.bindings);
         ASSERT_NUM(r, 5, "negative input: -5 + 10 = 5");
     }
 
@@ -3502,7 +3502,7 @@ void test_cli_end_to_end() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc6e3.fw");
         auto q = parse_cli_query("tc6e3(result=?, a=2, b=3, c=4, d=5)");
-        double r = sys.resolve(q.queries[0].first, q.bindings);
+        double r = sys.resolve(q.queries[0].variable, q.bindings);
         ASSERT_NUM(r, 26, "2*3 + 4*5 = 26");
     }
 }
@@ -4347,8 +4347,8 @@ void test_multi_return() {
         sys.load_file("/tmp/tmr1.fw");
         auto q = parse_cli_query("tmr1(x=?, y=?, m=4)");
         ASSERT(q.queries.size() == 2, "two queries parsed");
-        double x = sys.resolve(q.queries[0].first, q.bindings);
-        double y = sys.resolve(q.queries[1].first, q.bindings);
+        double x = sys.resolve(q.queries[0].variable, q.bindings);
+        double y = sys.resolve(q.queries[1].variable, q.bindings);
         ASSERT_NUM(x, 8, "x = m+4 = 8");
         ASSERT_NUM(y, 1, "y = m-3 = 1");
     }
@@ -4356,8 +4356,8 @@ void test_multi_return() {
     // Aliases don't affect resolution — only output naming
     {
         auto q = parse_cli_query("f(x=?result, m=4)");
-        ASSERT_EQ(q.queries[0].first, "x", "alias: resolves x");
-        ASSERT_EQ(q.queries[0].second, "result", "alias: outputs as result");
+        ASSERT_EQ(q.queries[0].variable, "x", "alias: resolves x");
+        ASSERT_EQ(q.queries[0].alias, "result", "alias: outputs as result");
     }
 
     // Three queries
@@ -4400,8 +4400,8 @@ void test_multi_return() {
     {
         auto q = parse_cli_query("f(x=?first, x=?second, m=5)");
         ASSERT(q.queries.size() == 2, "same var twice: two queries");
-        ASSERT_EQ(q.queries[0].second, "first", "first alias");
-        ASSERT_EQ(q.queries[1].second, "second", "second alias");
+        ASSERT_EQ(q.queries[0].alias, "first", "first alias");
+        ASSERT_EQ(q.queries[1].alias, "second", "second alias");
     }
 }
 
@@ -4411,38 +4411,38 @@ void test_alias_syntax() {
     // Bare ? — alias defaults to variable name
     {
         auto q = parse_cli_query("f(x=?)");
-        ASSERT_EQ(q.queries[0].first, "x", "bare: var=x");
-        ASSERT_EQ(q.queries[0].second, "x", "bare: alias=x");
+        ASSERT_EQ(q.queries[0].variable, "x", "bare: var=x");
+        ASSERT_EQ(q.queries[0].alias, "x", "bare: alias=x");
     }
 
     // Named alias
     {
         auto q = parse_cli_query("f(x=?myname)");
-        ASSERT_EQ(q.queries[0].first, "x", "named: var=x");
-        ASSERT_EQ(q.queries[0].second, "myname", "named: alias=myname");
+        ASSERT_EQ(q.queries[0].variable, "x", "named: var=x");
+        ASSERT_EQ(q.queries[0].alias, "myname", "named: alias=myname");
     }
 
     // Alias with underscores and digits
     {
         auto q = parse_cli_query("f(x=?my_var_2)");
-        ASSERT_EQ(q.queries[0].second, "my_var_2", "alias with underscore+digits");
+        ASSERT_EQ(q.queries[0].alias, "my_var_2", "alias with underscore+digits");
     }
 
     // Multiple aliases in one query
     {
         auto q = parse_cli_query("f(x=?a, y=?b, z=?c, m=5)");
         ASSERT(q.queries.size() == 3, "three aliased queries");
-        ASSERT_EQ(q.queries[0].second, "a", "alias a");
-        ASSERT_EQ(q.queries[1].second, "b", "alias b");
-        ASSERT_EQ(q.queries[2].second, "c", "alias c");
+        ASSERT_EQ(q.queries[0].alias, "a", "alias a");
+        ASSERT_EQ(q.queries[1].alias, "b", "alias b");
+        ASSERT_EQ(q.queries[2].alias, "c", "alias c");
         ASSERT_NUM(q.bindings.at("m"), 5, "binding m=5");
     }
 
     // Alias with spaces around it
     {
         auto q = parse_cli_query("f( x = ?alias , m = 5 )");
-        ASSERT_EQ(q.queries[0].first, "x", "spaces: var=x");
-        ASSERT_EQ(q.queries[0].second, "alias", "spaces: alias preserved");
+        ASSERT_EQ(q.queries[0].variable, "x", "spaces: var=x");
+        ASSERT_EQ(q.queries[0].alias, "alias", "spaces: alias preserved");
     }
 }
 
@@ -5211,6 +5211,84 @@ void test_global_conditions() {
         sys.load_file("/tmp/tgc2.fw");
         ASSERT_NUM(sys.resolve("side", {{"x", 5}}), 5, "global: side=5 passes");
         ASSERT_NUM(sys.resolve("side", {{"x", -5}}), 5, "global: side=-(-5)=5 passes");
+    }
+}
+
+// ---- Multiple returns tests ----
+
+void test_multiple_returns() {
+    SECTION("Multiple Returns");
+
+    // Two equations for same variable: both results collected
+    {
+        write_fw("/tmp/tmr_multi.fw",
+            "x = sqrt(y)\n"
+            "x = -sqrt(y)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_multi.fw");
+        auto results = sys.resolve_all("x", {{"y", 9}});
+        ASSERT(results.size() == 2, "two solutions found");
+        // Should contain 3 and -3
+        bool has_pos = false, has_neg = false;
+        for (auto r : results) {
+            if (std::abs(r - 3) < 1e-6) has_pos = true;
+            if (std::abs(r + 3) < 1e-6) has_neg = true;
+        }
+        ASSERT(has_pos, "has positive root");
+        ASSERT(has_neg, "has negative root");
+    }
+
+    // Single equation: one result
+    {
+        write_fw("/tmp/tmr_single.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_single.fw");
+        auto results = sys.resolve_all("y", {{"x", 5}});
+        ASSERT(results.size() == 1, "one solution");
+        ASSERT_NUM(results[0], 6, "y = 6");
+    }
+
+    // Conditions filter results
+    {
+        write_fw("/tmp/tmr_cond.fw",
+            "x = sqrt(y) : x >= 0\n"
+            "x = -sqrt(y) : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_cond.fw");
+        // Both solutions valid for y=9
+        auto all = sys.resolve_all("x", {{"y", 9}});
+        ASSERT(all.size() == 2, "both branches valid");
+    }
+
+    // Deduplication: same result from different equations
+    {
+        write_fw("/tmp/tmr_dedup.fw",
+            "y = x + 1\n"
+            "y = 1 + x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_dedup.fw");
+        auto results = sys.resolve_all("y", {{"x", 5}});
+        ASSERT(results.size() == 1, "deduplicated: one result");
+    }
+
+    // resolve_one: succeeds with single result
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_single.fw");
+        double r = sys.resolve_one("y", {{"x", 5}});
+        ASSERT_NUM(r, 6, "resolve_one: y = 6");
+    }
+
+    // resolve_one: errors with multiple results
+    {
+        write_fw("/tmp/tmr_strict.fw",
+            "x = sqrt(y)\n"
+            "x = -sqrt(y)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_strict.fw");
+        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 9}}); });
+        ASSERT(!msg.empty(), "resolve_one: multiple results throws");
+        ASSERT(msg.find("Multiple") != std::string::npos, "resolve_one: says Multiple");
     }
 }
 
@@ -6416,6 +6494,7 @@ int main() {
     test_condition_solving();
     test_condition_errors();
     test_global_conditions();
+    test_multiple_returns();
     test_conditional_branching();
 
     // Recursion depth guard

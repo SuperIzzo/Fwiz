@@ -59,10 +59,10 @@ int main(int argc, char* argv[]) {
 
         // --- Derive mode ---
         if (derive_mode) {
-            for (auto& [var, alias] : query.queries) {
+            for (auto& q : query.queries) {
                 try {
-                    auto result = sys.derive(var, query.bindings, query.symbolic);
-                    std::cout << alias << " = " << result << '\n';
+                    auto result = sys.derive(q.variable, query.bindings, query.symbolic);
+                    std::cout << q.alias << " = " << result << '\n';
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << '\n';
                     return 1;
@@ -75,7 +75,6 @@ int main(int argc, char* argv[]) {
         std::map<std::string, double> solved = query.bindings;
 
         if (explore) {
-            // Build the list of variables to report
             std::vector<std::pair<std::string, std::string>> vars;
             if (explore_full) {
                 for (auto& v : sys.all_variables())
@@ -83,9 +82,9 @@ int main(int argc, char* argv[]) {
             } else {
                 for (auto& [k, v] : query.bindings)
                     vars.push_back({k, k});
-                for (auto& [var, alias] : query.queries)
-                    if (!query.bindings.count(var))
-                        vars.push_back({var, alias});
+                for (auto& q : query.queries)
+                    if (!query.bindings.count(q.variable))
+                        vars.push_back({q.variable, q.alias});
             }
 
             for (auto& [var, alias] : vars) {
@@ -102,20 +101,24 @@ int main(int argc, char* argv[]) {
                 }
             }
         } else if (!query.queries.empty()) {
-            for (auto& [var, alias] : query.queries) {
-                if (has_verify) {
-                    // Best-effort when verify follows
-                    try {
-                        double result = sys.resolve(var, query.bindings);
-                        std::cout << alias << " = " << fmt_num(result) << '\n';
-                        solved[var] = result;
-                    } catch (...) {
-                        std::cout << alias << " = ?\n";
+            for (auto& q : query.queries) {
+                try {
+                    if (q.strict) {
+                        double result = sys.resolve_one(q.variable, query.bindings);
+                        std::cout << q.alias << " = " << fmt_num(result) << '\n';
+                        solved[q.variable] = result;
+                    } else {
+                        auto results = sys.resolve_all(q.variable, query.bindings);
+                        for (auto r : results)
+                            std::cout << q.alias << " = " << fmt_num(r) << '\n';
+                        if (!results.empty()) solved[q.variable] = results[0];
                     }
-                } else {
-                    double result = sys.resolve(var, query.bindings);
-                    std::cout << alias << " = " << fmt_num(result) << '\n';
-                    solved[var] = result;
+                } catch (const std::exception& e) {
+                    if (has_verify) {
+                        std::cout << q.alias << " = ?\n";
+                    } else {
+                        throw;
+                    }
                 }
             }
         }
