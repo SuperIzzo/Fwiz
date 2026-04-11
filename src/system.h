@@ -66,6 +66,7 @@ public:
     std::vector<Equation> equations;
     std::map<std::string, double> defaults;
     std::vector<FormulaCall> formula_calls;
+    std::vector<Condition> global_conditions;
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;
@@ -376,25 +377,26 @@ private:
         if (cond_str.empty()) return std::nullopt;
 
         Condition cond;
-        // Split on && and ||
+        // Split on && and || — collect clause strings and connectors
+        std::vector<std::string> clause_strs;
         std::string remaining = cond_str;
         while (!remaining.empty()) {
-            // Find next && or ||
             size_t and_pos = remaining.find("&&");
             size_t or_pos = remaining.find("||");
             size_t split = std::min(and_pos, or_pos);
 
-            std::string clause_str;
             if (split == std::string::npos) {
-                clause_str = remaining;
+                clause_strs.push_back(remaining);
                 remaining.clear();
             } else {
-                clause_str = remaining.substr(0, split);
-                CondLogic logic = (split == and_pos) ? CondLogic::AND : CondLogic::OR;
-                if (!cond.clauses.empty()) cond.connectors.push_back(logic);
+                clause_strs.push_back(remaining.substr(0, split));
+                cond.connectors.push_back(
+                    (split == and_pos) ? CondLogic::AND : CondLogic::OR);
                 remaining = remaining.substr(split + 2);
             }
+        }
 
+        for (auto& clause_str : clause_strs) {
             clause_str = trim(clause_str);
             if (clause_str.empty()) continue;
 
@@ -430,13 +432,6 @@ private:
             Parser lhs_p(lhs_tok), rhs_p(rhs_tok);
 
             cond.clauses.push_back({lhs_p.parse_expr(), rhs_p.parse_expr(), op});
-        }
-
-        // Add connector for first split if we missed it
-        if (cond.connectors.size() < cond.clauses.size() - 1 && cond.clauses.size() > 1) {
-            // Re-parse to get connectors right — simplify: default to AND
-            while (cond.connectors.size() < cond.clauses.size() - 1)
-                cond.connectors.push_back(CondLogic::AND);
         }
 
         return cond.clauses.empty() ? std::nullopt : std::optional<Condition>(cond);
@@ -506,6 +501,24 @@ private:
             }
         }
 
+        // Check for standalone global condition vs equation
+        // An equation has "ident = expr" where = is not part of >=, <=, !=
+        bool is_equation = false;
+        for (size_t ci = 0; ci < eq_part.size(); ci++) {
+            if (eq_part[ci] == '=') {
+                bool part_of_cmp = (ci > 0 && (eq_part[ci-1] == '>' || eq_part[ci-1] == '<' || eq_part[ci-1] == '!'));
+                if (!part_of_cmp) { is_equation = true; break; }
+            }
+        }
+        if (!is_equation) {
+            // Global condition: "area >= 0", "side > 0"
+            try {
+                auto cond = parse_condition(eq_part);
+                if (cond) global_conditions.push_back(std::move(*cond));
+            } catch (...) { /* malformed, skip */ }
+            return;
+        }
+
         auto tok = Lexer(eq_part).tokenize();
         if (tok.size() < 2) return;
 
@@ -541,7 +554,9 @@ private:
 
         // Equation: parse RHS as expression
         Parser p(std::vector<Token>(mod_tok.begin() + 2, mod_tok.end()));
-        equations.push_back({lhs, p.parse_expr(), parse_condition(cond_part)});
+        std::optional<Condition> cond;
+        try { cond = parse_condition(cond_part); } catch (...) { /* malformed condition → ignore */ }
+        equations.push_back({lhs, p.parse_expr(), std::move(cond)});
     }
 
     // --- Sub-system loading ---
@@ -810,11 +825,19 @@ private:
             }
 
             if (ok) {
-                // Check condition AFTER solving (result now in bindings)
+                // Check equation condition AFTER solving
                 if (c.condition && !check_condition(*c.condition, bindings)) {
                     trace.step("  condition failed (post-check), trying next", depth + 1);
-                    bindings.erase(target); // undo the result
+                    bindings.erase(target);
                     return false;
+                }
+                // Check global conditions
+                for (auto& gc : global_conditions) {
+                    if (!check_condition(gc, bindings)) {
+                        trace.step("  global condition failed, trying next", depth + 1);
+                        bindings.erase(target);
+                        return false;
+                    }
                 }
                 solved = true;
                 return true;
