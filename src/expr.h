@@ -381,6 +381,19 @@ inline const std::map<std::string, double(*)(double)>& builtin_functions() {
 }
 
 // ============================================================================
+//  Builtin constants
+// ============================================================================
+
+inline const std::map<std::string, double>& builtin_constants() {
+    static const std::map<std::string, double> registry = {
+        {"pi",  M_PI},
+        {"e",   M_E},
+        {"phi", (1.0 + std::sqrt(5.0)) / 2.0},  // golden ratio 1.618...
+    };
+    return registry;
+}
+
+// ============================================================================
 //  Tree queries
 // ============================================================================
 
@@ -516,8 +529,12 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 inline double evaluate(const Expr& e) {
     switch (e.type) {
         case ExprType::NUM: return e.num;
-        case ExprType::VAR:
+        case ExprType::VAR: {
+            auto& consts = builtin_constants();
+            auto it = consts.find(e.name);
+            if (it != consts.end()) return it->second;
             throw std::runtime_error("Cannot evaluate: unresolved variable '" + e.name + "'");
+        }
         case ExprType::UNARY_NEG:
             return -evaluate(*e.child);
         case ExprType::BINOP:

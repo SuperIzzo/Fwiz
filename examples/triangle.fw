@@ -17,7 +17,7 @@
 #   fwiz --steps triangle(C=?, a=3, b=4, c=5)
 
 # --- Constants ---
-pi = 3.14159265358979
+# pi is a builtin constant
 deg = 0.01745329251994
 rdeg = 57.2957795130823
 

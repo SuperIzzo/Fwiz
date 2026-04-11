@@ -208,12 +208,110 @@ inline FitResult fit_polynomial_auto(
 }
 
 // ============================================================================
+//  Rational and irrational number recognition
+// ============================================================================
+
+struct Fraction { int p, q; }; // numerator, denominator
+
+// Try to express x as p/q for small integers (|p| ≤ max_num, q ≤ max_den)
+inline std::optional<Fraction> recognize_fraction(double x,
+        int max_den = 12, double tol = 1e-9) {
+    if (!std::isfinite(x)) return std::nullopt;
+    for (int q = 1; q <= max_den; q++) {
+        double p_exact = x * q;
+        int p = static_cast<int>(std::round(p_exact));
+        if (std::abs(p_exact - p) < tol * q)
+            return Fraction{p, q};
+    }
+    return std::nullopt;
+}
+
+struct ConstantForm {
+    int p = 1, q = 1;           // rational part (p/q)
+    std::string constant;        // "pi", "e", "phi", "" if pure rational
+    int power = 1;               // constant^power (1, 2, -1)
+};
+
+// Try to express x as (p/q) * constant^power
+// Tests against builtin constants plus any additional constants provided.
+// Returns nullopt if x is a simple rational number or not recognizable.
+inline std::optional<ConstantForm> recognize_constant(double x,
+        const std::map<std::string, double>& extra_constants = {},
+        double tol = 1e-9) {
+    if (!std::isfinite(x) || std::abs(x) < tol) return std::nullopt;
+
+    // If it's already a simple fraction, no constant needed
+    if (recognize_fraction(x, 12, tol)) return std::nullopt;
+
+    // Build combined constant table
+    auto& builtins = builtin_constants();
+    std::map<std::string, double> all_constants = builtins;
+    for (auto& [k, v] : extra_constants)
+        if (!all_constants.count(k)) all_constants[k] = v;
+
+    // Try each constant at various powers
+    static const int powers[] = {1, 2, -1};
+    for (auto& [name, val] : all_constants) {
+        for (int pw : powers) {
+            double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
+            double quotient = x / cv;
+            auto frac = recognize_fraction(quotient, 12, tol);
+            if (frac) return ConstantForm{frac->p, frac->q, name, pw};
+        }
+    }
+    return std::nullopt;
+}
+
+// Build an ExprPtr from a ConstantForm: (p/q) * constant^power
+inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
+    // Build constant^power part
+    ExprPtr cexpr = Expr::Var(cf.constant);
+    if (cf.power == 2)
+        cexpr = Expr::BinOpExpr(BinOp::POW, cexpr, Expr::Num(2));
+    else if (cf.power == -1)
+        cexpr = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), cexpr);
+
+    // Build rational multiplier
+    if (cf.p == 1 && cf.q == 1) return cexpr;
+    if (cf.p == -1 && cf.q == 1) return Expr::Neg(cexpr);
+
+    ExprPtr coeff;
+    if (cf.q == 1)
+        coeff = Expr::Num(static_cast<double>(cf.p));
+    else
+        coeff = Expr::BinOpExpr(BinOp::DIV,
+            Expr::Num(static_cast<double>(cf.p)),
+            Expr::Num(static_cast<double>(cf.q)));
+
+    return simplify(Expr::BinOpExpr(BinOp::MUL, coeff, cexpr));
+}
+
+// ============================================================================
 //  Expression tree construction
 // ============================================================================
 
+// Build an ExprPtr for a single coefficient value.
+// Tries: integer snap → constant recognition → raw number.
+inline ExprPtr coeff_to_expr(double c,
+        const std::map<std::string, double>& extra_constants = {}) {
+    // Try integer snap
+    double snapped = snap_coeff(c);
+    if (snapped == std::round(snapped) && std::abs(snapped) < 1e15)
+        return Expr::Num(snapped);
+
+    // Try constant recognition (pi, e, etc.)
+    auto cf = recognize_constant(c, extra_constants);
+    if (cf) return constant_form_to_expr(*cf);
+
+    // Raw number
+    return Expr::Num(c);
+}
+
 // Build ExprPtr from polynomial coefficients: c[0] + c[1]*x + c[2]*x² + ...
 // Requires active ExprArena::Scope. Drops near-zero coefficients.
-inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string& var) {
+// Uses constant recognition to express coefficients symbolically where possible.
+inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string& var,
+        const std::map<std::string, double>& extra_constants = {}) {
     ExprPtr result = nullptr;
 
     for (size_t i = 0; i < coeffs.size(); i++) {
@@ -221,7 +319,7 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
 
         ExprPtr term;
         if (i == 0) {
-            term = Expr::Num(coeffs[i]);
+            term = coeff_to_expr(coeffs[i], extra_constants);
         } else {
             ExprPtr x_part;
             if (i == 1) {
@@ -230,12 +328,15 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
                 x_part = Expr::BinOpExpr(BinOp::POW, Expr::Var(var), Expr::Num(static_cast<double>(i)));
             }
 
-            if (coeffs[i] == 1.0) {
+            double c = snap_coeff(coeffs[i]);
+            if (c == 1.0) {
                 term = x_part;
-            } else if (coeffs[i] == -1.0) {
+            } else if (c == -1.0) {
                 term = Expr::Neg(x_part);
             } else {
-                term = Expr::BinOpExpr(BinOp::MUL, Expr::Num(coeffs[i]), x_part);
+                auto cf = recognize_constant(coeffs[i], extra_constants);
+                ExprPtr cexpr = cf ? constant_form_to_expr(*cf) : Expr::Num(c);
+                term = Expr::BinOpExpr(BinOp::MUL, cexpr, x_part);
             }
         }
 
