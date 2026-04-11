@@ -6287,6 +6287,191 @@ void test_derive_formula_call() {
         auto result = sys.derive("volume", {}, {{"width", "w"}, {"depth", "d"}, {"h", "h"}});
         ASSERT_EQ(result, "w * d * h", "derive through formula call");
     }
+
+    // Derive with formula call unfolding — simple non-recursive
+    // addfour: result = x + 4
+    // parent: y = n + addfour(result=?, x=n)
+    // Unfolding: y = n + (n + 4) = 2*n + 4, so n = (y - 4) / 2
+    {
+        write_fw("/tmp/tdf_add4.fw", "result = x + 4\n");
+        write_fw("/tmp/tdf_unfold.fw",
+            "tdf_add4(result=?f, x=n)\n"
+            "y = n + f\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_unfold.fw");
+        try {
+            auto result = sys.derive("n", {}, {{"y", "y"}});
+            ASSERT_EQ(result, "(y - 4) / 2", "derive: unfold formula call and solve for input");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("derive: unfold threw: ") + e.what());
+        }
+    }
+
+    // Derive with formula call unfolding — reverse direction
+    // rect: area = width * height
+    // parent: rect(area=?a, width=x, height=3), solve for x given a
+    {
+        write_fw("/tmp/tdf_rect2.fw", "area = width * height\n");
+        write_fw("/tmp/tdf_rev.fw",
+            "tdf_rect2(area=?a, width=x, height=3)\n"
+            "y = a + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_rev.fw");
+        try {
+            auto result = sys.derive("x", {}, {{"y", "y"}});
+            ASSERT_EQ(result, "(y - 1) / 3", "derive: reverse through formula call");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("derive: reverse unfold threw: ") + e.what());
+        }
+    }
+
+    // Recursive formula call forward — derive result=? given n=5
+    // Should evaluate to 120 (numeric, not symbolic)
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/factorial.fw");
+        try {
+            auto result = sys.derive("result", {{"n", 5}}, {});
+            ASSERT_EQ(result, "120", "derive: factorial forward with numeric n");
+        } catch (const std::exception& e) {
+            // Current implementation may not support this yet
+            ASSERT(false, std::string("derive: factorial forward threw: ") + e.what());
+        }
+    }
+
+    // Recursive formula call — derive does its best, doesn't crash/hang
+    // Even if it can't fully solve, it should produce something or fail gracefully
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/factorial.fw");
+        try {
+            auto result = sys.derive("n", {}, {{"result", "result"}});
+            // If it produces anything, that's fine — it won't be a clean solution
+            ASSERT(true, "derive: recursive inverse doesn't crash");
+        } catch (const std::exception& e) {
+            // Also acceptable — "Cannot derive" is fine
+            std::string msg = e.what();
+            ASSERT(msg.find("Cannot derive") != std::string::npos,
+                "derive: recursive inverse fails gracefully");
+        }
+    }
+
+    // Condition checking in derive — skips wrong branch
+    {
+        write_fw("/tmp/tdf_cond.fw",
+            "y = 0 : x = 0\n"
+            "y = x * 2 : x > 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_cond.fw");
+        // With x=5, should use second equation (y = x * 2), not first
+        auto result = sys.derive("y", {{"x", 5}}, {});
+        ASSERT_EQ(result, "10", "derive: condition skips wrong branch");
+    }
+
+    // Condition checking — symbolic (condition can't be evaluated, both tried)
+    {
+        write_fw("/tmp/tdf_cond2.fw",
+            "y = 0 : x = 0\n"
+            "y = x * 2 : x > 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_cond2.fw");
+        // With symbolic x, condition can't be evaluated — first valid wins
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT_EQ(result, "0", "derive: symbolic conditions fallthrough to first");
+    }
+
+    // Recursive base case — n=0 gives result=1
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/factorial.fw");
+        auto result = sys.derive("result", {{"n", 0}}, {});
+        ASSERT_EQ(result, "1", "derive: factorial base case n=0");
+    }
+
+    // FORMULA_REV through cross-file call chain (like box)
+    {
+        write_fw("/tmp/tdf_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_outer.fw",
+            "tdf_inner(area=?base, w=width, h=depth)\n"
+            "volume = base * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_outer.fw");
+        // Solve for width (reverse through formula call)
+        auto result = sys.derive("width", {}, {{"volume", "V"}, {"depth", "d"}, {"height", "h"}});
+        ASSERT_EQ(result, "V / h / d", "derive: FORMULA_REV cross-file chain");
+    }
+
+    // FORMULA_REV with expression binding (width = x + 1)
+    {
+        write_fw("/tmp/tdf_expr_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_expr_outer.fw",
+            "tdf_expr_inner(area=?a, w=x, h=3)\n"
+            "y = a\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_expr_outer.fw");
+        // Solve for x: a = x * 3, y = a, so x = y / 3
+        auto result = sys.derive("x", {}, {{"y", "y"}});
+        ASSERT_EQ(result, "y / 3", "derive: FORMULA_REV simple binding");
+    }
+
+    // Unfold where target reappears after substitution (has_target path)
+    // f(x) = 2*x + 3, parent: y = x + f(x) = x + 2x + 3 = 3x + 3
+    // Solve for x: x = (y - 3) / 3
+    {
+        write_fw("/tmp/tdf_reappear_inner.fw", "result = 2 * x + 3\n");
+        write_fw("/tmp/tdf_reappear.fw",
+            "tdf_reappear_inner(result=?f, x=n)\n"
+            "y = n + f\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_reappear.fw");
+        auto result = sys.derive("n", {}, {{"y", "y"}});
+        ASSERT_EQ(result, "(y - 3) / 3", "derive: unfold with target reappearing");
+    }
+
+    // Unfold falls back when body contains formula call outputs (recursive)
+    // factorial with numeric input should still work via fallback
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/factorial.fw");
+        auto result = sys.derive("result", {{"n", 3}}, {});
+        ASSERT_EQ(result, "6", "derive: recursive fallback for n=3");
+    }
+
+    // FORMULA_REV with expression binding (w=n+1)
+    // area = w * h, call: inner(area=?a, w=n+1, h=3), y = a
+    // → a = (n+1)*3, y = 3n+3, n = y/3 - 1
+    {
+        write_fw("/tmp/tdf_exprbind_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_exprbind.fw",
+            "tdf_exprbind_inner(area=?a, w=n+1, h=3)\n"
+            "y = a\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_exprbind.fw");
+        auto result = sys.derive("n", {}, {{"y", "y"}});
+        ASSERT_EQ(result, "y / 3 - 1", "derive: FORMULA_REV expression binding");
+    }
+
+    // Multiple formula calls — target used in two calls
+    {
+        write_fw("/tmp/tdf_multi_inner.fw", "result = x + 4\n");
+        write_fw("/tmp/tdf_multi.fw",
+            "tdf_multi_inner(result=?a, x=p)\n"
+            "tdf_multi_inner(result=?b, x=q)\n"
+            "y = a + b\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf_multi.fw");
+        auto result = sys.derive("p", {}, {{"y", "y"}, {"q", "q"}});
+        ASSERT_EQ(result, "y - q - 8", "derive: multiple formula calls");
+    }
+
+    // Symbolic recursive derive — picks first valid (base case)
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/factorial.fw");
+        auto result = sys.derive("result", {}, {{"n", "n"}});
+        // Can't evaluate condition, first equation wins → result = 1
+        ASSERT_EQ(result, "1", "derive: symbolic recursive picks first valid");
+    }
 }
 
 void test_derive_errors() {
@@ -6346,6 +6531,323 @@ void test_derive_binary_integration() {
         int rc = system("./bin/fwiz --derive '/tmp/tdbi(area=?, width=4, height=3)' 2>/dev/null "
                         "| grep -q 'area = 12'");
         ASSERT(WEXITSTATUS(rc) == 0, "derive binary: fully numeric");
+    }
+}
+
+// ---- Numeric root-finding ----
+
+void test_newton_solve() {
+    SECTION("Newton's Method");
+
+    // x^2 - 9 = 0, starting from x=1 → root at 3
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto root = newton_solve(f, 1.0);
+        ASSERT(root.has_value(), "newton: x^2-9 converges");
+        ASSERT_NUM(*root, 3.0, "newton: x^2-9 = 0 → x = 3");
+    }
+
+    // x^2 - 9 = 0, starting from x=-1 → root at -3
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto root = newton_solve(f, -1.0);
+        ASSERT(root.has_value(), "newton: x^2-9 from -1 converges");
+        ASSERT_NUM(*root, -3.0, "newton: x^2-9 = 0 from -1 → x = -3");
+    }
+
+    // x + sin(x) - 1 = 0 → x ≈ 0.51097
+    {
+        auto f = [](double x) { return x + std::sin(x) - 1.0; };
+        auto root = newton_solve(f, 0.5);
+        ASSERT(root.has_value(), "newton: x+sin(x)-1 converges");
+        ASSERT_NUM(*root, 0.510973, "newton: x+sin(x) = 1 → x ≈ 0.51097");
+    }
+
+    // No root: constant function
+    {
+        auto f = [](double x) { (void)x; return 5.0; };
+        auto root = newton_solve(f, 0.0);
+        ASSERT(!root.has_value(), "newton: constant function → no root");
+    }
+
+    // Integer snapping: x^2 - 25 = 0 from x=4 → 5 (exact integer)
+    {
+        auto f = [](double x) { return x * x - 25.0; };
+        auto root = newton_solve(f, 4.0);
+        ASSERT(root.has_value(), "newton: x^2-25 converges");
+        ASSERT(*root == 5.0, "newton: x^2-25 snaps to integer 5");
+    }
+}
+
+void test_bisection_solve() {
+    SECTION("Bisection Method");
+
+    // x^2 - 9 in [0, 10] → 3
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto root = bisection_solve(f, 0.0, 10.0);
+        ASSERT(root.has_value(), "bisection: x^2-9 in [0,10] converges");
+        ASSERT_NUM(*root, 3.0, "bisection: x^2-9 = 0 → x = 3");
+    }
+
+    // No sign change → no root
+    {
+        auto f = [](double x) { return x * x + 1.0; };
+        auto root = bisection_solve(f, 0.0, 10.0);
+        ASSERT(!root.has_value(), "bisection: x^2+1 no sign change → none");
+    }
+
+    // sin(x) in [3, 4] → π
+    {
+        auto f = [](double x) { return std::sin(x); };
+        auto root = bisection_solve(f, 3.0, 3.5);
+        ASSERT(root.has_value(), "bisection: sin(x) in [3,3.5] converges");
+        ASSERT_NUM(*root, M_PI, "bisection: sin(x)=0 → x = π");
+    }
+}
+
+void test_adaptive_scan() {
+    SECTION("Adaptive Scan");
+
+    // x^2 - 9: two roots at -3 and 3
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto intervals = adaptive_scan(f, -10.0, 10.0);
+        ASSERT(intervals.size() >= 2, "scan: x^2-9 finds at least 2 intervals");
+    }
+
+    // sin(x) in [-7, 7]: roots at -2π, -π, 0, π, 2π
+    {
+        auto f = [](double x) { return std::sin(x); };
+        auto intervals = adaptive_scan(f, -7.0, 7.0);
+        ASSERT(intervals.size() >= 4, "scan: sin(x) finds at least 4 intervals");
+    }
+
+    // Integer mode: x^2 - 9 in [0, 10]
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto intervals = adaptive_scan(f, 0.0, 10.0, true);
+        // x=3 is exact zero, x=2→3 or x=3→4 sign change
+        ASSERT(!intervals.empty(), "scan: integer mode finds interval for x^2-9");
+    }
+
+    // No roots: x^2 + 1
+    {
+        auto f = [](double x) { return x * x + 1.0; };
+        auto intervals = adaptive_scan(f, -10.0, 10.0);
+        ASSERT(intervals.empty(), "scan: x^2+1 no intervals");
+    }
+}
+
+void test_find_numeric_roots() {
+    SECTION("Find Numeric Roots");
+
+    // x^2 - 9 → {-3, 3}
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto roots = find_numeric_roots(f, -10.0, 10.0);
+        ASSERT(roots.size() == 2, "roots: x^2-9 finds 2 roots (got " + std::to_string(roots.size()) + ")");
+        if (roots.size() == 2) {
+            ASSERT_NUM(roots[0], -3.0, "roots: x^2-9 first root = -3");
+            ASSERT_NUM(roots[1], 3.0, "roots: x^2-9 second root = 3");
+        }
+    }
+
+    // x^2 - 9, integer mode → {-3, 3}
+    {
+        auto f = [](double x) { return x * x - 9.0; };
+        auto roots = find_numeric_roots(f, -10.0, 10.0, true);
+        ASSERT(roots.size() == 2, "roots: x^2-9 integer finds 2 roots");
+        if (roots.size() == 2) {
+            ASSERT(roots[0] == -3.0, "roots: integer x^2-9 first = -3");
+            ASSERT(roots[1] == 3.0, "roots: integer x^2-9 second = 3");
+        }
+    }
+
+    // sin(x) in [-7, 7]: should find 5 roots (-2π, -π, 0, π, 2π)
+    {
+        auto f = [](double x) { return std::sin(x); };
+        auto roots = find_numeric_roots(f, -7.0, 7.0);
+        ASSERT(roots.size() == 5, "roots: sin(x) finds 5 roots (got " + std::to_string(roots.size()) + ")");
+        if (roots.size() >= 3) {
+            ASSERT_NUM(roots[roots.size()/2], 0.0, "roots: sin(x) middle root ≈ 0");
+        }
+    }
+
+    // No roots: x^2 + 1
+    {
+        auto f = [](double x) { return x * x + 1.0; };
+        auto roots = find_numeric_roots(f, -10.0, 10.0);
+        ASSERT(roots.empty(), "roots: x^2+1 → empty");
+    }
+
+    // Singularity: 1/x should NOT produce false roots
+    {
+        auto f = [](double x) { return 1.0 / x; };
+        auto roots = find_numeric_roots(f, -10.0, 10.0);
+        ASSERT(roots.empty(), "roots: 1/x no false roots at singularity");
+    }
+
+    // 1/x - 0.5 = 0 → x = 2
+    {
+        auto f = [](double x) { return 1.0 / x - 0.5; };
+        auto roots = find_numeric_roots(f, 0.1, 10.0);
+        ASSERT(roots.size() == 1, "roots: 1/x - 0.5 finds 1 root");
+        if (!roots.empty()) ASSERT_NUM(roots[0], 2.0, "roots: 1/x = 0.5 → x = 2");
+    }
+
+    // Deterministic: same results on repeated calls
+    {
+        auto f = [](double x) { return x * x - 2.0; };
+        auto r1 = find_numeric_roots(f, -5.0, 5.0);
+        auto r2 = find_numeric_roots(f, -5.0, 5.0);
+        ASSERT(r1.size() == r2.size(), "roots: deterministic — same count");
+        bool same = true;
+        for (size_t i = 0; i < r1.size() && i < r2.size(); i++)
+            if (std::abs(r1[i] - r2[i]) > EPSILON_ZERO) same = false;
+        ASSERT(same, "roots: deterministic — same values");
+    }
+}
+
+void test_numeric_integration() {
+    SECTION("Numeric Solver Integration");
+
+    // Simple quadratic: y = x^2, solve for x given y=9
+    {
+        write_fw("/tmp/tn_quad.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_quad.fw");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 2, "numeric: x^2=9 finds 2 roots (got " + std::to_string(d.size()) + ")");
+        if (d.size() == 2) {
+            ASSERT_NUM(d[0], -3, "numeric: x^2=9 first root = -3");
+            ASSERT_NUM(d[1], 3, "numeric: x^2=9 second root = 3");
+        }
+    }
+
+    // Quadratic with condition: x > 0
+    {
+        write_fw("/tmp/tn_quad_cond.fw", "y = x^2 : x > 0\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_quad_cond.fw");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "numeric: x^2=9, x>0 → 1 root");
+        if (!d.empty()) ASSERT_NUM(d[0], 3, "numeric: x^2=9, x>0 → x = 3");
+    }
+
+    // Transcendental: x + sin(x) = 1
+    {
+        write_fw("/tmp/tn_trans.fw", "y = x + sin(x)\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_trans.fw");
+        double x = sys.resolve("x", {{"y", 1}});
+        ASSERT_NUM(x, 0.510973, "numeric: x+sin(x)=1 → x ≈ 0.51097");
+    }
+
+    // 1/x = 0.5 → x = 2
+    {
+        write_fw("/tmp/tn_inv.fw", "y = 1/x\nx > 0\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_inv.fw");
+        try {
+            double x = sys.resolve("x", {{"y", 0.5}});
+            ASSERT_NUM(x, 2.0, "numeric: 1/x = 0.5 → x = 2");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("numeric: 1/x threw: ") + e.what());
+        }
+    }
+
+    // Without --numeric, nonlinear still fails
+    {
+        write_fw("/tmp/tn_no_flag.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.numeric_mode = false;
+        sys.load_file("/tmp/tn_no_flag.fw");
+        auto msg = get_error([&]() { sys.resolve("x", {{"y", 9}}); });
+        ASSERT(!msg.empty(), "numeric: without flag, x^2 fails");
+    }
+
+    // Factorial inverse: result=120 → n=5
+    // Use a constrained file to keep recursion depth manageable under sanitizers
+    {
+        write_fw("/tmp/tn_fact.fw",
+            "result = 1 : n = 0\n"
+            "result = n * tn_fact(result=?prev, n=n-1) : n > 0\n"
+            "n >= 0\nn <= 20\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_fact.fw");
+        auto result = sys.resolve_all("n", {{"result", 120}});
+        auto& d = result.discrete();
+        bool found_5 = false;
+        for (auto r : d) if (std::abs(r - 5.0) < 1e-6) found_5 = true;
+        ASSERT(found_5, "numeric: factorial(n=?,result=120) finds n=5");
+    }
+
+    // Factorial inverse: result=720 → n=6
+    {
+        write_fw("/tmp/tn_fact2.fw",
+            "result = 1 : n = 0\n"
+            "result = n * tn_fact2(result=?prev, n=n-1) : n > 0\n"
+            "n >= 0\nn <= 20\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_fact2.fw");
+        auto result = sys.resolve_all("n", {{"result", 720}});
+        auto& d = result.discrete();
+        bool found_6 = false;
+        for (auto r : d) if (std::abs(r - 6.0) < 1e-6) found_6 = true;
+        ASSERT(found_6, "numeric: factorial(n=?,result=720) finds n=6");
+    }
+
+    // Numeric results tracking (for ~= output)
+    {
+        write_fw("/tmp/tn_track.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tn_track.fw");
+        sys.resolve("x", {{"y", 9}});
+        ASSERT(sys.numeric_results_.count("x") > 0, "numeric: x tracked as numeric result");
+    }
+}
+
+void test_numeric_binary_integration() {
+    SECTION("Numeric Binary Integration");
+
+    // --numeric with exact result uses = (verified)
+    {
+        write_fw("/tmp/tnb_quad.fw", "y = x^2\n");
+        int rc = system("./bin/fwiz --numeric '/tmp/tnb_quad(x=?, y=9)' 2>/dev/null "
+                        "| grep -q 'x = '");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: exact uses =");
+    }
+
+    // --numeric with approximate result uses ~
+    {
+        write_fw("/tmp/tnb_trans.fw", "y = x + sin(x)\n");
+        int rc = system("./bin/fwiz --numeric '/tmp/tnb_trans(x=?, y=1)' 2>/dev/null "
+                        "| grep -q ' ~ '");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: approximate uses ~");
+    }
+
+    // Without --numeric, no ~=
+    {
+        int rc = system("./bin/fwiz 'examples/convert(celsius=?, fahrenheit=72)' 2>/dev/null "
+                        "| grep -q ' ~ '");
+        ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: no ~ without flag");
+    }
+
+    // Factorial with --numeric
+    {
+        int rc = system("./bin/fwiz --numeric 'examples/factorial(n=?, result=120)' 2>/dev/null "
+                        "| grep -q '5'");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: factorial finds 5");
     }
 }
 
@@ -6528,6 +7030,14 @@ int main() {
     test_derive_errors();
     test_derive_cli_parsing();
     test_derive_binary_integration();
+
+    // Numeric root-finding
+    test_newton_solve();
+    test_bisection_solve();
+    test_adaptive_scan();
+    test_find_numeric_roots();
+    test_numeric_integration();
+    test_numeric_binary_integration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

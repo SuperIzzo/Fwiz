@@ -12,6 +12,9 @@
 #include <deque>
 #include <optional>
 #include <stdexcept>
+#include <functional>
+#include <random>
+#include <algorithm>
 
 // Thresholds used throughout the solver
 constexpr double EPSILON_ZERO = 1e-12;   // treat |x| < this as zero (coefficient guard, like-term combining)
@@ -903,4 +906,208 @@ inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::stri
 
     // coeff · target + rest = 0  →  target = −rest / coeff
     return simplify(Expr::BinOpExpr(BinOp::DIV, simplify(Expr::Neg(sr)), sc));
+}
+
+// ============================================================================
+//  Numeric root-finding (for nonlinear equations)
+// ============================================================================
+
+constexpr int    NUMERIC_MAX_ITER      = 200;
+constexpr double NUMERIC_TOLERANCE     = 1e-10;
+constexpr double NUMERIC_DEFAULT_LO    = -1000.0;
+constexpr double NUMERIC_DEFAULT_HI    =  1000.0;
+constexpr int    NUMERIC_COARSE_POINTS = 200;
+constexpr int    NUMERIC_FINE_POINTS   = 1000;
+constexpr double NUMERIC_JITTER_FRAC   = 0.1;
+constexpr uint64_t NUMERIC_SEED        = 0x46'77'69'7A; // "Fwiz"
+
+static_assert(NUMERIC_MAX_ITER > 0 && NUMERIC_MAX_ITER <= 10000);
+static_assert(NUMERIC_TOLERANCE > 0 && NUMERIC_TOLERANCE < 1e-4);
+static_assert(NUMERIC_COARSE_POINTS >= 10 && NUMERIC_FINE_POINTS >= 100);
+
+// Snap to nearest integer if within tolerance
+inline double snap_integer(double x, double tol = EPSILON_ZERO) {
+    double r = std::round(x);
+    return std::abs(x - r) < tol ? r : x;
+}
+
+// Newton's method: solve f(x) = 0 starting from x0.
+// Uses central finite differences for derivative.
+inline std::optional<double> newton_solve(
+        const std::function<double(double)>& f, double x0,
+        int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE) {
+    double x = x0;
+    for (int i = 0; i < max_iter; i++) {
+        double fx = f(x);
+        if (std::isnan(fx) || std::isinf(fx)) return std::nullopt;
+        if (std::abs(fx) < tol) return snap_integer(x);
+
+        // Central difference derivative
+        double h = std::max(1e-8, std::abs(x) * 1e-8);
+        double fp = (f(x + h) - f(x - h)) / (2.0 * h);
+        if (std::isnan(fp) || std::isinf(fp) || std::abs(fp) < 1e-15)
+            return std::nullopt; // flat or singular — can't continue
+
+        double x_new = x - fx / fp;
+        if (std::isnan(x_new) || std::isinf(x_new)) return std::nullopt;
+
+        // Divergence guard: damp step if too large
+        if (std::abs(x_new) > 2.0 * std::abs(x) + 100.0)
+            x_new = x - 0.5 * fx / fp;
+
+        if (std::abs(x_new - x) < tol) return snap_integer(x_new);
+        x = x_new;
+    }
+    // Check if final value is close enough
+    double fx = f(x);
+    if (!std::isnan(fx) && std::abs(fx) < tol * 100) return snap_integer(x);
+    return std::nullopt;
+}
+
+// Bisection: find root of f in [lo, hi] where f(lo) and f(hi) have opposite signs.
+inline std::optional<double> bisection_solve(
+        const std::function<double(double)>& f, double lo, double hi,
+        int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE) {
+    double flo = f(lo), fhi = f(hi);
+    if (std::isnan(flo) || std::isnan(fhi)) return std::nullopt;
+    if (flo * fhi > 0) return std::nullopt; // no sign change
+
+    for (int i = 0; i < max_iter; i++) {
+        double mid = (lo + hi) / 2.0;
+        double fmid = f(mid);
+        if (std::isnan(fmid) || std::isinf(fmid)) return std::nullopt;
+        if (std::abs(fmid) < tol || (hi - lo) < tol)
+            return snap_integer(mid);
+        if (flo * fmid < 0) { hi = mid; fhi = fmid; }
+        else                { lo = mid; flo = fmid; }
+    }
+    return snap_integer((lo + hi) / 2.0);
+}
+
+// Adaptive grid scan: find intervals where f changes sign.
+// Uses coarse pass with jitter, then refines near sign changes and high-gradient regions.
+// Deterministic: uses fixed seed for reproducible jitter.
+inline std::vector<std::pair<double, double>> adaptive_scan(
+        const std::function<double(double)>& f, double lo, double hi,
+        bool integer_only = false) {
+    struct Sample { double x, fx; };
+    std::vector<Sample> samples;
+
+    if (integer_only) {
+        int ilo = static_cast<int>(std::ceil(lo));
+        int ihi = static_cast<int>(std::floor(hi));
+        for (int i = ilo; i <= ihi; i++) {
+            double fx = f(static_cast<double>(i));
+            if (std::isfinite(fx)) samples.push_back({static_cast<double>(i), fx});
+        }
+    } else {
+        // Coarse pass with deterministic jitter
+        std::mt19937_64 rng(NUMERIC_SEED);
+        std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
+        double step = (hi - lo) / NUMERIC_COARSE_POINTS;
+        for (int i = 0; i <= NUMERIC_COARSE_POINTS; i++) {
+            double x = lo + i * step;
+            if (i > 0 && i < NUMERIC_COARSE_POINTS)
+                x += jitter(rng) * step; // jitter interior points
+            double fx = f(x);
+            if (std::isfinite(fx)) samples.push_back({x, fx});
+        }
+
+        // Find regions of interest: sign changes and high gradient
+        std::vector<std::pair<double, double>> refine_regions;
+        for (size_t i = 1; i < samples.size(); i++) {
+            bool sign_change = samples[i-1].fx * samples[i].fx < 0;
+            double gradient = std::abs(samples[i].fx - samples[i-1].fx)
+                            / std::max(1e-15, samples[i].x - samples[i-1].x);
+            // Refine near sign changes and steep gradients
+            double avg_grad = std::abs(samples[i].fx + samples[i-1].fx)
+                            / std::max(1e-15, hi - lo);
+            if (sign_change || gradient > avg_grad * 10)
+                refine_regions.push_back({samples[i-1].x, samples[i].x});
+        }
+
+        // Refine pass: add dense samples in regions of interest
+        int points_per_region = refine_regions.empty() ? 0
+            : NUMERIC_FINE_POINTS / static_cast<int>(refine_regions.size());
+        points_per_region = std::min(points_per_region, NUMERIC_FINE_POINTS);
+        for (auto& [rlo, rhi] : refine_regions) {
+            // Expand region slightly
+            double margin = (rhi - rlo) * 0.5;
+            double elo = std::max(lo, rlo - margin);
+            double ehi = std::min(hi, rhi + margin);
+            double rstep = (ehi - elo) / std::max(1, points_per_region);
+            for (int i = 0; i <= points_per_region; i++) {
+                double x = elo + i * rstep;
+                double fx = f(x);
+                if (std::isfinite(fx)) samples.push_back({x, fx});
+            }
+        }
+
+        // Sort all samples by x
+        std::sort(samples.begin(), samples.end(),
+            [](const Sample& a, const Sample& b) { return a.x < b.x; });
+    }
+
+    // Collect sign-change intervals and exact zeros
+    std::vector<std::pair<double, double>> intervals;
+    for (size_t i = 0; i < samples.size(); i++) {
+        if (std::abs(samples[i].fx) < NUMERIC_TOLERANCE) {
+            // Exact zero — return degenerate interval [x, x]
+            intervals.push_back({samples[i].x, samples[i].x});
+        }
+        if (i > 0 && samples[i-1].fx * samples[i].fx < 0) {
+            intervals.push_back({samples[i-1].x, samples[i].x});
+        }
+    }
+    return intervals;
+}
+
+// Find all numeric roots of f(x) = 0 in [lo, hi].
+// Uses adaptive scan to find intervals, then refines with Newton/bisection.
+inline std::vector<double> find_numeric_roots(
+        const std::function<double(double)>& f, double lo, double hi,
+        bool integer_only = false) {
+    auto intervals = adaptive_scan(f, lo, hi, integer_only);
+    std::vector<double> roots;
+
+    for (auto& [a, b] : intervals) {
+        std::optional<double> root;
+
+        if (integer_only) {
+            // For integers, just check exact values
+            int ia = static_cast<int>(std::round(a));
+            int ib = static_cast<int>(std::round(b));
+            for (int i = ia; i <= ib; i++) {
+                double fx = f(static_cast<double>(i));
+                if (std::abs(fx) < NUMERIC_TOLERANCE) {
+                    root = static_cast<double>(i);
+                    break;
+                }
+            }
+        } else if (std::abs(a - b) < NUMERIC_TOLERANCE) {
+            // Degenerate interval — exact zero found during scan
+            root = snap_integer(a);
+        } else {
+            // Try Newton from midpoint, fallback to bisection
+            double mid = (a + b) / 2.0;
+            root = newton_solve(f, mid);
+            if (!root || *root < a - 1.0 || *root > b + 1.0)
+                root = bisection_solve(f, a, b);
+        }
+
+        if (root) {
+            // Post-validate: reject false roots (singularities)
+            double fr = f(*root);
+            if (std::isnan(fr) || std::abs(fr) > NUMERIC_TOLERANCE * 1000) continue;
+
+            // Deduplicate
+            bool dup = false;
+            for (double r : roots)
+                if (std::abs(r - *root) < EPSILON_ZERO) { dup = true; break; }
+            if (!dup) roots.push_back(*root);
+        }
+    }
+
+    std::sort(roots.begin(), roots.end());
+    return roots;
 }

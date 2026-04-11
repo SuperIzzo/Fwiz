@@ -6,5 +6,5 @@
 #
 # Requires: conditions (: syntax) and recursion (formula calls to self)
 
-result = 1 : n = 0
+result = 1 : n <= 0
 result = n * factorial(result=?prev, n=n-1) : n > 0
