@@ -53,6 +53,8 @@ public:
     std::vector<FormulaCall> formula_calls;
     std::string base_dir;
     Trace trace;
+    mutable int max_formula_depth = 1000;
+    static inline thread_local int formula_depth_ = 0;
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
 
     std::set<std::string> all_variables() const {
@@ -602,10 +604,15 @@ private:
         auto try_formula = [&](const FormulaCall& call, const std::string& resolve_var,
                                const std::string& skip_var = "") -> bool {
             found_eq = true;
+            if (formula_depth_ >= max_formula_depth)
+                throw std::runtime_error("Maximum formula call depth exceeded (possible infinite recursion)");
             trace.step("formula call: " + call.file_stem + "(" + resolve_var + ")", depth + 1);
             try {
+                formula_depth_++;
+                struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
                 auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var);
                 auto& sub_sys = load_sub_system(call.file_stem);
+                sub_sys.max_formula_depth = max_formula_depth;
                 for (auto& [sv, val] : sub_binds)
                     trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
                 double result = sub_sys.resolve(resolve_var, sub_binds);
@@ -613,8 +620,10 @@ private:
                 trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
                 bindings[target] = result;
                 return true;
-            } catch (const std::exception& e) {
-                trace.step("  failed: " + std::string(e.what()), depth + 2);
+            } catch (const std::runtime_error& e) {
+                std::string msg = e.what();
+                if (msg.find("depth") != std::string::npos) throw; // propagate depth guard
+                trace.step("  failed: " + msg, depth + 2);
                 return false;
             }
         };
@@ -670,6 +679,10 @@ private:
                     double val = solve_recursive(v, bindings, visited, depth + 1);
                     trace.calc("substitute " + v + " = " + fmt_num(val), depth + 2);
                     resolved = substitute(resolved, v, Expr::Num(val));
+                } catch (const std::runtime_error& e) {
+                    if (std::string(e.what()).find("depth") != std::string::npos) throw;
+                    missing.insert(v);
+                    return false;
                 } catch (...) {
                     missing.insert(v);
                     return false;

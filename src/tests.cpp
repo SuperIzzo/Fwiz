@@ -4897,6 +4897,38 @@ void test_formula_call_errors() {
     }
 }
 
+// ---- Recursion depth guard tests ----
+
+void test_recursion_depth_guard() {
+    SECTION("Recursion Depth Guard");
+
+    // Infinite mutual recursion: A calls B, B calls A
+    // Each resolves a different variable so visited sets don't catch it
+    {
+        write_fw("/tmp/trdg_a2.fw", "trdg_b2(y=?x, n=n)\nresult = x\n");
+        write_fw("/tmp/trdg_b2.fw", "trdg_a2(result=?y, n=n)\n");
+        FormulaSystem sys;
+        sys.max_formula_depth = 20;
+        sys.load_file("/tmp/trdg_a2.fw");
+        auto msg = get_error([&]() { sys.resolve("result", {{"n", 5}}); });
+        ASSERT(!msg.empty(), "mutual recursion: throws");
+        ASSERT(msg.find("depth") != std::string::npos || msg.find("recursion") != std::string::npos,
+            "mutual recursion: mentions depth/recursion");
+    }
+
+    // Normal formula calls should still work (not falsely triggered)
+    {
+        write_fw("/tmp/trdg_rect.fw", "area = width * height\n");
+        write_fw("/tmp/trdg_box.fw",
+            "trdg_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/trdg_box.fw");
+        ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"depth", 3}, {"h", 6}}), 72,
+            "normal formula call: still works");
+    }
+}
+
 // ---- Verify mode tests ----
 
 void test_approx_equal() {
@@ -5962,6 +5994,9 @@ int main() {
 
     // Spurious zero guard
     test_solve_for_zero_guard();
+
+    // Recursion depth guard
+    test_recursion_depth_guard();
 
     // Pre-refactor safety net
     test_strategy_coverage();
