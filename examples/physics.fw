@@ -8,7 +8,7 @@
 
 # Constants
 g = 9.81
-pi = 3.14159265
+# pi is a builtin constant
 
 # Newton's second law
 force = mass * g

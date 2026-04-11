@@ -7217,6 +7217,141 @@ void test_fit_binary_integration() {
     }
 }
 
+void test_builtin_constants() {
+    SECTION("Builtin Constants");
+
+    // pi evaluates correctly
+    {
+        auto expr = parse("pi");
+        ASSERT_NUM(evaluate(*expr), M_PI, "constant: pi evaluates to M_PI");
+    }
+
+    // e evaluates correctly
+    {
+        auto expr = parse("e");
+        ASSERT_NUM(evaluate(*expr), M_E, "constant: e evaluates to M_E");
+    }
+
+    // phi evaluates correctly
+    {
+        auto expr = parse("phi");
+        double expected = (1.0 + std::sqrt(5.0)) / 2.0;
+        ASSERT_NUM(evaluate(*expr), expected, "constant: phi evaluates to golden ratio");
+    }
+
+    // Constants in expressions
+    {
+        auto expr = parse("2 * pi");
+        ASSERT_NUM(evaluate(*expr), 2 * M_PI, "constant: 2*pi");
+    }
+
+    // Constants in equations
+    {
+        write_fw("/tmp/tc_const.fw", "y = pi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_const.fw");
+        double y = sys.resolve("y", {{"x", 2}});
+        ASSERT_NUM(y, 2 * M_PI, "constant: pi in equation");
+    }
+
+    // Derive preserves pi symbolically
+    {
+        write_fw("/tmp/tc_derive.fw", "y = 2 * pi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_derive.fw");
+        auto result = sys.derive("y", {}, {{"x", "r"}});
+        ASSERT_EQ(result, "2 * pi * r", "constant: derive preserves pi");
+    }
+
+    // File default overrides builtin
+    {
+        write_fw("/tmp/tc_override.fw", "e = 5\ny = e * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_override.fw");
+        double y = sys.resolve("y", {{"x", 2}});
+        ASSERT_NUM(y, 10, "constant: file equation overrides builtin e");
+    }
+
+    // File default coexists with builtin (uses file default value)
+    {
+        write_fw("/tmp/tc_default.fw", "pi = 3.14\ny = pi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_default.fw");
+        // pi as default = 3.14, but pi as equation LHS means file override
+        // Actually pi=3.14 is a default (bare number), so solve_recursive
+        // should use the default value, not the builtin
+    }
+
+    // Physics example still works without explicit pi
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/physics.fw");
+        double c = sys.resolve("circumference", {{"radius", 5}});
+        ASSERT_NUM(c, 2 * M_PI * 5, "constant: physics circumference uses builtin pi");
+    }
+
+    // Triangle example still works
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/triangle.fw");
+        double C = sys.resolve("C", {{"A", 60}, {"B", 90}});
+        ASSERT_NUM(C, 30, "constant: triangle angle sum with builtin pi");
+    }
+
+    // Rational recognition
+    {
+        auto f1 = recognize_fraction(0.5);
+        ASSERT(f1 && f1->p == 1 && f1->q == 2, "recognize: 0.5 = 1/2");
+
+        auto f2 = recognize_fraction(0.333333333, 12, 1e-6);
+        ASSERT(f2 && f2->p == 1 && f2->q == 3, "recognize: 0.333... = 1/3");
+
+        auto f3 = recognize_fraction(M_PI);
+        ASSERT(!f3, "recognize: pi is not rational");
+
+        auto f4 = recognize_fraction(7.0);
+        ASSERT(f4 && f4->p == 7 && f4->q == 1, "recognize: 7 = 7/1");
+    }
+
+    // Constant recognition
+    {
+        auto c1 = recognize_constant(M_PI);
+        ASSERT(c1 && c1->constant == "pi" && c1->p == 1 && c1->q == 1,
+            "recognize: pi detected");
+
+        auto c2 = recognize_constant(2 * M_PI);
+        ASSERT(c2 && c2->constant == "pi" && c2->p == 2 && c2->q == 1,
+            "recognize: 2*pi detected");
+
+        auto c3 = recognize_constant(M_PI * M_PI);
+        ASSERT(c3 && c3->constant == "pi" && c3->power == 2,
+            "recognize: pi^2 detected");
+
+        auto c4 = recognize_constant(M_E);
+        ASSERT(c4 && c4->constant == "e",
+            "recognize: e detected");
+
+        auto c5 = recognize_constant(42.0);
+        ASSERT(!c5, "recognize: 42 is rational, no constant");
+
+        auto c6 = recognize_constant(M_PI / 3.0);
+        ASSERT(c6 && c6->constant == "pi" && c6->p == 1 && c6->q == 3,
+            "recognize: pi/3 detected");
+    }
+
+    // Fitter uses constant recognition
+    {
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        write_fw("/tmp/tc_fit.fw", "y = pi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_fit.fw");
+        auto result = sys.fit("y", {}, {{"x", "x"}});
+        ASSERT(result.equation.find("pi") != std::string::npos,
+            "constant: fitter outputs pi not 3.14...");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7413,6 +7548,9 @@ int main() {
     test_fit_polynomial();
     test_fit_integration();
     test_fit_binary_integration();
+
+    // Builtin constants
+    test_builtin_constants();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

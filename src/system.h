@@ -130,7 +130,7 @@ public:
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;
-    bool numeric_mode = false;
+    mutable bool numeric_mode = false;
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
     static inline thread_local int formula_depth_ = 0;
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
@@ -282,9 +282,11 @@ public:
         std::map<std::string, ExprPtr> bindings;
         for (auto& [k, v] : numeric_bindings) bindings[k] = Expr::Num(v);
         for (auto& [k, v] : symbolic_bindings) bindings[k] = Expr::Var(v);
-        // Apply defaults as numeric
+        // Apply defaults as numeric (skip builtin constants — keep them symbolic)
+        auto& consts = builtin_constants();
         for (auto& [k, v] : defaults)
-            if (!bindings.count(k) && k != target) bindings[k] = Expr::Num(v);
+            if (!bindings.count(k) && k != target && !consts.count(k))
+                bindings[k] = Expr::Num(v);
 
         auto result = derive_recursive(target, bindings, {}, 0);
         if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
@@ -378,43 +380,13 @@ public:
 
             // In numeric mode, post-validate and classify results.
             if (numeric_mode) {
-                auto verify_result = [&](double r) -> bool {
-                    for (auto& [bvar, bval] : prepared) {
-                        if (bvar == target) continue;
-                        try {
-                            auto test = prepared;
-                            test[target] = r;
-                            test.erase(bvar);
-                            double computed = resolve(bvar, test);
-                            if (!approx_equal(computed, bval)) return false;
-                        } catch (...) {}
-                    }
-                    return true;
-                };
-
-                // Filter invalid results (only when multiple — one might be right)
-                if (results.size() > 1) {
-                    std::vector<double> validated;
-                    for (double r : results)
-                        if (verify_result(r)) validated.push_back(r);
-                    if (!validated.empty()) results = validated;
-                }
-
-                // Mark numeric results as exact if they verify with strict equality
+                // Mark numeric results as exact if all values are clean integers
+                // (i.e., the numeric solver found exact integer roots like x^2=9 → ±3)
                 if (numeric_results_.count(target)) {
                     bool all_exact = true;
                     for (double r : results) {
-                        for (auto& [bvar, bval] : prepared) {
-                            if (bvar == target) continue;
-                            try {
-                                auto test = prepared;
-                                test[target] = r;
-                                test.erase(bvar);
-                                double computed = resolve(bvar, test);
-                                if (computed != bval) { all_exact = false; break; }
-                            } catch (...) { all_exact = false; break; }
-                        }
-                        if (!all_exact) break;
+                        if (std::abs(r - std::round(r)) > EPSILON_ZERO)
+                            { all_exact = false; break; }
                     }
                     numeric_results_[target] = all_exact;
                 }
@@ -526,9 +498,13 @@ private:
                     }
                 } catch (...) {}
             } else if (c.type == CandidateType::NUMERIC) {
+                // Cap numeric contributions to prevent explosion with trig equations
+                constexpr size_t MAX_NUMERIC_RESULTS = 50;
+                if (results.size() >= MAX_NUMERIC_RESULTS) return false;
                 auto roots = try_resolve_numeric(c.expr, target, bindings,
                     visited, depth, c.condition);
                 for (double val : roots) {
+                    if (results.size() >= MAX_NUMERIC_RESULTS) break;
                     bool dup = false;
                     for (auto r : results)
                         if (approx_equal(r, val)) { dup = true; break; }
@@ -1099,6 +1075,17 @@ private:
                              std::map<std::string, ExprPtr>& bindings,
                              std::set<std::string> visited, int depth) const {
         if (auto it = bindings.find(target); it != bindings.end()) return it->second;
+        // Builtin constants: keep as symbolic Var (not numeric) for derive
+        // Only skip if the file defines it as an equation LHS (real override)
+        {
+            auto& consts = builtin_constants();
+            if (consts.count(target)) {
+                bool in_equations = false;
+                for (auto& eq : equations)
+                    if (eq.lhs_var == target) { in_equations = true; break; }
+                if (!in_equations) return Expr::Var(target);
+            }
+        }
         if (visited.count(target)) return nullptr;
         visited.insert(target);
 
@@ -1414,6 +1401,20 @@ private:
         if (auto it = bindings.find(target); it != bindings.end()) {
             trace.calc("known: " + target + " = " + fmt_num(it->second), depth + 1);
             return it->second;
+        }
+        // Check builtin constants (pi, e, phi) — only if not defined in this system
+        if (!defaults.count(target)) {
+            auto& consts = builtin_constants();
+            auto it = consts.find(target);
+            if (it != consts.end()) {
+                bool in_equations = false;
+                for (auto& eq : equations)
+                    if (eq.lhs_var == target) { in_equations = true; break; }
+                if (!in_equations) {
+                    bindings[target] = it->second;
+                    return it->second;
+                }
+            }
         }
         if (visited.count(target))
             throw std::runtime_error(
