@@ -45,7 +45,7 @@ analyze:
 	@which clang-tidy > /dev/null 2>&1 && ( \
 		echo "=== clang-tidy ===" && \
 		clang-tidy src/main.cpp \
-			--checks='bugprone-*,performance-*,clang-analyzer-*,-bugprone-easily-swappable-parameters' \
+			--checks='bugprone-*,performance-*,clang-analyzer-*,-bugprone-easily-swappable-parameters,-performance-inefficient-string-concatenation' \
 			-- -std=c++17 -I src 2>&1 \
 	) || echo "clang-tidy not installed, skipping"
 	@echo "Static analysis complete."

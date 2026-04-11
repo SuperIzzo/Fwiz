@@ -1,11 +1,12 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <cstdint>
 #include <stdexcept>
 #include <cctype>
 #include <optional>
 
-enum class TokenType {
+enum class TokenType : uint8_t {
     NUMBER, IDENT,
     PLUS, MINUS, STAR, SLASH, CARET,
     LPAREN, RPAREN, EQUALS, QUESTION, COMMA,
