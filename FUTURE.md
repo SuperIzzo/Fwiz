@@ -57,6 +57,42 @@ x ∈ {3, -3}
 x ∈ (-∞, 0) ∪ (0, +∞)
 ```
 
+### Number domains
+
+ValueSets are parameterized by number domain:
+
+```cpp
+enum class NumberDomain : uint8_t { REAL, INTEGER, RATIONAL, COMPLEX, COUNT_ };
+```
+
+Syntax in .fw files:
+```
+n : int                    # n is an integer
+n : int & (0, +inf)        # positive integer
+x : complex                # allow complex solutions
+ratio : rational           # exact fractions
+```
+
+Shorthand for mathematical notation:
+```
+n : N          # natural (int & >= 0)
+n : Z          # integer
+x : Q          # rational
+x : R          # real (default, implicit)
+x : C          # complex
+```
+
+In queries:
+```bash
+fwiz formula(x=? : int, y=9)        # only integer solutions
+fwiz formula(x=? : C, y=-1)         # allow complex
+fwiz formula(x=? : int & (0, 100))  # integers in range
+```
+
+Domains compose with sets via `&` (intersection). `int & (0, +inf)` = positive integers. Intersecting a continuous interval with `int` converts it to discrete points.
+
+Current implementation: `NumberDomain` field on ValueSet, default REAL, ignored in operations. Extension point for future integer/complex/rational support.
+
 ### Relationship to other features
 
 - **Conditions** (`: x > 0`) are syntactic sugar for constraining to a ValueSet
