@@ -23,6 +23,18 @@ static_assert(EPSILON_REL > 0 && EPSILON_REL < 1e-3, "EPSILON_REL must be a smal
 static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_ITER must be reasonable");
 
 // ============================================================================
+//  Formatting (needed by ValueSet::to_string)
+// ============================================================================
+
+inline std::string fmt_num(double v) {
+    if (std::abs(v) < 1e12 && v == static_cast<double>(static_cast<long long>(v)))
+        return std::to_string(static_cast<long long>(v));
+    std::ostringstream os;
+    os << std::setprecision(10) << v;
+    return os.str();
+}
+
+// ============================================================================
 //  ValueSet — unified representation for conditions, ranges, and solutions
 // ============================================================================
 
@@ -102,6 +114,12 @@ public:
         return s;
     }
 
+    static ValueSet discrete(const std::vector<double>& values) {
+        ValueSet s;
+        s.discrete_ = values;
+        return s;
+    }
+
     static ValueSet between(double lo, double hi, bool lo_inc, bool hi_inc) {
         ValueSet s;
         s.intervals_.push_back({lo, hi, lo_inc, hi_inc});
@@ -175,6 +193,40 @@ public:
         std::vector<double> result;
         for (auto v : values)
             if (contains(v)) result.push_back(v);
+        return result;
+    }
+
+    // Is this a purely discrete set (no intervals)?
+    bool is_discrete() const { return intervals_.empty(); }
+
+    // String representation
+    std::string to_string() const {
+        if (empty()) return "{}";
+
+        std::vector<std::string> parts;
+
+        for (auto& iv : intervals_) {
+            std::string s;
+            s += iv.low_inclusive ? "[" : "(";
+            s += (iv.low == -std::numeric_limits<double>::infinity()) ? "-inf" : fmt_num(iv.low);
+            s += ", ";
+            s += (iv.high == std::numeric_limits<double>::infinity()) ? "+inf" : fmt_num(iv.high);
+            s += iv.high_inclusive ? "]" : ")";
+            parts.push_back(s);
+        }
+
+        if (!discrete_.empty()) {
+            std::string s = "{";
+            for (size_t i = 0; i < discrete_.size(); i++)
+                s += (i ? ", " : "") + fmt_num(discrete_[i]);
+            s += "}";
+            parts.push_back(s);
+        }
+
+        if (parts.size() == 1) return parts[0];
+        std::string result;
+        for (size_t i = 0; i < parts.size(); i++)
+            result += (i ? " | " : "") + parts[i];
         return result;
     }
 };
@@ -381,18 +433,6 @@ inline bool expr_equal(ExprPtr a, ExprPtr b) {
     if (a == b) return true;
     if (!a || !b) return false;
     return expr_equal(*a, *b);
-}
-
-// ============================================================================
-//  Formatting
-// ============================================================================
-
-inline std::string fmt_num(double v) {
-    if (std::abs(v) < 1e12 && v == static_cast<double>(static_cast<long long>(v)))
-        return std::to_string(static_cast<long long>(v));
-    std::ostringstream os;
-    os << std::setprecision(10) << v;
-    return os.str();
 }
 
 inline int precedence(const Expr& e) {
