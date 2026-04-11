@@ -7002,6 +7002,221 @@ void test_numeric_binary_integration() {
     }
 }
 
+// ---- Curve fitting ----
+
+void test_fit_sampling() {
+    SECTION("Fit: Sampling");
+
+    // Basic sampling
+    {
+        auto f = [](double x) { return x * x; };
+        auto samples = sample_function(f, -5, 5, 50);
+        ASSERT(samples.size() >= 45, "fit sample: enough points collected");
+        ASSERT(samples[0].x >= -5.1, "fit sample: starts near lo");
+        ASSERT(samples.back().x <= 5.1, "fit sample: ends near hi");
+    }
+
+    // NaN/Inf filtered out
+    {
+        auto f = [](double x) { return x < 0 ? std::numeric_limits<double>::quiet_NaN() : x; };
+        auto samples = sample_function(f, -10, 10, 100);
+        for (auto& s : samples)
+            ASSERT(std::isfinite(s.y), "fit sample: no NaN/Inf in results");
+    }
+
+    // Deterministic (same seed)
+    {
+        auto f = [](double x) { return std::sin(x); };
+        auto s1 = sample_function(f, 0, 10, 50);
+        auto s2 = sample_function(f, 0, 10, 50);
+        ASSERT(s1.size() == s2.size(), "fit sample: deterministic count");
+        bool same = true;
+        for (size_t i = 0; i < s1.size(); i++)
+            if (s1[i].x != s2[i].x || s1[i].y != s2[i].y) same = false;
+        ASSERT(same, "fit sample: deterministic values");
+    }
+}
+
+void test_fit_matrix() {
+    SECTION("Fit: Matrix Solve");
+
+    // Simple 3x2 system: y = 3 + 2x, points (1,5), (2,7), (3,9)
+    {
+        FitMatrix A = {{1,1}, {1,2}, {1,3}};
+        std::vector<double> b = {5, 7, 9};
+        auto x = least_squares_solve(A, b);
+        ASSERT(x.size() == 2, "matrix: 3x2 solution size");
+        ASSERT_NUM(x[0], 3, "matrix: intercept = 3");
+        ASSERT_NUM(x[1], 2, "matrix: slope = 2");
+    }
+
+    // 2x2 identity
+    {
+        FitMatrix A = {{1,0}, {0,1}};
+        std::vector<double> b = {7, 11};
+        auto x = least_squares_solve(A, b);
+        ASSERT_NUM(x[0], 7, "matrix: identity x[0] = 7");
+        ASSERT_NUM(x[1], 11, "matrix: identity x[1] = 11");
+    }
+
+    // Overdetermined quadratic: y = x^2, points at x = -2, -1, 0, 1, 2
+    {
+        FitMatrix A = {{1,-2,4}, {1,-1,1}, {1,0,0}, {1,1,1}, {1,2,4}};
+        std::vector<double> b = {4, 1, 0, 1, 4};
+        auto x = least_squares_solve(A, b);
+        ASSERT_NUM(x[0], 0, "matrix: quadratic c0 = 0");
+        ASSERT_NUM(x[1], 0, "matrix: quadratic c1 = 0");
+        ASSERT_NUM(x[2], 1, "matrix: quadratic c2 = 1");
+    }
+}
+
+void test_fit_polynomial() {
+    SECTION("Fit: Polynomial");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Exact linear fit: y = 2x + 3
+    {
+        auto f = [](double x) { return 2*x + 3; };
+        auto samples = sample_function(f, -10, 10, 100);
+        auto result = fit_polynomial(samples, 1);
+        ASSERT_NUM(result.coefficients[0], 3, "fit poly: linear c0 = 3");
+        ASSERT_NUM(result.coefficients[1], 2, "fit poly: linear c1 = 2");
+        ASSERT(result.r_squared > 0.9999, "fit poly: linear R² ≈ 1");
+        ASSERT(result.exact, "fit poly: linear is exact");
+    }
+
+    // Exact quadratic fit: y = x^2
+    {
+        auto f = [](double x) { return x*x; };
+        auto samples = sample_function(f, -10, 10, 100);
+        auto result = fit_polynomial(samples, 2);
+        ASSERT_NUM(result.coefficients[2], 1, "fit poly: quadratic c2 = 1");
+        ASSERT(result.exact, "fit poly: quadratic is exact");
+    }
+
+    // Auto degree: cubic data selects degree 3
+    {
+        auto f = [](double x) { return x*x*x - 2*x + 1; };
+        auto samples = sample_function(f, -5, 5, 100);
+        auto result = fit_polynomial_auto(samples);
+        ASSERT(result.degree == 3, "fit auto: cubic selects degree 3 (got " + std::to_string(result.degree) + ")");
+        ASSERT(result.r_squared > 0.999, "fit auto: cubic R² > 0.999");
+    }
+
+    // Expression tree construction
+    {
+        std::vector<double> coeffs = {3, 0, 1}; // 3 + x^2
+        auto expr = poly_to_expr(coeffs, "x");
+        auto str = expr_to_string(expr);
+        // Should evaluate correctly
+        double val = evaluate(*substitute(expr, "x", Expr::Num(4)));
+        ASSERT_NUM(val, 19, "fit expr: 3 + 4^2 = 19");
+    }
+
+    // Coefficient snapping
+    {
+        std::vector<double> coeffs = {2.9999999, 1.0000001};
+        auto result_coeffs = coeffs;
+        for (auto& c : result_coeffs) c = snap_coeff(c);
+        ASSERT(result_coeffs[0] == 3.0, "fit snap: 2.9999999 → 3");
+        ASSERT(result_coeffs[1] == 1.0, "fit snap: 1.0000001 → 1");
+    }
+}
+
+void test_fit_integration() {
+    SECTION("Fit: Integration");
+
+    // Linear formula
+    {
+        write_fw("/tmp/tf_linear.fw", "y = 2 * x + 3\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tf_linear.fw");
+        auto result = sys.fit("y", {}, {{"x", "x"}});
+        ASSERT_EQ(result.equation, "2 * x + 3", "fit integration: linear");
+        ASSERT(result.exact, "fit integration: linear is exact");
+    }
+
+    // Quadratic formula
+    {
+        write_fw("/tmp/tf_quad.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tf_quad.fw");
+        auto result = sys.fit("y", {}, {{"x", "x"}});
+        ASSERT_EQ(result.equation, "x^2", "fit integration: quadratic");
+        ASSERT(result.exact, "fit integration: quadratic is exact");
+    }
+
+    // Transcendental (approximate)
+    {
+        write_fw("/tmp/tf_sin.fw", "y = sin(x)\nx >= 0\nx <= 6.28\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tf_sin.fw");
+        auto result = sys.fit("y", {}, {{"x", "x"}});
+        ASSERT(!result.exact, "fit integration: sin is approximate");
+        ASSERT(result.r_squared > 0.99, "fit integration: sin R² > 0.99");
+    }
+
+    // Error: no symbolic variable
+    {
+        write_fw("/tmp/tf_err.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tf_err.fw");
+        auto msg = get_error([&]() { sys.fit("y", {{"x", 5}}, {}); });
+        ASSERT(msg.find("symbolic") != std::string::npos, "fit error: no symbolic var");
+    }
+}
+
+void test_fit_binary_integration() {
+    SECTION("Fit: Binary Integration");
+
+    // --fit produces output
+    {
+        write_fw("/tmp/tfb_quad.fw", "y = x^2\n");
+        int rc = system("./bin/fwiz --fit '/tmp/tfb_quad(y=?, x=x)' 2>/dev/null "
+                        "| grep -q 'x\\^2'");
+        ASSERT(WEXITSTATUS(rc) == 0, "fit binary: x^2 recognized");
+    }
+
+    // --fit exact uses =
+    {
+        write_fw("/tmp/tfb_lin.fw", "y = 3 * x + 1\n");
+        int rc = system("./bin/fwiz --fit '/tmp/tfb_lin(y=?, x=x)' 2>/dev/null "
+                        "| grep -q 'y = '");
+        ASSERT(WEXITSTATUS(rc) == 0, "fit binary: exact uses =");
+    }
+
+    // --fit approximate uses ~
+    {
+        write_fw("/tmp/tfb_sin.fw", "y = sin(x)\nx >= 0\nx <= 6.28\n");
+        int rc = system("./bin/fwiz --fit '/tmp/tfb_sin(y=?, x=x)' 2>/dev/null "
+                        "| grep -q ' ~ '");
+        ASSERT(WEXITSTATUS(rc) == 0, "fit binary: approximate uses ~");
+    }
+
+    // --derive --fit skips duplicate
+    {
+        write_fw("/tmp/tfb_dup.fw", "y = 2 * x + 3\n");
+        // derive gives "2 * x + 3", fit gives the same → only one line
+        int lines = 0;
+        FILE* p = popen("./bin/fwiz --derive --fit '/tmp/tfb_dup(y=?, x=x)' 2>/dev/null | wc -l", "r");
+        if (p) { fscanf(p, "%d", &lines); pclose(p); }
+        ASSERT(lines == 1, "fit binary: derive+fit skips duplicate (got " + std::to_string(lines) + " lines)");
+    }
+
+    // --output writes file
+    {
+        write_fw("/tmp/tfb_out.fw", "y = x^2\n");
+        system("./bin/fwiz --fit --output /tmp/tfb_out_result.fw '/tmp/tfb_out(y=?, x=x)' 2>/dev/null");
+        std::ifstream in("/tmp/tfb_out_result.fw");
+        ASSERT(in.good(), "fit binary: --output creates file");
+        std::string line;
+        std::getline(in, line);
+        ASSERT(line.find("Generated") != std::string::npos, "fit binary: --output has header");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7191,6 +7406,13 @@ int main() {
     test_numeric_precision();
     test_numeric_edge_cases();
     test_numeric_binary_integration();
+
+    // Curve fitting
+    test_fit_sampling();
+    test_fit_matrix();
+    test_fit_polynomial();
+    test_fit_integration();
+    test_fit_binary_integration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

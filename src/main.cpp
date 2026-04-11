@@ -16,7 +16,9 @@ int main(int argc, char* argv[]) {
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
                   << "  --no-numeric   disable numeric solving (algebraic only)\n"
-                  << "  --precision N  set numeric scan density (default 200)\n"
+                  << "  --fit          fit a curve to the function (polynomial approximation)\n"
+                  << "  --output FILE  write fitted equation to a .fw file\n"
+                  << "  --precision N  set sample density (default 200)\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
@@ -30,9 +32,11 @@ int main(int argc, char* argv[]) {
         bool explore = false;
         bool explore_full = false;
         bool derive_mode = false;
+        bool fit_mode = false;
         bool numeric_mode = true;
         int sys_samples = NUMERIC_DEFAULT_SAMPLES;
         std::string verify_arg;
+        std::string output_file;
         std::string query_str;
 
         for (int i = 1; i < argc; i++) {
@@ -42,7 +46,12 @@ int main(int argc, char* argv[]) {
             else if (arg == "--explore")      explore = true;
             else if (arg == "--explore-full") { explore = true; explore_full = true; }
             else if (arg == "--derive")       derive_mode = true;
+            else if (arg == "--fit")          fit_mode = true;
             else if (arg == "--no-numeric")   numeric_mode = false;
+            else if (arg == "--output") {
+                if (i + 1 < argc) output_file = argv[++i];
+                else { std::cerr << "Error: --output requires a filename\n"; return 1; }
+            }
             else if (arg == "--precision") {
                 if (i + 1 < argc) {
                     try { sys_samples = std::stoi(argv[++i]); }
@@ -62,8 +71,9 @@ int main(int argc, char* argv[]) {
         }
 
         bool has_verify = !verify_arg.empty();
-        auto query = parse_cli_query(query_str,
-            explore || explore_full || has_verify || derive_mode, derive_mode);
+        bool allow_missing = explore || explore_full || has_verify || derive_mode || fit_mode;
+        bool allow_symbolic = derive_mode || fit_mode;
+        auto query = parse_cli_query(query_str, allow_missing, allow_symbolic);
         FormulaSystem sys;
         sys.trace.level = level;
         sys.numeric_mode = numeric_mode;
@@ -72,13 +82,68 @@ int main(int argc, char* argv[]) {
 
         // --- Derive mode ---
         if (derive_mode) {
+            std::map<std::string, std::string> derived_eqs;
             for (auto& q : query.queries) {
                 try {
                     auto result = sys.derive(q.variable, query.bindings, query.symbolic);
+                    derived_eqs[q.variable] = result;
                     std::cout << q.alias << " = " << result << '\n';
+                } catch (const std::exception& e) {
+                    if (!fit_mode) {
+                        std::cerr << "Error: " << e.what() << '\n';
+                        return 1;
+                    }
+                    // derive failed but fit might still work — continue
+                }
+            }
+            if (!fit_mode) return 0;
+
+            // --- Fit after derive ---
+            for (auto& q : query.queries) {
+                try {
+                    auto result = sys.fit(q.variable, query.bindings, query.symbolic);
+                    // Skip if fit matches derive
+                    if (derived_eqs.count(q.variable) && derived_eqs[q.variable] == result.equation)
+                        continue;
+                    std::string sign = result.exact ? " = " : " ~ ";
+                    std::cout << q.alias << sign << result.equation << '\n';
+                    std::cerr << "  R² = " << fmt_num(result.r_squared)
+                              << ", max error = " << fmt_num(result.max_error) << '\n';
+                } catch (const std::exception& e) {
+                    std::cerr << "Error (fit): " << e.what() << '\n';
+                }
+            }
+            return 0;
+        }
+
+        // --- Fit mode (without derive) ---
+        if (fit_mode) {
+            for (auto& q : query.queries) {
+                try {
+                    auto result = sys.fit(q.variable, query.bindings, query.symbolic);
+                    std::string sign = result.exact ? " = " : " ~ ";
+                    std::cout << q.alias << sign << result.equation << '\n';
+                    std::cerr << "  R² = " << fmt_num(result.r_squared)
+                              << ", max error = " << fmt_num(result.max_error) << '\n';
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << '\n';
                     return 1;
+                }
+            }
+
+            // Write .fw file if --output specified
+            if (!output_file.empty()) {
+                std::ofstream out(output_file);
+                if (!out.is_open()) {
+                    std::cerr << "Error: cannot write to " << output_file << '\n';
+                    return 1;
+                }
+                out << "# Generated by fwiz --fit\n";
+                for (auto& q : query.queries) {
+                    try {
+                        auto result = sys.fit(q.variable, query.bindings, query.symbolic);
+                        out << q.variable << " = " << result.equation << '\n';
+                    } catch (...) {}
                 }
             }
             return 0;
