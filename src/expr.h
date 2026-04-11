@@ -218,51 +218,150 @@ inline double evaluate(const ExprPtr& e) {
 //  Simplify
 // ============================================================================
 
-// Negation helpers
-inline bool is_neg_num(const ExprPtr& e) { return e->type == ExprType::NUM && e->num < 0; }
-inline bool is_neg(const ExprPtr& e)     { return e->type == ExprType::UNARY_NEG; }
-inline bool is_negative(const ExprPtr& e){ return is_neg(e) || is_neg_num(e); }
+// ---- Flattening helpers ----
 
-inline ExprPtr strip_neg(const ExprPtr& e) {
-    if (e->type == ExprType::UNARY_NEG) return e->child;
-    if (e->type == ExprType::NUM && e->num < 0) return Expr::Num(-e->num);
-    return nullptr;
-}
-
-// For MUL and DIV: factor out negation from operands
-inline ExprPtr simplify_neg_pair(BinOp op, const ExprPtr& l, const ExprPtr& r) {
-    if (is_negative(l) && is_negative(r))
-        return Expr::BinOpExpr(op, strip_neg(l), strip_neg(r));
-    if (is_neg(l) && !is_negative(r))
-        return Expr::Neg(Expr::BinOpExpr(op, l->child, r));
-    if (is_neg(r) && !is_negative(l))
-        return Expr::Neg(Expr::BinOpExpr(op, l, r->child));
-    return nullptr;
-}
-
-// Like-term helpers: decompose expr into (coefficient, base)
-// e.g. 3*x → (3, x), x → (1, x), -x → (-1, x)
-inline std::pair<double, ExprPtr> split_coeff(const ExprPtr& e) {
-    if (e->type == ExprType::NUM) return {e->num, nullptr};
-    if (e->type == ExprType::UNARY_NEG) {
-        auto [c, b] = split_coeff(e->child);
-        return {-c, b};
-    }
-    if (e->type == ExprType::BINOP && e->op == BinOp::MUL) {
-        if (e->left->type == ExprType::NUM) return {e->left->num, e->right};
-        if (e->right->type == ExprType::NUM) return {e->right->num, e->left};
-    }
-    return {1.0, e};
-}
-
-// Power helpers: decompose expr into (base, exponent)
-// e.g. x^3 → (x, 3), x → (x, 1)
+// Decompose expr into (base, exponent) — e.g. x^3 → (x, 3), x → (x, 1)
 inline std::pair<ExprPtr, double> split_pow(const ExprPtr& e) {
     if (e->type == ExprType::BINOP && e->op == BinOp::POW
         && e->right->type == ExprType::NUM)
         return {e->left, e->right->num};
     return {e, 1.0};
 }
+
+// Flatten an additive chain (ADD/SUB) into (coefficient, base) terms.
+// Each term represents coeff * base. Bare constants have base=nullptr.
+inline void flatten_additive(const ExprPtr& e, double sign,
+                             std::vector<std::pair<double, ExprPtr>>& terms) {
+    if (e->type == ExprType::NUM) {
+        terms.push_back({sign * e->num, nullptr});
+    } else if (e->type == ExprType::UNARY_NEG) {
+        flatten_additive(e->child, -sign, terms);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::ADD) {
+        flatten_additive(e->left, sign, terms);
+        flatten_additive(e->right, sign, terms);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::SUB) {
+        flatten_additive(e->left, sign, terms);
+        flatten_additive(e->right, -sign, terms);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::MUL
+               && e->left->type == ExprType::NUM) {
+        // k * expr → coefficient is k, base is expr
+        terms.push_back({sign * e->left->num, e->right});
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::MUL
+               && e->right->type == ExprType::NUM) {
+        terms.push_back({sign * e->right->num, e->left});
+    } else {
+        terms.push_back({sign, e});
+    }
+}
+
+// Reconstruct an expression from additive terms
+inline ExprPtr rebuild_additive(const std::vector<std::pair<double, ExprPtr>>& terms) {
+    if (terms.empty()) return Expr::Num(0);
+
+    auto make_term = [](double coeff, const ExprPtr& base) -> ExprPtr {
+        if (!base) return Expr::Num(coeff);
+        if (coeff == 1.0) return base;
+        if (coeff == -1.0) return Expr::Neg(base);
+        return Expr::BinOpExpr(BinOp::MUL, Expr::Num(coeff), base);
+    };
+
+    ExprPtr result = nullptr;
+    for (auto& [coeff, base] : terms) {
+        if (std::abs(coeff) < 1e-12) continue; // skip zero terms
+        auto term = make_term(std::abs(coeff), base);
+        if (!result) {
+            result = (coeff < 0) ? Expr::Neg(term) : term;
+        } else if (coeff > 0) {
+            result = Expr::BinOpExpr(BinOp::ADD, result, term);
+        } else {
+            result = Expr::BinOpExpr(BinOp::SUB, result, term);
+        }
+    }
+    return result ? result : Expr::Num(0);
+}
+
+// Flatten a MUL chain into (base, exponent) factors.
+// Only flattens through MUL, not DIV (to preserve division structure).
+// Numeric constants are collected into a single coefficient.
+inline void flatten_multiplicative(const ExprPtr& e,
+                                   double& coeff,
+                                   std::vector<std::pair<ExprPtr, double>>& factors) {
+    if (e->type == ExprType::NUM) {
+        coeff *= e->num;
+    } else if (e->type == ExprType::UNARY_NEG) {
+        coeff = -coeff;
+        flatten_multiplicative(e->child, coeff, factors);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::MUL) {
+        flatten_multiplicative(e->left, coeff, factors);
+        flatten_multiplicative(e->right, coeff, factors);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::DIV
+               && e->right->type == ExprType::NUM && e->right->num != 0) {
+        coeff /= e->right->num;
+        flatten_multiplicative(e->left, coeff, factors);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::POW
+               && e->right->type == ExprType::NUM) {
+        factors.push_back({e->left, e->right->num});
+    } else {
+        factors.push_back({e, 1.0});
+    }
+}
+
+// Reconstruct an expression from multiplicative factors (MUL only, no DIV)
+inline ExprPtr rebuild_multiplicative(double coeff,
+                                      const std::vector<std::pair<ExprPtr, double>>& factors) {
+    auto make_factor = [](const ExprPtr& base, double exp) -> ExprPtr {
+        if (exp == 1.0) return base;
+        return Expr::BinOpExpr(BinOp::POW, base, Expr::Num(exp));
+    };
+
+    std::vector<ExprPtr> parts;
+    for (auto& [base, exp] : factors) {
+        if (std::abs(exp) < 1e-12) continue; // base^0 = 1, skip
+        parts.push_back(make_factor(base, exp));
+    }
+
+    bool neg = coeff < 0;
+    double abs_coeff = std::abs(coeff);
+    ExprPtr result = nullptr;
+    if (abs_coeff != 1.0 || parts.empty()) result = Expr::Num(abs_coeff);
+    for (auto& f : parts)
+        result = result ? Expr::BinOpExpr(BinOp::MUL, result, f) : f;
+    if (!result) result = Expr::Num(1);
+
+    return neg ? Expr::Neg(result) : result;
+}
+
+// Group additive terms by base, combining coefficients
+inline void group_additive(std::vector<std::pair<double, ExprPtr>>& terms) {
+    for (size_t i = 0; i < terms.size(); i++) {
+        if (!terms[i].second) continue;
+        for (size_t j = i + 1; j < terms.size(); j++) {
+            if (!terms[j].second) continue;
+            if (expr_equal(terms[i].second, terms[j].second)) {
+                terms[i].first += terms[j].first;
+                terms[j].first = 0;
+                terms[j].second = nullptr;
+            }
+        }
+    }
+}
+
+// Group multiplicative factors by base, combining exponents
+inline void group_multiplicative(std::vector<std::pair<ExprPtr, double>>& factors) {
+    for (size_t i = 0; i < factors.size(); i++) {
+        if (!factors[i].first) continue;
+        for (size_t j = i + 1; j < factors.size(); j++) {
+            if (!factors[j].first) continue;
+            if (expr_equal(factors[i].first, factors[j].first)) {
+                factors[i].second += factors[j].second;
+                factors[j].second = 0;
+                factors[j].first = nullptr;
+            }
+        }
+    }
+}
+
+// ---- Simplify ----
 
 inline ExprPtr simplify_once(const ExprPtr& e) {
     if (!e) return e;
@@ -273,9 +372,28 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
 
         case ExprType::UNARY_NEG: {
             auto c = simplify_once(e->child);
-            if (c->type == ExprType::NUM)                             return Expr::Num(-c->num);
-            if (c->type == ExprType::UNARY_NEG)                       return c->child;
-            if (c->type == ExprType::BINOP && c->op == BinOp::SUB)    return Expr::BinOpExpr(BinOp::SUB, c->right, c->left);
+            if (c->type == ExprType::NUM) return Expr::Num(-c->num);
+            if (c->type == ExprType::UNARY_NEG) return c->child;
+            // Negate an additive expression: flatten with -1 sign
+            if (c->type == ExprType::BINOP && (c->op == BinOp::ADD || c->op == BinOp::SUB)) {
+                std::vector<std::pair<double, ExprPtr>> terms;
+                flatten_additive(c, -1.0, terms);
+                double constant = 0;
+                std::vector<std::pair<double, ExprPtr>> symbolic;
+                for (auto& [coeff, base] : terms) {
+                    if (!base) constant += coeff;
+                    else symbolic.push_back({coeff, base});
+                }
+                group_additive(symbolic);
+                if (std::abs(constant) >= 1e-12)
+                    symbolic.push_back({constant, nullptr});
+                return rebuild_additive(symbolic);
+            }
+            // Negate a division: push negation through
+            if (c->type == ExprType::BINOP && c->op == BinOp::DIV) {
+                // -(a/b) → (-a)/b, let DIV rules handle double negation
+                return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(c->left), c->right);
+            }
             return Expr::Neg(c);
         }
 
@@ -293,144 +411,115 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
         case ExprType::BINOP: {
             auto l = simplify_once(e->left);
             auto r = simplify_once(e->right);
-            auto L = [&](){ return l->type == ExprType::NUM; };
-            auto R = [&](){ return r->type == ExprType::NUM; };
 
             // Constant fold
-            if (L() && R()) return Expr::Num(evaluate(Expr::BinOpExpr(e->op, l, r)));
+            if (l->type == ExprType::NUM && r->type == ExprType::NUM)
+                return Expr::Num(evaluate(Expr::BinOpExpr(e->op, l, r)));
 
-            // Constant reassociation: (a ⊕ K1) ⊗ K2 → a ⊕ combine(K1, K2)
-            if (R() && l->type == ExprType::BINOP && l->right->type == ExprType::NUM) {
-                double k1 = l->right->num, k2 = r->num;
-                auto a = l->left;
-                // ADD+ADD, SUB+ADD, ADD+SUB, SUB+SUB, MUL+MUL
-                if (e->op == BinOp::ADD && l->op == BinOp::ADD) return Expr::BinOpExpr(BinOp::ADD, a, Expr::Num(k1 + k2));
-                if (e->op == BinOp::ADD && l->op == BinOp::SUB) return Expr::BinOpExpr(BinOp::ADD, a, Expr::Num(k2 - k1));
-                if (e->op == BinOp::SUB && l->op == BinOp::ADD) return Expr::BinOpExpr(BinOp::ADD, a, Expr::Num(k1 - k2));
-                if (e->op == BinOp::SUB && l->op == BinOp::SUB) return Expr::BinOpExpr(BinOp::SUB, a, Expr::Num(k1 + k2));
-                if (e->op == BinOp::MUL && l->op == BinOp::MUL) return Expr::BinOpExpr(BinOp::MUL, a, Expr::Num(k1 * k2));
-                if (e->op == BinOp::DIV && l->op == BinOp::MUL) return Expr::BinOpExpr(BinOp::MUL, a, Expr::Num(k1 / k2));
-                if (e->op == BinOp::MUL && l->op == BinOp::DIV) return Expr::BinOpExpr(BinOp::DIV, a, Expr::Num(k1 / k2));
+            if (e->op == BinOp::ADD || e->op == BinOp::SUB) {
+                // Flatten, group, rebuild
+                auto combined = Expr::BinOpExpr(e->op, l, r);
+                std::vector<std::pair<double, ExprPtr>> terms;
+                flatten_additive(combined, 1.0, terms);
+
+                // Collect bare constants
+                double constant = 0;
+                std::vector<std::pair<double, ExprPtr>> symbolic;
+                for (auto& [c, b] : terms) {
+                    if (!b) constant += c;
+                    else    symbolic.push_back({c, b});
+                }
+
+                // Group like terms
+                group_additive(symbolic);
+
+                // Add constant back if nonzero
+                if (std::abs(constant) >= 1e-12)
+                    symbolic.push_back({constant, nullptr});
+
+                return rebuild_additive(symbolic);
             }
 
-            switch (e->op) {
-                case BinOp::ADD:
-                    if (L() && l->num == 0) return r;
-                    if (R() && r->num == 0) return l;
-                    if (is_neg(r))     return Expr::BinOpExpr(BinOp::SUB, l, r->child);
-                    if (is_neg_num(r)) return Expr::BinOpExpr(BinOp::SUB, l, Expr::Num(-r->num));
-                    if (is_neg(l))     return Expr::BinOpExpr(BinOp::SUB, r, l->child);
-                    if (is_neg_num(l)) return Expr::BinOpExpr(BinOp::SUB, r, Expr::Num(-l->num));
-                    // Like-term combining: c1*base + c2*base → (c1+c2)*base
-                    {
-                        auto [c1, b1] = split_coeff(l);
-                        auto [c2, b2] = split_coeff(r);
-                        if (b1 && b2 && expr_equal(b1, b2)) {
-                            double c = c1 + c2;
-                            if (std::abs(c) < 1e-12) return Expr::Num(0);
-                            if (c == 1.0) return b1;
-                            return Expr::BinOpExpr(BinOp::MUL, Expr::Num(c), b1);
-                        }
-                    }
-                    break;
+            if (e->op == BinOp::MUL) {
+                // Check for zero
+                if ((l->type == ExprType::NUM && l->num == 0) ||
+                    (r->type == ExprType::NUM && r->num == 0))
+                    return Expr::Num(0);
 
-                case BinOp::SUB:
-                    if (R() && r->num == 0) return l;
-                    if (L() && l->num == 0) return Expr::Neg(r);
-                    if (is_neg(r))     return Expr::BinOpExpr(BinOp::ADD, l, r->child);
-                    if (is_neg_num(r)) return Expr::BinOpExpr(BinOp::ADD, l, Expr::Num(-r->num));
-                    // (a + b) - a → b, (a + b) - b → a
-                    if (l->type == ExprType::BINOP && l->op == BinOp::ADD) {
-                        if (expr_equal(l->left, r)) return l->right;
-                        if (expr_equal(l->right, r)) return l->left;
-                    }
-                    // a - (a + b) → -b, a - (b + a) → -b
-                    if (r->type == ExprType::BINOP && r->op == BinOp::ADD) {
-                        if (expr_equal(r->left, l)) return Expr::Neg(r->right);
-                        if (expr_equal(r->right, l)) return Expr::Neg(r->left);
-                    }
-                    // Like-term combining: c1*base - c2*base → (c1-c2)*base
-                    {
-                        auto [c1, b1] = split_coeff(l);
-                        auto [c2, b2] = split_coeff(r);
-                        if (b1 && b2 && expr_equal(b1, b2)) {
-                            double c = c1 - c2;
-                            if (std::abs(c) < 1e-12) return Expr::Num(0);
-                            if (c == 1.0) return b1;
-                            if (c == -1.0) return Expr::Neg(b1);
-                            return Expr::BinOpExpr(BinOp::MUL, Expr::Num(c), b1);
-                        }
-                    }
-                    break;
-
-                case BinOp::MUL:
-                    if (L() && l->num == 0) return Expr::Num(0);
-                    if (R() && r->num == 0) return Expr::Num(0);
-                    if (L() && l->num == 1) return r;
-                    if (R() && r->num == 1) return l;
-                    if (L() && l->num == -1) return Expr::Neg(r);
-                    if (R() && r->num == -1) return Expr::Neg(l);
-                    if (auto s = simplify_neg_pair(BinOp::MUL, l, r)) return s;
-                    // Mul-to-pow: base^n * base^m → base^(n+m)
-                    {
-                        auto [b1, e1] = split_pow(l);
-                        auto [b2, e2] = split_pow(r);
-                        if (expr_equal(b1, b2))
-                            return Expr::BinOpExpr(BinOp::POW, b1, Expr::Num(e1 + e2));
-                    }
-                    // (k * base^n) * base^m → k * base^(n+m)
-                    if (l->type == ExprType::BINOP && l->op == BinOp::MUL) {
-                        auto [b1, e1] = split_pow(l->right);
-                        auto [b2, e2] = split_pow(r);
-                        if (expr_equal(b1, b2))
-                            return Expr::BinOpExpr(BinOp::MUL, l->left,
-                                Expr::BinOpExpr(BinOp::POW, b1, Expr::Num(e1 + e2)));
-                    }
-                    // base^n * (k * base^m) → k * base^(n+m)
-                    if (r->type == ExprType::BINOP && r->op == BinOp::MUL) {
-                        auto [b1, e1] = split_pow(l);
-                        auto [b2, e2] = split_pow(r->right);
-                        if (expr_equal(b1, b2))
-                            return Expr::BinOpExpr(BinOp::MUL, r->left,
-                                Expr::BinOpExpr(BinOp::POW, b1, Expr::Num(e1 + e2)));
-                    }
-                    break;
-
-                case BinOp::DIV:
-                    if (L() && l->num == 0) return Expr::Num(0);
-                    if (R() && r->num == 1) return l;
-                    if (R() && r->num == -1) return Expr::Neg(l);
-                    if (auto s = simplify_neg_pair(BinOp::DIV, l, r)) return s;
-                    // Self-division: expr / expr → 1
-                    if (expr_equal(l, r)) return Expr::Num(1);
-                    // (k * expr) / expr → k
-                    if (l->type == ExprType::BINOP && l->op == BinOp::MUL) {
-                        if (expr_equal(l->right, r)) return l->left;
-                        if (expr_equal(l->left, r)) return l->right;
-                    }
-                    // expr / (k * expr) → 1/k
-                    if (r->type == ExprType::BINOP && r->op == BinOp::MUL) {
-                        if (expr_equal(r->right, l)) return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), r->left);
-                        if (expr_equal(r->left, l)) return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), r->right);
-                    }
-                    // Power-aware division: base^n / base^m → base^(n-m)
-                    {
-                        auto [b1, e1] = split_pow(l);
-                        auto [b2, e2] = split_pow(r);
-                        if (expr_equal(b1, b2)) {
-                            double exp = e1 - e2;
-                            if (std::abs(exp) < 1e-12) return Expr::Num(1);
-                            if (exp == 1.0) return b1;
-                            return Expr::BinOpExpr(BinOp::POW, b1, Expr::Num(exp));
-                        }
-                    }
-                    break;
-
-                case BinOp::POW:
-                    if (R() && r->num == 0) return Expr::Num(1);
-                    if (R() && r->num == 1) return l;
-                    break;
+                // Flatten MUL chain, group, rebuild
+                auto combined = Expr::BinOpExpr(BinOp::MUL, l, r);
+                double coeff = 1.0;
+                std::vector<std::pair<ExprPtr, double>> factors;
+                flatten_multiplicative(combined, coeff, factors);
+                group_multiplicative(factors);
+                return rebuild_multiplicative(coeff, factors);
             }
+
+            if (e->op == BinOp::DIV) {
+                // 0 / x → 0
+                if (l->type == ExprType::NUM && l->num == 0) return Expr::Num(0);
+                // x / 1 → x
+                if (r->type == ExprType::NUM && r->num == 1) return l;
+                // x / -1 → -x
+                if (r->type == ExprType::NUM && r->num == -1) return Expr::Neg(l);
+                // Negate denominator: x / (-K) → -x / K, then recurse
+                if (r->type == ExprType::NUM && r->num < 0)
+                    return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
+                // Negate both: (-a) / (-b) → a / b
+                if (l->type == ExprType::UNARY_NEG && r->type == ExprType::UNARY_NEG)
+                    return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
+                // Single neg: (-a) / b → -(a/b)
+                if (l->type == ExprType::UNARY_NEG)
+                    return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
+                // Constant reassociation: (K1 * a) / K2 or (a * K1) / K2 → a * (K1/K2)
+                if (r->type == ExprType::NUM && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
+                    if (l->right->type == ExprType::NUM)
+                        return Expr::BinOpExpr(BinOp::MUL, l->left, Expr::Num(l->right->num / r->num));
+                    if (l->left->type == ExprType::NUM)
+                        return Expr::BinOpExpr(BinOp::MUL, Expr::Num(l->left->num / r->num), l->right);
+                }
+                // (a / K1) / K2 → a / (K1*K2)
+                if (r->type == ExprType::NUM && l->type == ExprType::BINOP
+                    && l->op == BinOp::DIV && l->right->type == ExprType::NUM)
+                    return Expr::BinOpExpr(BinOp::DIV, l->left,
+                        Expr::Num(l->right->num * r->num));
+                // Self-division and power-aware: flatten both sides, cancel
+                {
+                    double lc = 1.0, rc = 1.0;
+                    std::vector<std::pair<ExprPtr, double>> lf, rf;
+                    flatten_multiplicative(l, lc, lf);
+                    flatten_multiplicative(r, rc, rf);
+                    // Cancel matching bases
+                    bool changed = false;
+                    for (auto& [lb, le] : lf) {
+                        if (!lb) continue;
+                        for (auto& [rb, re] : rf) {
+                            if (!rb) continue;
+                            if (expr_equal(lb, rb)) {
+                                le -= re;
+                                re = 0;
+                                rb = nullptr;
+                                changed = true;
+                            }
+                        }
+                    }
+                    if (changed) {
+                        auto top = rebuild_multiplicative(lc, lf);
+                        auto bot = rebuild_multiplicative(rc, rf);
+                        // If denominator simplified to 1, just return numerator
+                        if (bot->type == ExprType::NUM && bot->num == 1.0) return top;
+                        if (bot->type == ExprType::NUM && bot->num == -1.0) return Expr::Neg(top);
+                        return Expr::BinOpExpr(BinOp::DIV, top, bot);
+                    }
+                }
+                return Expr::BinOpExpr(BinOp::DIV, l, r);
+            }
+
+            if (e->op == BinOp::POW) {
+                if (r->type == ExprType::NUM && r->num == 0) return Expr::Num(1);
+                if (r->type == ExprType::NUM && r->num == 1) return l;
+            }
+
             return Expr::BinOpExpr(e->op, l, r);
         }
     }
