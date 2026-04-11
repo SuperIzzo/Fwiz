@@ -18,12 +18,20 @@ constexpr double EPSILON_ZERO = 1e-12;   // treat |x| < this as zero (coefficien
 constexpr double EPSILON_REL  = 1e-9;    // relative tolerance for verify mode (approx_equal)
 constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 
+static_assert(EPSILON_ZERO > 0 && EPSILON_ZERO < 1e-6, "EPSILON_ZERO must be a small positive value");
+static_assert(EPSILON_REL > 0 && EPSILON_REL < 1e-3, "EPSILON_REL must be a small positive value");
+static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_ITER must be reasonable");
+
 // ============================================================================
 //  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
 
 enum class ExprType : uint8_t { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL, COUNT_ };
 enum class BinOp   : uint8_t { ADD, SUB, MUL, DIV, POW, COUNT_ };
+
+static_assert(static_cast<int>(ExprType::COUNT_) == 5, "ExprType has 5 real values");
+static_assert(static_cast<int>(BinOp::COUNT_) == 5, "BinOp has 5 real values");
+static_assert(static_cast<int>(BinOp::ADD) == 0, "BinOp values start at 0 (used as array index)");
 
 struct Expr;
 using ExprPtr = Expr*;
@@ -73,11 +81,25 @@ inline Expr* ExprArena::alloc() {
     return &chunks.back()[next_in_chunk++];
 }
 
-inline ExprPtr Expr::Num(double v)                                      { auto e = ExprArena::current()->alloc(); e->type = ExprType::NUM;       e->num = v;                              return e; }
-inline ExprPtr Expr::Var(const std::string& n)                          { auto e = ExprArena::current()->alloc(); e->type = ExprType::VAR;       e->name = n;                             return e; }
-inline ExprPtr Expr::BinOpExpr(BinOp o, ExprPtr l, ExprPtr r)           { auto e = ExprArena::current()->alloc(); e->type = ExprType::BINOP;     e->op = o; e->left = l; e->right = r;   return e; }
-inline ExprPtr Expr::Neg(ExprPtr c)                                     { auto e = ExprArena::current()->alloc(); e->type = ExprType::UNARY_NEG; e->child = c;                            return e; }
-inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) { auto e = ExprArena::current()->alloc(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a);    return e; }
+inline ExprPtr Expr::Num(double v) {
+    assert(ExprArena::current() && "ExprArena::Scope must be active");
+    auto e = ExprArena::current()->alloc(); e->type = ExprType::NUM; e->num = v; return e;
+}
+inline ExprPtr Expr::Var(const std::string& n) {
+    assert(ExprArena::current() && "ExprArena::Scope must be active");
+    auto e = ExprArena::current()->alloc(); e->type = ExprType::VAR; e->name = n; return e;
+}
+inline ExprPtr Expr::BinOpExpr(BinOp o, ExprPtr l, ExprPtr r) {
+    assert(l && r && "BinOp operands must not be null");
+    auto e = ExprArena::current()->alloc(); e->type = ExprType::BINOP; e->op = o; e->left = l; e->right = r; return e;
+}
+inline ExprPtr Expr::Neg(ExprPtr c) {
+    assert(c && "Neg operand must not be null");
+    auto e = ExprArena::current()->alloc(); e->type = ExprType::UNARY_NEG; e->child = c; return e;
+}
+inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) {
+    auto e = ExprArena::current()->alloc(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a); return e;
+}
 
 // ============================================================================
 //  Type predicates
@@ -590,9 +612,11 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
 }
 
 inline ExprPtr simplify(const ExprPtr& e) {
+    assert(e && "cannot simplify null expression");
     ExprPtr cur = e;
     for (int i = 0; i < SIMPLIFY_MAX_ITER; i++) {
         auto next = simplify_once(cur);
+        assert(next && "simplify_once must not return null");
         if (expr_equal(next, cur)) break;
         cur = next;
     }
