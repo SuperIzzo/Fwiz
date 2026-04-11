@@ -5311,6 +5311,17 @@ void test_simplify_like_terms() {
     ASSERT_EQ(expr_to_string(simplify(parse("x + y"))), "x + y", "x+y: different bases unchanged");
 }
 
+void test_simplify_constant_reassociation() {
+    SECTION("Simplifier: Constant Reassociation Extended");
+
+    // (a * K1) / K2 → a * (K1/K2)
+    ASSERT_EQ(expr_to_string(simplify(parse("x * 6 / 2"))), "x * 3", "(x*6)/2 → x*3");
+    ASSERT_EQ(expr_to_string(simplify(parse("x * 0.866 / 2"))), "x * 0.433", "(x*0.866)/2 → x*0.433");
+
+    // (a / K1) * K2 → a / (K1/K2)
+    ASSERT_EQ(expr_to_string(simplify(parse("x / 4 * 2"))), "x / 2", "(x/4)*2 → x/2");
+}
+
 void test_simplify_mul_to_pow() {
     SECTION("Simplifier: Multiplication to Power");
 
@@ -5670,6 +5681,7 @@ int main() {
     test_simplify_mul_to_pow();
     test_simplify_self_division();
     test_simplify_constant_collection();
+    test_simplify_constant_reassociation();
 
     // Derive mode
     test_derive_basic();

@@ -309,6 +309,8 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                 if (e->op == BinOp::SUB && l->op == BinOp::ADD) return Expr::BinOpExpr(BinOp::ADD, a, Expr::Num(k1 - k2));
                 if (e->op == BinOp::SUB && l->op == BinOp::SUB) return Expr::BinOpExpr(BinOp::SUB, a, Expr::Num(k1 + k2));
                 if (e->op == BinOp::MUL && l->op == BinOp::MUL) return Expr::BinOpExpr(BinOp::MUL, a, Expr::Num(k1 * k2));
+                if (e->op == BinOp::DIV && l->op == BinOp::MUL) return Expr::BinOpExpr(BinOp::MUL, a, Expr::Num(k1 / k2));
+                if (e->op == BinOp::MUL && l->op == BinOp::DIV) return Expr::BinOpExpr(BinOp::DIV, a, Expr::Num(k1 / k2));
             }
 
             switch (e->op) {
