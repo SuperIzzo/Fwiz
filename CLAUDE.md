@@ -4,64 +4,41 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is fwiz
 
-fwiz is a bidirectional formula solver. You write equations once in `.fw` files, and fwiz algebraically solves for any variable — forwards or backwards. It handles linear equations, multi-equation substitution, equation chains, and like-term combining.
+Bidirectional formula solver. Write equations once in `.fw` files, solve for any variable forwards or backwards. Supports cross-file formula calls, symbolic derivation, verification, and explore modes.
 
-## Build and test commands
+## Build commands
 
 ```bash
-make              # build fwiz binary (requires C++17, GCC 7+ or Clang 5+)
-make test         # build + run all functional tests
-make sanitize     # run ASan + UBSan sanitizer checks
-make asan         # AddressSanitizer only
-make ubsan        # UndefinedBehaviorSanitizer only
-make clean        # remove build artifacts
+make              # build (C++17, GCC 7+ or Clang 5+)
+make test         # run all tests (1129+)
+make sanitize     # ASan + UBSan
+make analyze      # clang-tidy (zero warnings expected)
 ```
 
-Run the binary: `./bin/fwiz <file>(<var>=?, <var>=<value>, ...)`
+Run: `./bin/fwiz [--steps|--calc|--explore|--explore-full|--verify all|--derive] <file>(<var>=?, <var>=<value>, ...)`
 
 ## Architecture
 
-Header-only implementation with no external dependencies (stdlib only). All expression trees use `shared_ptr<Expr>` (`ExprPtr`) — no manual memory management. Source files live in `src/`, example `.fw` files in `examples/`.
+Header-only, no external dependencies. Source in `src/`, examples in `examples/`.
 
-**Pipeline:** source text → `lexer.h` (tokens) → `parser.h` (expression tree) → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI)
+**Pipeline:** source → `lexer.h` → `parser.h` → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI)
 
-Key modules:
-- **lexer.h** — Tokenizer. Does not handle scientific notation or newlines (file parser splits lines first).
-- **parser.h** — Recursive descent parser. Known limitation: `^` is not right-associative.
-- **expr.h** — Core algebra engine. `decompose_linear()` is the key function: decomposes expressions into `coeff * target + rest`. `solve_for()` uses this to isolate variables. `simplify()` runs to fixpoint (max 20 iterations).
-- **system.h** — `FormulaSystem` class. Loads `.fw` files, stores equations/defaults/formula calls, runs recursive solving with six strategies: direct evaluation, algebraic inversion, forward formula call, substitution via shared variables, reverse formula call through bindings. Results validated against NaN/infinity. Formula calls are extracted from the token stream before expression parsing — the parser never sees them.
-- **trace.h** — Three trace levels (NONE, STEPS, CALC). Output goes to stderr.
-- **main.cpp** — CLI parsing and flag handling.
-- **tests.cpp** — All tests with a minimal built-in assertion framework (no test library).
+**Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
-## Design principles
+**Solver:** `enumerate_candidates()` generates candidates, shared by solve/derive/verify modes. Strategies: direct LHS, algebraic inversion, forward formula call, shared-LHS equating, reverse formula call.
 
-- Equations are bidirectional relationships, not assignments
-- Fail clearly with specific error messages — never silently produce wrong answers
-- Reject NaN, infinity, and near-zero float artifacts (coefficient guard: `|coeff| < 1e-12`)
-- First valid equation in file order wins; invalid results (NaN/inf) trigger fallback to next equation
+**Simplifier:** Additive and multiplicative flattening (not case-by-case rules). Extend flattening logic, don't add new pattern-match rules.
 
-## Adding a built-in function
+## Key conventions
 
-1. Add evaluation dispatch in `evaluate()` in `expr.h`
-2. Consider nonlinearity — most functions make `decompose_linear()` return `ok=false`
-3. Add tests in `tests.cpp`
+Read `DEVELOPER.md` for the full conventions guide. Summary:
 
-## Cross-file formula calls
-
-Formula calls let `.fw` files reference equations from other files:
-```
-rectangle(area=?floor, width=width, height=depth)   # standalone with alias
-floor = rectangle(area=?, width=width, height=depth) # implied alias (equivalent)
-volume = rectangle(area=?floor, width=w, height=d) * h  # inline in expression
-```
-
-Arguments: `area=?` (query), `area=?alias` (query+alias), `width=width` (binding), `width` (shorthand), `height=depth` (rename). Only the alias/output name enters parent scope. Bindings are bidirectional — providing the output bridges to the query variable, and solving for a bound parent variable resolves through the sub-system.
-
-## Extending the solver
-
-Add cases to `decompose_linear()` in `expr.h` for new linear forms. For nonlinear solving (e.g., quadratics), add a new strategy to `solve_recursive()` in `system.h`.
-
-## Test structure
-
-Tests in `tests.cpp` are grouped by failure mode: functional → edge cases → robustness (numeric extremes, expression depth, contradictions, statefulness, file format portability, CLI parsing, error messages). Sanitizer-aware depth constants reduce recursion limits under ASan. Always run `make sanitize` after modifying expression tree, simplifier, or solver code.
+- **References for non-null** (`const Expr&`), **pointers for nullable** (`ExprPtr`)
+- **`constexpr`** for predicates and constants, **`inline`** for everything else in headers
+- **Named constants** (`EPSILON_ZERO`, `EPSILON_REL`, `SIMPLIFY_MAX_ITER`) — no magic numbers
+- **Data-driven** — BinOp metadata table, builtin function registry, strategy enumeration
+- **Function pointers** over `std::function`
+- **Enums** use `uint8_t` base
+- **No empty catch blocks** — return, log, or handle
+- **Write failing tests first**, commit tests before refactoring
+- `make test && make sanitize && make analyze` must all pass before committing
