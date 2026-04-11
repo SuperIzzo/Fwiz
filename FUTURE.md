@@ -4,6 +4,68 @@
 
 Three features that build on each other to make fwiz significantly more expressive while staying true to the "equations, not assignments" philosophy.
 
+## 0. ValueSet — Unified Foundation
+
+### Core concept
+
+Conditions, ranges, discrete solutions, and constraints are all the same thing: **sets of valid values**. A `ValueSet` is a union of intervals and discrete points.
+
+```cpp
+struct Interval {
+    double low, high;
+    bool low_inclusive, high_inclusive;  // ( vs [
+};
+
+struct ValueSet {
+    std::vector<Interval> intervals;   // continuous ranges
+    std::vector<double> discrete;       // individual values
+    // The full set = union of all intervals + discrete points
+};
+```
+
+### Operations
+
+- **Intersect** (`&&`, `&`): `(0, +∞) ∩ (-∞, 30)` → `(0, 30)`
+- **Union** (`||`, `|`): `(-∞, 0) ∪ (0, +∞)` → everything except 0
+- **Filter**: `{3, -3} ∩ (0, +∞)` → `{3}`
+- **Contains**: `5 ∈ (0, 30)` → true
+- **Is empty**: `(0, 0)` → empty set (no solutions)
+- **Complement**: `¬(0, 30)` → `(-∞, 0] ∪ [30, +∞)`
+
+### Syntax (ASCII for .fw files and CLI)
+
+Logic notation (on equations):
+```
+y = sqrt(x)        : x >= 0
+tax = income * 0.1  : income > 0 && income <= 50000
+```
+
+Set notation (explicit constraints):
+```
+x : {1, 2, 3}              # discrete set
+x : (0, 30)                 # open interval
+x : [0, 30]                 # closed interval
+x : (0, +inf)               # half-open to infinity
+x : {-3, 3} & (0, +inf)     # intersection: positive roots only
+x : (-inf, 0) | (0, +inf)   # union: nonzero
+```
+
+Terminal output (Unicode when supported):
+```
+x ∈ (0, 30)
+x ∈ {3, -3}
+x ∈ (-∞, 0) ∪ (0, +∞)
+```
+
+### Relationship to other features
+
+- **Conditions** (`: x > 0`) are syntactic sugar for constraining to a ValueSet
+- **Multiple solutions** (`?` returns all) are filtered through the ValueSet
+- **Query conditions** (`x=?:>0`) apply a ValueSet filter to results
+- **Verify mode** checks that values satisfy their ValueSets
+- **Simplifier** can use ValueSets: `s/s → 1` when `s ∈ (-∞, 0) ∪ (0, +∞)` (nonzero)
+- **Recursion base cases** are ValueSet conditions: `n = 0` is `n ∈ {0}`
+
 ## 1. Ranges and Conditions
 
 ### Problem
