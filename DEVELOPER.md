@@ -324,20 +324,89 @@ Classic Mac line endings (bare `\r` without `\n`) are not supported as line sepa
 
 ### Adding a new built-in function
 
-1. Add evaluation in `evaluate()` in `expr.h`
+1. Add to the `builtin_functions()` registry in `expr.h` — it's a `std::map<std::string, double(*)(double)>`
 2. Consider whether it needs an inverse for `decompose_linear` (most functions make expressions nonlinear)
 3. Add tests in `tests.cpp`
 
-### Extending the solver
+### Adding a solver strategy
 
-The decompose/solve approach is extensible. To handle new expression forms:
-1. Add a case to `decompose_linear()` for the new form
-2. The solver and simplifier will automatically use it
-3. For truly nonlinear solving (quadratics etc.), a new solving strategy would be added to `solve_recursive()`
+1. Add the strategy to `enumerate_candidates()` in `system.h`
+2. Handle the new `CandidateType` in the callbacks of `solve_recursive`, `derive_recursive`, and `verify_variable`
+3. Add strategy-specific tests
+
+### Extending the simplifier
+
+The simplifier uses **flattening** rather than case-by-case pattern matching:
+- **Additive**: `flatten_additive()` decomposes ADD/SUB chains into `(coefficient, base)` term lists. `group_additive()` combines like terms. `rebuild_additive()` reconstructs.
+- **Multiplicative**: `flatten_multiplicative()` decomposes MUL chains into `(base, exponent)` factor lists. `group_multiplicative()` combines matching bases. `rebuild_multiplicative()` reconstructs.
+- **Division**: handled with targeted rules (not flattened) to preserve readable forms like `x / 2`. Cross-term cancellation via flatten-both-sides.
+
+To add a new simplification: check if it can be handled by extending the flattening logic before adding a new case-by-case rule.
+
+---
+
+## Conventions
 
 ### Code style
 
-- Header-only implementation (except main.cpp)
-- `ExprPtr` (shared_ptr) for all expression trees — no manual memory management
+- Header-only implementation (except `main.cpp` and `tests.cpp`)
 - No external dependencies — stdlib only
-- Defensive: catch and skip bad input rather than crashing
+- All enums use `uint8_t` base type to minimize struct sizes
+- No magic numbers — use named constants (`EPSILON_ZERO`, `EPSILON_REL`, `SIMPLIFY_MAX_ITER`)
+
+### Memory model
+
+Expression nodes are allocated from an **arena allocator** (`ExprArena`), not individually heap-allocated. `ExprPtr` is a raw `Expr*` — no `shared_ptr`, no reference counting.
+
+- The arena is owned by `FormulaSystem` and scoped via `ExprArena::Scope` during operations
+- Nodes are never individually freed — the arena is cleared in bulk when destroyed
+- Thread-local `ExprArena::current()` provides access to the active arena
+- This gives 100% cache-friendly traversal and eliminates shared_ptr overhead
+
+### Parameter passing
+
+- **`const Expr&`** — for functions that always expect a valid expression (tree queries, evaluate, predicates). No null check needed inside the function.
+- **`ExprPtr` (`Expr*`)** — for return types, struct fields, and functions that may return or accept nullptr (substitute, simplify, solve_for).
+- **Pointer overloads** — thin null-checking wrappers that dereference and delegate to the reference version.
+
+### constexpr and inline
+
+- **`constexpr`** — type predicates (`is_num`, `is_zero`, etc.), enum queries (`is_additive`), compile-time constants
+- **`inline`** — everything else in headers (required for ODR in header-only code)
+- Prefer function pointers over `std::function` to avoid heap allocation
+
+### Data-driven design
+
+Prefer data tables and registries over switch statements and if-else chains:
+
+- **BinOp metadata** — `binop_info()` returns symbol, precedence, and eval function from a single table. Don't add per-operator switches.
+- **Builtin functions** — `builtin_functions()` returns a `std::map`. Add new functions there.
+- **Solver strategies** — `enumerate_candidates()` generates candidates for all solver modes. Add new strategies there.
+
+### Error handling
+
+- Empty `catch` blocks are not allowed (flagged by clang-tidy). Use `return false;`, `return;`, or add trace logging.
+- Solver strategy failures are expected — catch and try the next strategy. Only throw when all strategies have been exhausted.
+- Validate results: reject NaN, infinity, and near-zero coefficients (`|coeff| < EPSILON_ZERO`).
+
+### Testing strategy
+
+- **Write failing tests first** — prove the bug before fixing it, define the requirement before implementing it
+- **Commit tests separately** before refactoring so you can revert safely
+- **Semantic tests for output flexibility** — when simplifier output order may vary, test by evaluating with specific values rather than string comparison
+- **Accept either ordering** for commutative operations: `ASSERT(r == "x * y" || r == "y * x", ...)`
+- **Run the full pipeline** before committing: `make test && make sanitize && make analyze`
+
+### Test organization
+
+Tests are grouped by concern, not by code:
+1. Functional tests (core behavior)
+2. Edge cases (boundary conditions)
+3. Robustness (garbage input, numeric extremes, scale)
+4. Statefulness (isolation, mutation, reuse)
+5. File format portability (line endings, BOM, whitespace)
+6. CLI parsing and integration
+7. Error message quality
+8. Feature-specific (formula calls, verify, explore, derive)
+9. Pre-refactor safety nets (strategy coverage, builtin exhaustive)
+10. Simplifier improvements (rule interactions, flattening targets)
