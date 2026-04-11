@@ -83,14 +83,24 @@ inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) { auto e
 //  Type predicates
 // ============================================================================
 
-inline bool is_num(const ExprPtr& e)    { return e && e->type == ExprType::NUM; }
-inline bool is_var(const ExprPtr& e)    { return e && e->type == ExprType::VAR; }
-inline bool is_atomic(const ExprPtr& e) { return is_num(e) || is_var(e); }
-inline bool is_zero(const ExprPtr& e)   { return is_num(e) && e->num == 0; }
-inline bool is_one(const ExprPtr& e)    { return is_num(e) && e->num == 1; }
-inline bool is_neg_one(const ExprPtr& e){ return is_num(e) && e->num == -1; }
-inline bool is_neg(const ExprPtr& e)    { return e && e->type == ExprType::UNARY_NEG; }
-inline bool is_neg_num(const ExprPtr& e){ return is_num(e) && e->num < 0; }
+// Reference versions (no null check needed)
+inline bool is_num(const Expr& e)     { return e.type == ExprType::NUM; }
+inline bool is_var(const Expr& e)     { return e.type == ExprType::VAR; }
+inline bool is_atomic(const Expr& e)  { return is_num(e) || is_var(e); }
+inline bool is_zero(const Expr& e)    { return is_num(e) && e.num == 0; }
+inline bool is_one(const Expr& e)     { return is_num(e) && e.num == 1; }
+inline bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
+inline bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
+inline bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
+// Pointer versions (null-safe, for struct fields)
+inline bool is_num(const ExprPtr e)     { return e && is_num(*e); }
+inline bool is_var(const ExprPtr e)     { return e && is_var(*e); }
+inline bool is_atomic(const ExprPtr e)  { return e && is_atomic(*e); }
+inline bool is_zero(const ExprPtr e)    { return e && is_zero(*e); }
+inline bool is_one(const ExprPtr e)     { return e && is_one(*e); }
+inline bool is_neg_one(const ExprPtr e) { return e && is_neg_one(*e); }
+inline bool is_neg(const ExprPtr e)     { return e && is_neg(*e); }
+inline bool is_neg_num(const ExprPtr e) { return e && is_neg_num(*e); }
 
 inline bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
 inline bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
@@ -133,50 +143,55 @@ inline const std::map<std::string, double(*)(double)>& builtin_functions() {
 //  Tree queries
 // ============================================================================
 
-inline void collect_vars(const ExprPtr& e, std::set<std::string>& out) {
-    if (!e) return;
-    switch (e->type) {
+inline void collect_vars(const Expr& e, std::set<std::string>& out) {
+    switch (e.type) {
         case ExprType::NUM:       break;
-        case ExprType::VAR:       out.insert(e->name); break;
-        case ExprType::BINOP:     collect_vars(e->left, out); collect_vars(e->right, out); break;
-        case ExprType::UNARY_NEG: collect_vars(e->child, out); break;
-        case ExprType::FUNC_CALL: for (auto& a : e->args) collect_vars(a, out); break;
+        case ExprType::VAR:       out.insert(e.name); break;
+        case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
+        case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
+        case ExprType::FUNC_CALL: for (auto& a : e.args) collect_vars(*a, out); break;
     }
 }
 
 // Direct search — no allocation, returns at first hit
-inline bool contains_var(const ExprPtr& e, const std::string& v) {
-    if (!e) return false;
-    switch (e->type) {
+inline bool contains_var(const Expr& e, const std::string& v) {
+    switch (e.type) {
         case ExprType::NUM:       return false;
-        case ExprType::VAR:       return e->name == v;
-        case ExprType::BINOP:     return contains_var(e->left, v) || contains_var(e->right, v);
-        case ExprType::UNARY_NEG: return contains_var(e->child, v);
-        case ExprType::FUNC_CALL: for (auto& a : e->args) if (contains_var(a, v)) return true;
+        case ExprType::VAR:       return e.name == v;
+        case ExprType::BINOP:     return contains_var(*e.left, v) || contains_var(*e.right, v);
+        case ExprType::UNARY_NEG: return contains_var(*e.child, v);
+        case ExprType::FUNC_CALL: for (auto& a : e.args) if (contains_var(*a, v)) return true;
                                   return false;
     }
     return false;
 }
 
 // Structural equality — no allocation, used for simplifier fixpoint
-inline bool expr_equal(const ExprPtr& a, const ExprPtr& b) {
-    if (a == b) return true;    // pointer shortcut
-    if (!a || !b) return false;
-    if (a->type != b->type) return false;
-    switch (a->type) {
-        case ExprType::NUM:       return a->num == b->num;
-        case ExprType::VAR:       return a->name == b->name;
-        case ExprType::UNARY_NEG: return expr_equal(a->child, b->child);
-        case ExprType::BINOP:     return a->op == b->op
-                                      && expr_equal(a->left, b->left)
-                                      && expr_equal(a->right, b->right);
+inline bool expr_equal(const Expr& a, const Expr& b) {
+    if (&a == &b) return true;    // pointer shortcut
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case ExprType::NUM:       return a.num == b.num;
+        case ExprType::VAR:       return a.name == b.name;
+        case ExprType::UNARY_NEG: return expr_equal(*a.child, *b.child);
+        case ExprType::BINOP:     return a.op == b.op
+                                      && expr_equal(*a.left, *b.left)
+                                      && expr_equal(*a.right, *b.right);
         case ExprType::FUNC_CALL:
-            if (a->name != b->name || a->args.size() != b->args.size()) return false;
-            for (size_t i = 0; i < a->args.size(); i++)
-                if (!expr_equal(a->args[i], b->args[i])) return false;
+            if (a.name != b.name || a.args.size() != b.args.size()) return false;
+            for (size_t i = 0; i < a.args.size(); i++)
+                if (!expr_equal(*a.args[i], *b.args[i])) return false;
             return true;
     }
     return false;
+}
+// Pointer overloads for convenience
+inline void collect_vars(ExprPtr e, std::set<std::string>& out) { if (e) collect_vars(*e, out); }
+inline bool contains_var(ExprPtr e, const std::string& v) { return e && contains_var(*e, v); }
+inline bool expr_equal(ExprPtr a, ExprPtr b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    return expr_equal(*a, *b);
 }
 
 // ============================================================================
@@ -191,57 +206,57 @@ inline std::string fmt_num(double v) {
     return os.str();
 }
 
-inline int precedence(const ExprPtr& e) {
-    if (!e) return 0;
-    if (e->type == ExprType::BINOP) return binop_info(e->op).precedence;
-    if (e->type == ExprType::UNARY_NEG) return 3;
+inline int precedence(const Expr& e) {
+    if (e.type == ExprType::BINOP) return binop_info(e.op).precedence;
+    if (e.type == ExprType::UNARY_NEG) return 3;
     return 5; // atom
 }
 
-inline std::string expr_to_string(const ExprPtr& e) {
-    if (!e) return "?";
-    switch (e->type) {
+inline std::string expr_to_string(const Expr& e) {
+    switch (e.type) {
         case ExprType::NUM:
-            return (e->num < 0) ? "(" + fmt_num(e->num) + ")" : fmt_num(e->num);
+            return (e.num < 0) ? "(" + fmt_num(e.num) + ")" : fmt_num(e.num);
 
         case ExprType::VAR:
-            return e->name;
+            return e.name;
 
-        case ExprType::UNARY_NEG: {
-            return is_atomic(e->child)
-                ? "-" + expr_to_string(e->child)
-                : "-(" + expr_to_string(e->child) + ")";
-        }
+        case ExprType::UNARY_NEG:
+            return is_atomic(*e.child)
+                ? "-" + expr_to_string(*e.child)
+                : "-(" + expr_to_string(*e.child) + ")";
 
         case ExprType::BINOP: {
-            auto& info = binop_info(e->op);
+            auto& info = binop_info(e.op);
             int prec = info.precedence;
 
-            auto wrap = [&](const ExprPtr& child, bool rhs) {
+            auto wrap = [&](const Expr& child, bool rhs) {
                 int cp = precedence(child);
                 bool need = (cp < prec) ||
-                    (cp == prec && rhs && (e->op == BinOp::SUB || e->op == BinOp::DIV));
+                    (cp == prec && rhs && (e.op == BinOp::SUB || e.op == BinOp::DIV));
                 auto s = expr_to_string(child);
                 return need ? "(" + s + ")" : s;
             };
-            return wrap(e->left, false) + info.symbol + wrap(e->right, true);
+            return wrap(*e.left, false) + info.symbol + wrap(*e.right, true);
         }
 
         case ExprType::FUNC_CALL: {
-            std::string s = e->name + "(";
-            for (size_t i = 0; i < e->args.size(); i++)
-                s += (i ? ", " : "") + expr_to_string(e->args[i]);
+            std::string s = e.name + "(";
+            for (size_t i = 0; i < e.args.size(); i++)
+                s += (i ? ", " : "") + expr_to_string(*e.args[i]);
             return s + ")";
         }
     }
     return "?";
 }
+// Pointer overloads
+inline int precedence(ExprPtr e) { return e ? precedence(*e) : 0; }
+inline std::string expr_to_string(ExprPtr e) { return e ? expr_to_string(*e) : "?"; }
 
 // ============================================================================
 //  Substitute
 // ============================================================================
 
-inline ExprPtr substitute(const ExprPtr& e, const std::string& var, const ExprPtr& val) {
+inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
     if (!e) return e;
     switch (e->type) {
         case ExprType::NUM:       return e;
@@ -264,27 +279,30 @@ inline ExprPtr substitute(const ExprPtr& e, const std::string& var, const ExprPt
 //  Evaluate
 // ============================================================================
 
-inline double evaluate(const ExprPtr& e) {
-    if (!e) throw std::runtime_error("Cannot evaluate null expression");
-    switch (e->type) {
-        case ExprType::NUM: return e->num;
+inline double evaluate(const Expr& e) {
+    switch (e.type) {
+        case ExprType::NUM: return e.num;
         case ExprType::VAR:
-            throw std::runtime_error("Cannot evaluate: unresolved variable '" + e->name + "'");
+            throw std::runtime_error("Cannot evaluate: unresolved variable '" + e.name + "'");
         case ExprType::UNARY_NEG:
-            return -evaluate(e->child);
+            return -evaluate(*e.child);
         case ExprType::BINOP:
-            return binop_info(e->op).eval(evaluate(e->left), evaluate(e->right));
+            return binop_info(e.op).eval(evaluate(*e.left), evaluate(*e.right));
         case ExprType::FUNC_CALL: {
-            if (e->args.size() != 1)
-                throw std::runtime_error("Unknown function: " + e->name);
+            if (e.args.size() != 1)
+                throw std::runtime_error("Unknown function: " + e.name);
             auto& registry = builtin_functions();
-            auto it = registry.find(e->name);
+            auto it = registry.find(e.name);
             if (it == registry.end())
-                throw std::runtime_error("Unknown function: " + e->name);
-            return it->second(evaluate(e->args[0]));
+                throw std::runtime_error("Unknown function: " + e.name);
+            return it->second(evaluate(*e.args[0]));
         }
     }
     throw std::runtime_error("Cannot evaluate: unknown expression type");
+}
+inline double evaluate(ExprPtr e) {
+    if (!e) throw std::runtime_error("Cannot evaluate null expression");
+    return evaluate(*e);
 }
 
 // ============================================================================
