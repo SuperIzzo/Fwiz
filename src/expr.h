@@ -5,8 +5,10 @@
 #include <sstream>
 #include <iomanip>
 #include <set>
+#include <map>
 #include <vector>
 #include <stdexcept>
+#include <functional>
 
 // ============================================================================
 //  Expression tree
@@ -32,6 +34,56 @@ struct Expr {
     static ExprPtr Neg(ExprPtr c)                                  { auto e = std::make_shared<Expr>(); e->type = ExprType::UNARY_NEG; e->child = c;                            return e; }
     static ExprPtr Call(const std::string& n, std::vector<ExprPtr> a) { auto e = std::make_shared<Expr>(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a); return e; }
 };
+
+// ============================================================================
+//  Type predicates
+// ============================================================================
+
+inline bool is_num(const ExprPtr& e)    { return e && e->type == ExprType::NUM; }
+inline bool is_var(const ExprPtr& e)    { return e && e->type == ExprType::VAR; }
+inline bool is_atomic(const ExprPtr& e) { return is_num(e) || is_var(e); }
+inline bool is_zero(const ExprPtr& e)   { return is_num(e) && e->num == 0; }
+inline bool is_one(const ExprPtr& e)    { return is_num(e) && e->num == 1; }
+inline bool is_neg_one(const ExprPtr& e){ return is_num(e) && e->num == -1; }
+inline bool is_neg(const ExprPtr& e)    { return e && e->type == ExprType::UNARY_NEG; }
+inline bool is_neg_num(const ExprPtr& e){ return is_num(e) && e->num < 0; }
+
+inline bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
+inline bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
+
+// ============================================================================
+//  BinOp metadata
+// ============================================================================
+
+struct BinOpInfo {
+    const char* symbol;
+    int precedence;
+    std::function<double(double, double)> eval;
+};
+
+inline const BinOpInfo& binop_info(BinOp op) {
+    static const BinOpInfo table[] = {
+        {" + ", 1, [](double l, double r) { return l + r; }},
+        {" - ", 1, [](double l, double r) { return l - r; }},
+        {" * ", 2, [](double l, double r) { return l * r; }},
+        {" / ", 2, [](double l, double r) { if (r == 0) throw std::runtime_error("Division by zero"); return l / r; }},
+        {"^",   4, [](double l, double r) { return std::pow(l, r); }},
+    };
+    return table[static_cast<int>(op)];
+}
+
+// ============================================================================
+//  Builtin function registry
+// ============================================================================
+
+inline const std::map<std::string, double(*)(double)>& builtin_functions() {
+    static const std::map<std::string, double(*)(double)> registry = {
+        {"sqrt", std::sqrt}, {"abs", std::fabs}, {"sin",  std::sin},
+        {"cos",  std::cos},  {"tan", std::tan},  {"log",  std::log},
+        {"asin", std::asin}, {"acos",std::acos}, {"atan", std::atan}
+    };
+    return registry;
+}
 
 // ============================================================================
 //  Tree queries
@@ -97,17 +149,8 @@ inline std::string fmt_num(double v) {
 
 inline int precedence(const ExprPtr& e) {
     if (!e) return 0;
-    switch (e->type) {
-        case ExprType::BINOP:
-            switch (e->op) {
-                case BinOp::ADD: case BinOp::SUB: return 1;
-                case BinOp::MUL: case BinOp::DIV: return 2;
-                case BinOp::POW: return 4;
-            }
-            break;
-        case ExprType::UNARY_NEG: return 3;
-        default: break;
-    }
+    if (e->type == ExprType::BINOP) return binop_info(e->op).precedence;
+    if (e->type == ExprType::UNARY_NEG) return 3;
     return 5; // atom
 }
 
@@ -121,14 +164,14 @@ inline std::string expr_to_string(const ExprPtr& e) {
             return e->name;
 
         case ExprType::UNARY_NEG: {
-            auto& c = e->child;
-            bool simple = (c->type == ExprType::NUM || c->type == ExprType::VAR);
-            return simple ? "-" + expr_to_string(c) : "-(" + expr_to_string(c) + ")";
+            return is_atomic(e->child)
+                ? "-" + expr_to_string(e->child)
+                : "-(" + expr_to_string(e->child) + ")";
         }
 
         case ExprType::BINOP: {
-            static const char* ops[] = {" + ", " - ", " * ", " / ", "^"};
-            int prec = precedence(e);
+            auto& info = binop_info(e->op);
+            int prec = info.precedence;
 
             auto wrap = [&](const ExprPtr& child, bool rhs) {
                 int cp = precedence(child);
@@ -137,7 +180,7 @@ inline std::string expr_to_string(const ExprPtr& e) {
                 auto s = expr_to_string(child);
                 return need ? "(" + s + ")" : s;
             };
-            return wrap(e->left, false) + ops[static_cast<int>(e->op)] + wrap(e->right, true);
+            return wrap(e->left, false) + info.symbol + wrap(e->right, true);
         }
 
         case ExprType::FUNC_CALL: {
@@ -184,31 +227,16 @@ inline double evaluate(const ExprPtr& e) {
             throw std::runtime_error("Cannot evaluate: unresolved variable '" + e->name + "'");
         case ExprType::UNARY_NEG:
             return -evaluate(e->child);
-        case ExprType::BINOP: {
-            double l = evaluate(e->left), r = evaluate(e->right);
-            switch (e->op) {
-                case BinOp::ADD: return l + r;
-                case BinOp::SUB: return l - r;
-                case BinOp::MUL: return l * r;
-                case BinOp::DIV: if (r == 0) throw std::runtime_error("Division by zero");
-                                 return l / r;
-                case BinOp::POW: return std::pow(l, r);
-            }
-            break;
-        }
+        case ExprType::BINOP:
+            return binop_info(e->op).eval(evaluate(e->left), evaluate(e->right));
         case ExprType::FUNC_CALL: {
-            using F = double(*)(double);
-            static const struct { const char* name; F fn; } builtins[] = {
-                {"sqrt", std::sqrt}, {"abs", std::fabs}, {"sin",  std::sin},
-                {"cos",  std::cos},  {"tan", std::tan},  {"log",  std::log},
-                {"asin", std::asin}, {"acos",std::acos}, {"atan", std::atan}
-            };
-            if (e->args.size() == 1) {
-                double arg = evaluate(e->args[0]);
-                for (auto& [name, fn] : builtins)
-                    if (e->name == name) return fn(arg);
-            }
-            throw std::runtime_error("Unknown function: " + e->name);
+            if (e->args.size() != 1)
+                throw std::runtime_error("Unknown function: " + e->name);
+            auto& registry = builtin_functions();
+            auto it = registry.find(e->name);
+            if (it == registry.end())
+                throw std::runtime_error("Unknown function: " + e->name);
+            return it->second(evaluate(e->args[0]));
         }
     }
     throw std::runtime_error("Cannot evaluate: unknown expression type");
@@ -372,10 +400,10 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
 
         case ExprType::UNARY_NEG: {
             auto c = simplify_once(e->child);
-            if (c->type == ExprType::NUM) return Expr::Num(-c->num);
-            if (c->type == ExprType::UNARY_NEG) return c->child;
+            if (is_num(c)) return Expr::Num(-c->num);
+            if (is_neg(c)) return c->child;
             // Negate an additive expression: flatten with -1 sign
-            if (c->type == ExprType::BINOP && (c->op == BinOp::ADD || c->op == BinOp::SUB)) {
+            if (c->type == ExprType::BINOP && is_additive(c->op)) {
                 std::vector<std::pair<double, ExprPtr>> terms;
                 flatten_additive(c, -1.0, terms);
                 double constant = 0;
@@ -402,10 +430,11 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             bool all_num = true;
             for (auto& a : e->args) {
                 sa.push_back(simplify_once(a));
-                if (sa.back()->type != ExprType::NUM) all_num = false;
+                if (!is_num(sa.back())) all_num = false;
             }
             auto s = Expr::Call(e->name, sa);
-            return all_num ? Expr::Num(evaluate(s)) : s;
+            if (all_num && builtin_functions().count(e->name)) return Expr::Num(evaluate(s));
+            return s;
         }
 
         case ExprType::BINOP: {
@@ -413,10 +442,10 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             auto r = simplify_once(e->right);
 
             // Constant fold
-            if (l->type == ExprType::NUM && r->type == ExprType::NUM)
-                return Expr::Num(evaluate(Expr::BinOpExpr(e->op, l, r)));
+            if (is_num(l) && is_num(r))
+                return Expr::Num(binop_info(e->op).eval(l->num, r->num));
 
-            if (e->op == BinOp::ADD || e->op == BinOp::SUB) {
+            if (is_additive(e->op)) {
                 // Flatten, group, rebuild
                 auto combined = Expr::BinOpExpr(e->op, l, r);
                 std::vector<std::pair<double, ExprPtr>> terms;
@@ -441,10 +470,7 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             }
 
             if (e->op == BinOp::MUL) {
-                // Check for zero
-                if ((l->type == ExprType::NUM && l->num == 0) ||
-                    (r->type == ExprType::NUM && r->num == 0))
-                    return Expr::Num(0);
+                if (is_zero(l) || is_zero(r)) return Expr::Num(0);
 
                 // Flatten MUL chain, group, rebuild
                 auto combined = Expr::BinOpExpr(BinOp::MUL, l, r);
@@ -456,33 +482,24 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             }
 
             if (e->op == BinOp::DIV) {
-                // 0 / x → 0
-                if (l->type == ExprType::NUM && l->num == 0) return Expr::Num(0);
-                // x / 1 → x
-                if (r->type == ExprType::NUM && r->num == 1) return l;
-                // x / -1 → -x
-                if (r->type == ExprType::NUM && r->num == -1) return Expr::Neg(l);
-                // Negate denominator: x / (-K) → -x / K, then recurse
-                if (r->type == ExprType::NUM && r->num < 0)
+                if (is_zero(l)) return Expr::Num(0);
+                if (is_one(r)) return l;
+                if (is_neg_one(r)) return Expr::Neg(l);
+                if (is_neg_num(r))
                     return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
-                // Negate both: (-a) / (-b) → a / b
-                if (l->type == ExprType::UNARY_NEG && r->type == ExprType::UNARY_NEG)
+                if (is_neg(l) && is_neg(r))
                     return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
-                // Single neg: (-a) / b → -(a/b)
-                if (l->type == ExprType::UNARY_NEG)
+                if (is_neg(l))
                     return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
-                // Constant reassociation: (K1 * a) / K2 or (a * K1) / K2 → a * (K1/K2)
-                if (r->type == ExprType::NUM && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
-                    if (l->right->type == ExprType::NUM)
+                // Constant reassociation: (K * a) / K2 or (a * K) / K2
+                if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
+                    if (is_num(l->right))
                         return Expr::BinOpExpr(BinOp::MUL, l->left, Expr::Num(l->right->num / r->num));
-                    if (l->left->type == ExprType::NUM)
+                    if (is_num(l->left))
                         return Expr::BinOpExpr(BinOp::MUL, Expr::Num(l->left->num / r->num), l->right);
                 }
-                // (a / K1) / K2 → a / (K1*K2)
-                if (r->type == ExprType::NUM && l->type == ExprType::BINOP
-                    && l->op == BinOp::DIV && l->right->type == ExprType::NUM)
-                    return Expr::BinOpExpr(BinOp::DIV, l->left,
-                        Expr::Num(l->right->num * r->num));
+                if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::DIV && is_num(l->right))
+                    return Expr::BinOpExpr(BinOp::DIV, l->left, Expr::Num(l->right->num * r->num));
                 // Self-division and power-aware: flatten both sides, cancel
                 {
                     double lc = 1.0, rc = 1.0;
@@ -516,8 +533,8 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             }
 
             if (e->op == BinOp::POW) {
-                if (r->type == ExprType::NUM && r->num == 0) return Expr::Num(1);
-                if (r->type == ExprType::NUM && r->num == 1) return l;
+                if (is_zero(r)) return Expr::Num(1);
+                if (is_one(r)) return l;
             }
 
             return Expr::BinOpExpr(e->op, l, r);
@@ -605,14 +622,12 @@ inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::stri
     if (!ok) return nullptr;
 
     auto sc = simplify(coeff);
-    if (sc->type == ExprType::NUM && std::abs(sc->num) < 1e-12) return nullptr;
+    if (is_num(sc) && std::abs(sc->num) < 1e-12) return nullptr;
 
     auto sr = simplify(rest);
     // If rest is zero and coeff is symbolic, the equation is coeff * target = 0.
-    // This yields the trivial solution target = 0, but the symbolic coeff might
-    // itself be zero (making 0 = 0, a tautology with infinite solutions).
     // Reject to avoid spurious zeros from underdetermined systems.
-    if (sr->type == ExprType::NUM && std::abs(sr->num) < 1e-12 && sc->type != ExprType::NUM)
+    if (is_num(sr) && std::abs(sr->num) < 1e-12 && !is_num(sc))
         return nullptr;
 
     // coeff · target + rest = 0  →  target = −rest / coeff

@@ -125,27 +125,23 @@ public:
     {
         std::vector<VerifyResult> results;
         bindings.erase(target);
-
-        // Apply defaults (except for target)
         for (auto& [k, v] : defaults)
             if (k != target && !bindings.count(k)) bindings[k] = v;
 
-        // Helper: try evaluating an expression and record result
-        auto try_verify = [&](const ExprPtr& expr, const std::string& desc) {
+        auto try_verify_expr = [&](const ExprPtr& expr, const std::string& desc) {
             std::set<std::string> vars;
             collect_vars(expr, vars);
             ExprPtr resolved = expr;
             for (auto& v : vars) {
-                if (v == target) return; // target in expr — can't evaluate
+                if (v == target) return;
                 if (bindings.count(v)) {
                     resolved = substitute(resolved, v, Expr::Num(bindings.at(v)));
                 } else {
-                    // Try solving for this variable
                     try {
                         auto b2 = bindings;
                         double val = solve_recursive(v, b2, {target}, 0);
                         resolved = substitute(resolved, v, Expr::Num(val));
-                    } catch (...) { return; } // can't resolve — skip this equation
+                    } catch (...) { return; }
                 }
             }
             try {
@@ -155,61 +151,28 @@ public:
             } catch (...) {}
         };
 
-        // Strategy 1: target on LHS — evaluate RHS
-        for (auto& eq : equations)
-            if (eq.lhs_var == target)
-                try_verify(eq.rhs, target + " = " + expr_to_string(eq.rhs));
-
-        // Strategy 2: target in RHS — invert and evaluate
-        for (auto& eq : equations) {
-            if (!contains_var(eq.rhs, target)) continue;
-            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
-            if (sol)
-                try_verify(sol, target + " = " + expr_to_string(sol)
-                    + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")");
-        }
-
-        // Strategy 3: forward formula call
-        for (auto& call : formula_calls) {
-            if (call.output_var != target) continue;
+        auto try_verify_formula = [&](const FormulaCall& call, const std::string& resolve_var,
+                                      const std::string& desc) {
             try {
                 auto sub_binds = prepare_sub_bindings_for_verify(call, bindings, target);
                 auto& sub_sys = load_sub_system(call.file_stem);
-                double computed = sub_sys.resolve(call.query_var, sub_binds);
+                double computed = sub_sys.resolve(resolve_var, sub_binds);
                 if (!std::isnan(computed) && !std::isinf(computed))
-                    results.push_back({target + " via " + call.file_stem + "(" + call.query_var + "=?)",
-                        computed, approx_equal(computed, known_value)});
+                    results.push_back({desc, computed, approx_equal(computed, known_value)});
             } catch (...) {}
-        }
+        };
 
-        // Strategy 4: equating shared-LHS equations
-        for (size_t i = 0; i < equations.size(); i++)
-            for (size_t j = i + 1; j < equations.size(); j++) {
-                if (equations[i].lhs_var != equations[j].lhs_var) continue;
-                for (auto& [a, b] : {std::pair{i, j}, std::pair{j, i}}) {
-                    auto sol = solve_for(equations[a].rhs, equations[b].rhs, target);
-                    if (sol) {
-                        std::string desc = target + " = " + expr_to_string(sol)
-                            + "  (via " + equations[i].lhs_var + ")";
-                        try_verify(sol, desc);
-                    }
-                }
+        enumerate_candidates(target, [&](const Candidate& c) {
+            switch (c.type) {
+                case CandidateType::EXPR:
+                    try_verify_expr(c.expr, c.desc); break;
+                case CandidateType::FORMULA_FWD:
+                    try_verify_formula(*c.call, c.call->query_var, c.desc); break;
+                case CandidateType::FORMULA_REV:
+                    try_verify_formula(*c.call, c.sub_var, c.desc); break;
             }
-
-        // Strategy 5: reverse formula call
-        for (auto& call : formula_calls) {
-            for (auto& [sub_var, parent_var] : call.bindings) {
-                if (parent_var != target) continue;
-                try {
-                    auto sub_binds = prepare_sub_bindings_for_verify(call, bindings, target);
-                    auto& sub_sys = load_sub_system(call.file_stem);
-                    double computed = sub_sys.resolve(sub_var, sub_binds);
-                    if (!std::isnan(computed) && !std::isinf(computed))
-                        results.push_back({target + " via " + call.file_stem + "(" + sub_var + ")",
-                            computed, approx_equal(computed, known_value)});
-                } catch (...) {}
-            }
-        }
+            return false; // verify collects ALL, never stops
+        });
 
         return results;
     }
@@ -467,6 +430,86 @@ private:
         return sub;
     }
 
+    // --- Strategy enumeration ---
+
+    enum class CandidateType { EXPR, FORMULA_FWD, FORMULA_REV };
+    struct Candidate {
+        CandidateType type;
+        ExprPtr expr;           // for EXPR candidates
+        std::string desc;
+        const FormulaCall* call;  // for formula candidates
+        std::string sub_var;      // for FORMULA_REV: which sub-system var to solve
+    };
+
+    // Generates candidates for solving a target variable.
+    // Calls handler(candidate) for each. Handler returns true to stop.
+    // Optional bindings are used for Strategy 4 (equating) to substitute
+    // known values before solving, preventing spurious results.
+    template<typename Handler>
+    void enumerate_candidates(const std::string& target, Handler&& handler,
+                              const std::map<std::string, double>* sub_bindings = nullptr) const {
+        // Strategy 1: target on LHS — direct from RHS
+        for (auto& eq : equations)
+            if (eq.lhs_var == target)
+                if (handler(Candidate{CandidateType::EXPR, eq.rhs,
+                    target + " = " + expr_to_string(eq.rhs), nullptr, ""}))
+                    return;
+
+        // Strategy 2: target in RHS — algebraic inversion
+        for (auto& eq : equations) {
+            if (!contains_var(eq.rhs, target)) continue;
+            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
+            if (sol)
+                if (handler(Candidate{CandidateType::EXPR, sol,
+                    target + " = " + expr_to_string(sol)
+                    + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")",
+                    nullptr, ""}))
+                    return;
+        }
+
+        // Strategy 3: forward formula call
+        for (auto& call : formula_calls)
+            if (call.output_var == target)
+                if (handler(Candidate{CandidateType::FORMULA_FWD, nullptr,
+                    target + " via " + call.file_stem + "(" + call.query_var + "=?)",
+                    &call, ""}))
+                    return;
+
+        // Strategy 4: equate RHS of equations sharing a LHS variable
+        for (size_t i = 0; i < equations.size(); i++)
+            for (size_t j = i + 1; j < equations.size(); j++) {
+                if (equations[i].lhs_var != equations[j].lhs_var) continue;
+                // Optionally substitute known bindings to detect tautological equations
+                auto maybe_sub = [&](const ExprPtr& e) -> ExprPtr {
+                    if (!sub_bindings) return e;
+                    ExprPtr r = e;
+                    for (auto& [v, val] : *sub_bindings)
+                        if (v != target) r = substitute(r, v, Expr::Num(val));
+                    return simplify(r);
+                };
+                auto ei = maybe_sub(equations[i].rhs);
+                auto ej = maybe_sub(equations[j].rhs);
+                for (auto& [a, b] : {std::pair{ei, ej}, std::pair{ej, ei}}) {
+                    auto sol = solve_for(a, b, target);
+                    if (sol)
+                        if (handler(Candidate{CandidateType::EXPR, sol,
+                            target + " = " + expr_to_string(sol)
+                            + "  (via " + equations[i].lhs_var + ")",
+                            nullptr, ""}))
+                            return;
+                }
+            }
+
+        // Strategy 5: reverse formula call
+        for (auto& call : formula_calls)
+            for (auto& [sub_var, parent_var] : call.bindings)
+                if (parent_var == target)
+                    if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
+                        target + " via " + call.file_stem + "(" + sub_var + ")",
+                        &call, sub_var}))
+                        return;
+    }
+
     std::map<std::string, double> prepare_sub_bindings_for_verify(
         const FormulaCall& call,
         const std::map<std::string, double>& parent_bindings,
@@ -521,58 +564,30 @@ private:
         if (visited.count(target)) return nullptr;
         visited.insert(target);
 
-        // Strategy 1: target on LHS — derive from RHS
-        for (auto& eq : equations) {
-            if (eq.lhs_var != target) continue;
-            auto result = try_derive(eq.rhs, target, bindings, visited, depth);
-            if (result) { bindings[target] = result; return result; }
-        }
-
-        // Strategy 2: target in RHS — invert and derive
-        for (auto& eq : equations) {
-            if (!contains_var(eq.rhs, target)) continue;
-            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
-            if (!sol) continue;
-            auto result = try_derive(sol, target, bindings, visited, depth);
-            if (result) { bindings[target] = result; return result; }
-        }
-
-        // Strategy 3: forward formula call
-        for (auto& call : formula_calls) {
-            if (call.output_var != target) continue;
-            // Build sub-bindings from parent, mapping through call.bindings
-            std::map<std::string, ExprPtr> sub_binds;
-            for (auto& [sub_var, parent_var] : call.bindings) {
-                if (bindings.count(parent_var))
-                    sub_binds[sub_var] = bindings.at(parent_var);
+        ExprPtr found = nullptr;
+        enumerate_candidates(target, [&](const Candidate& c) {
+            if (c.type == CandidateType::EXPR) {
+                auto result = try_derive(c.expr, target, bindings, visited, depth);
+                if (result) { bindings[target] = result; found = result; return true; }
+            } else if (c.type == CandidateType::FORMULA_FWD) {
+                std::map<std::string, ExprPtr> sub_binds;
+                for (auto& [sv, pv] : c.call->bindings)
+                    if (bindings.count(pv)) sub_binds[sv] = bindings.at(pv);
+                if (bindings.count(c.call->output_var))
+                    sub_binds[c.call->query_var] = bindings.at(c.call->output_var);
+                try {
+                    auto& sub_sys = load_sub_system(c.call->file_stem);
+                    for (auto& [k, v] : sub_sys.defaults)
+                        if (!sub_binds.count(k) && k != c.call->query_var)
+                            sub_binds[k] = Expr::Num(v);
+                    auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
+                    if (result) { bindings[target] = result; found = result; return true; }
+                } catch (...) {}
             }
-            if (bindings.count(call.output_var))
-                sub_binds[call.query_var] = bindings.at(call.output_var);
-
-            try {
-                auto& sub_sys = load_sub_system(call.file_stem);
-                // Apply sub-system defaults
-                for (auto& [k, v] : sub_sys.defaults)
-                    if (!sub_binds.count(k) && k != call.query_var)
-                        sub_binds[k] = Expr::Num(v);
-                auto result = sub_sys.derive_recursive(call.query_var, sub_binds, {}, depth + 1);
-                if (result) { bindings[target] = result; return result; }
-            } catch (...) {}
-        }
-
-        // Strategy 4: equate RHS of equations sharing a LHS variable
-        for (size_t i = 0; i < equations.size(); i++)
-            for (size_t j = i + 1; j < equations.size(); j++) {
-                if (equations[i].lhs_var != equations[j].lhs_var) continue;
-                for (auto& [a, b] : {std::pair{i, j}, std::pair{j, i}}) {
-                    auto sol = solve_for(equations[a].rhs, equations[b].rhs, target);
-                    if (!sol) continue;
-                    auto result = try_derive(sol, target, bindings, visited, depth);
-                    if (result) { bindings[target] = result; return result; }
-                }
-            }
-
-        return nullptr;
+            // FORMULA_REV not needed for derive (symbolic doesn't reverse through bindings)
+            return false;
+        });
+        return found;
     }
 
     // --- Solver ---
@@ -593,110 +608,48 @@ private:
         bool had_nan_inf = false;
         std::set<std::string> missing;
 
-        // Helper: try evaluating a candidate expression for the target
         auto try_expr = [&](const ExprPtr& expr, const std::string& label) -> bool {
             found_eq = true;
             trace.step(label, depth + 1);
             return try_resolve(expr, target, bindings, visited, depth, had_nan_inf, missing);
         };
 
-        // Strategy 1: target on LHS — direct evaluation
-        for (auto& eq : equations)
-            if (eq.lhs_var == target)
-                if (try_expr(eq.rhs, "found: " + eq.lhs_var + " = " + expr_to_string(eq.rhs)))
-                    return bindings.at(target);
-
-        // Strategy 2: target in RHS — algebraic inversion
-        for (auto& eq : equations) {
-            if (!contains_var(eq.rhs, target)) continue;
-            trace.step("inverting: " + eq.lhs_var + " = " + expr_to_string(eq.rhs), depth + 1);
-            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
-            if (sol) {
-                if (try_expr(sol, "  => " + target + " = " + expr_to_string(sol)))
-                    return bindings.at(target);
-            } else {
-                trace.step("  (cannot isolate — nonlinear)", depth + 1);
-            }
-        }
-
-        // Strategy 3: forward formula call — target is a formula call output_var
-        for (auto& call : formula_calls) {
-            if (call.output_var != target) continue;
+        auto try_formula = [&](const FormulaCall& call, const std::string& resolve_var,
+                               const std::string& skip_var = "") -> bool {
             found_eq = true;
-            trace.step("formula call: " + call.file_stem + "(" + call.query_var
-                + "=?" + call.output_var + ")", depth + 1);
+            trace.step("formula call: " + call.file_stem + "(" + resolve_var + ")", depth + 1);
             try {
-                auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth);
+                auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var);
                 auto& sub_sys = load_sub_system(call.file_stem);
                 for (auto& [sv, val] : sub_binds)
                     trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
-                double result = sub_sys.resolve(call.query_var, sub_binds);
-                if (std::isnan(result) || std::isinf(result)) {
-                    had_nan_inf = true;
-                    continue;
-                }
-                trace.step("  result: " + call.output_var + " = " + fmt_num(result), depth + 1);
+                double result = sub_sys.resolve(resolve_var, sub_binds);
+                if (std::isnan(result) || std::isinf(result)) { had_nan_inf = true; return false; }
+                trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
                 bindings[target] = result;
-                return result;
+                return true;
             } catch (const std::exception& e) {
                 trace.step("  failed: " + std::string(e.what()), depth + 2);
+                return false;
             }
-        }
+        };
 
-        // Strategy 4: equate RHS of equations sharing a LHS variable
-        for (size_t i = 0; i < equations.size(); i++)
-            for (size_t j = i + 1; j < equations.size(); j++) {
-                if (equations[i].lhs_var != equations[j].lhs_var) continue;
-                found_eq = true;
-                trace.step("substituting via '" + equations[i].lhs_var + "':", depth + 1);
-                trace.step("  " + expr_to_string(equations[i].rhs)
-                    + "  =  " + expr_to_string(equations[j].rhs), depth + 1);
-
-                // Substitute known bindings so solve_for can detect
-                // tautological equations (e.g. a*c = a*c when a=b)
-                auto sub_bindings = [&](const ExprPtr& e) {
-                    ExprPtr r = e;
-                    for (auto& [v, val] : bindings)
-                        if (v != target) r = substitute(r, v, Expr::Num(val));
-                    return simplify(r);
-                };
-                auto ei = sub_bindings(equations[i].rhs);
-                auto ej = sub_bindings(equations[j].rhs);
-
-                // Try both directions
-                for (auto& [a, b] : {std::pair{ei, ej}, std::pair{ej, ei}}) {
-                    auto sol = solve_for(a, b, target);
-                    if (sol)
-                        if (try_expr(sol, "  => " + target + " = " + expr_to_string(sol)))
-                            return bindings.at(target);
-                }
+        bool solved = false;
+        enumerate_candidates(target, [&](const Candidate& c) {
+            switch (c.type) {
+                case CandidateType::EXPR:
+                    if (try_expr(c.expr, c.desc)) { solved = true; return true; }
+                    break;
+                case CandidateType::FORMULA_FWD:
+                    if (try_formula(*c.call, c.call->query_var)) { solved = true; return true; }
+                    break;
+                case CandidateType::FORMULA_REV:
+                    if (try_formula(*c.call, c.sub_var, target)) { solved = true; return true; }
+                    break;
             }
-
-        // Strategy 6: reverse formula call — target maps through a binding
-        for (auto& call : formula_calls) {
-            for (auto& [sub_var, parent_var] : call.bindings) {
-                if (parent_var != target) continue;
-                found_eq = true;
-                trace.step("formula call reverse: " + call.file_stem + "(" + sub_var
-                    + " -> " + target + ")", depth + 1);
-                try {
-                    auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, target);
-                    auto& sub_sys = load_sub_system(call.file_stem);
-                    for (auto& [sv, val] : sub_binds)
-                        trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
-                    double result = sub_sys.resolve(sub_var, sub_binds);
-                    if (std::isnan(result) || std::isinf(result)) {
-                        had_nan_inf = true;
-                        continue;
-                    }
-                    trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
-                    bindings[target] = result;
-                    return result;
-                } catch (const std::exception& e) {
-                    trace.step("  failed: " + std::string(e.what()), depth + 2);
-                }
-            }
-        }
+            return false;
+        }, &bindings);
+        if (solved) return bindings.at(target);
 
         // Error reporting
         if (!found_eq)
