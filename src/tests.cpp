@@ -5823,6 +5823,9 @@ void test_derive_binary_integration() {
 // ---- Main ----
 
 int main() {
+    ExprArena test_arena;
+    ExprArena::Scope arena_scope(test_arena);
+
     std::cout << "fwiz unit tests\n";
     std::cout << "===============\n";
 

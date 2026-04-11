@@ -7,6 +7,7 @@
 #include <set>
 #include <map>
 #include <vector>
+#include <deque>
 #include <optional>
 #include <stdexcept>
 #include <functional>
@@ -17,29 +18,65 @@ constexpr double EPSILON_REL  = 1e-9;    // relative tolerance for verify mode (
 constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 
 // ============================================================================
-//  Expression tree
+//  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
 
 enum class ExprType { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL };
 enum class BinOp   { ADD, SUB, MUL, DIV, POW };
 
 struct Expr;
-using ExprPtr = std::shared_ptr<Expr>;
+using ExprPtr = Expr*;
+
+class ExprArena {
+    static constexpr size_t CHUNK_SIZE = 1024;  // nodes per chunk
+    std::vector<std::unique_ptr<Expr[]>> chunks;
+    size_t next_in_chunk = CHUNK_SIZE;  // force first alloc to create chunk
+    static inline thread_local ExprArena* current_ = nullptr;
+public:
+    Expr* alloc();  // defined after Expr
+
+    static ExprArena* current() { return current_; }
+    struct Scope {
+        ExprArena* prev;
+        Scope(ExprArena& a) : prev(current_) { current_ = &a; }
+        ~Scope() { current_ = prev; }
+    };
+    size_t size() const { return chunks.empty() ? 0 : (chunks.size()-1) * CHUNK_SIZE + next_in_chunk; }
+};
+
+// ============================================================================
+//  Expression tree
+// ============================================================================
 
 struct Expr {
     ExprType type;
     double num = 0;
     std::string name;
     BinOp op{};
-    ExprPtr left, right, child;
+    ExprPtr left = nullptr, right = nullptr, child = nullptr;
     std::vector<ExprPtr> args;
 
-    static ExprPtr Num(double v)                                   { auto e = std::make_shared<Expr>(); e->type = ExprType::NUM;       e->num = v;                              return e; }
-    static ExprPtr Var(const std::string& n)                       { auto e = std::make_shared<Expr>(); e->type = ExprType::VAR;       e->name = n;                             return e; }
-    static ExprPtr BinOpExpr(BinOp o, ExprPtr l, ExprPtr r)        { auto e = std::make_shared<Expr>(); e->type = ExprType::BINOP;     e->op = o; e->left = l; e->right = r;   return e; }
-    static ExprPtr Neg(ExprPtr c)                                  { auto e = std::make_shared<Expr>(); e->type = ExprType::UNARY_NEG; e->child = c;                            return e; }
-    static ExprPtr Call(const std::string& n, std::vector<ExprPtr> a) { auto e = std::make_shared<Expr>(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a); return e; }
+    static ExprPtr Num(double v);
+    static ExprPtr Var(const std::string& n);
+    static ExprPtr BinOpExpr(BinOp o, ExprPtr l, ExprPtr r);
+    static ExprPtr Neg(ExprPtr c);
+    static ExprPtr Call(const std::string& n, std::vector<ExprPtr> a);
 };
+
+// Arena allocation — contiguous chunks for cache locality
+inline Expr* ExprArena::alloc() {
+    if (next_in_chunk >= CHUNK_SIZE) {
+        chunks.push_back(std::make_unique<Expr[]>(CHUNK_SIZE));
+        next_in_chunk = 0;
+    }
+    return &chunks.back()[next_in_chunk++];
+}
+
+inline ExprPtr Expr::Num(double v)                                      { auto e = ExprArena::current()->alloc(); e->type = ExprType::NUM;       e->num = v;                              return e; }
+inline ExprPtr Expr::Var(const std::string& n)                          { auto e = ExprArena::current()->alloc(); e->type = ExprType::VAR;       e->name = n;                             return e; }
+inline ExprPtr Expr::BinOpExpr(BinOp o, ExprPtr l, ExprPtr r)           { auto e = ExprArena::current()->alloc(); e->type = ExprType::BINOP;     e->op = o; e->left = l; e->right = r;   return e; }
+inline ExprPtr Expr::Neg(ExprPtr c)                                     { auto e = ExprArena::current()->alloc(); e->type = ExprType::UNARY_NEG; e->child = c;                            return e; }
+inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) { auto e = ExprArena::current()->alloc(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a);    return e; }
 
 // ============================================================================
 //  Type predicates
@@ -122,7 +159,7 @@ inline bool contains_var(const ExprPtr& e, const std::string& v) {
 
 // Structural equality — no allocation, used for simplifier fixpoint
 inline bool expr_equal(const ExprPtr& a, const ExprPtr& b) {
-    if (a.get() == b.get()) return true;    // pointer shortcut
+    if (a == b) return true;    // pointer shortcut
     if (!a || !b) return false;
     if (a->type != b->type) return false;
     switch (a->type) {

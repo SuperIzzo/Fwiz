@@ -34,6 +34,22 @@ ubsan: src/tests.cpp $(HEADERS) | bin
 sanitize: asan ubsan
 	@echo "All sanitizer checks passed."
 
+# --- Static analysis ---
+analyze:
+	@which cppcheck > /dev/null 2>&1 && ( \
+		echo "=== cppcheck ===" && \
+		cppcheck --enable=warning,style,performance --std=c++17 \
+			--suppress=passedByValue --suppress=useStlAlgorithm \
+			--error-exitcode=1 src/main.cpp src/tests.cpp 2>&1 \
+	) || echo "cppcheck not installed, skipping"
+	@which clang-tidy > /dev/null 2>&1 && ( \
+		echo "=== clang-tidy ===" && \
+		clang-tidy src/main.cpp \
+			--checks='bugprone-*,performance-*,clang-analyzer-*,-bugprone-easily-swappable-parameters' \
+			-- -std=c++17 -I src 2>&1 \
+	) || echo "clang-tidy not installed, skipping"
+	@echo "Static analysis complete."
+
 bin:
 	mkdir -p bin
 

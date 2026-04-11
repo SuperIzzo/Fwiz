@@ -47,6 +47,7 @@ struct FormulaCall {
 
 class FormulaSystem {
 public:
+    mutable ExprArena arena;
     std::vector<Equation> equations;
     std::map<std::string, double> defaults;
     std::vector<FormulaCall> formula_calls;
@@ -70,6 +71,7 @@ public:
     }
 
     void load_file(const std::string& path) {
+        ExprArena::Scope scope(arena);
         if (path.empty())
             throw std::runtime_error("No file path provided");
         std::error_code ec;
@@ -123,6 +125,7 @@ public:
         const std::string& target, double known_value,
         std::map<std::string, double> bindings) const
     {
+        ExprArena::Scope scope(arena);
         std::vector<VerifyResult> results;
         bindings.erase(target);
         for (auto& [k, v] : defaults)
@@ -182,7 +185,7 @@ public:
     std::string derive(const std::string& target,
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
-        // Build unified ExprPtr bindings: numeric as Num, symbolic as Var(new_name)
+        ExprArena::Scope scope(arena);
         std::map<std::string, ExprPtr> bindings;
         for (auto& [k, v] : numeric_bindings) bindings[k] = Expr::Num(v);
         for (auto& [k, v] : symbolic_bindings) bindings[k] = Expr::Var(v);
@@ -204,6 +207,7 @@ public:
 
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
+        ExprArena::Scope scope(arena);
         trace.step("\nsolving for: " + target);
 
         for (auto& [k, v] : defaults) {
