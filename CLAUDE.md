@@ -36,6 +36,9 @@ Read `DEVELOPER.md` for the full conventions guide. Summary:
 - **References for non-null** (`const Expr&`), **pointers for nullable** (`ExprPtr`)
 - **`constexpr`** for predicates and constants, **`inline`** for everything else in headers
 - **Named constants** (`EPSILON_ZERO`, `EPSILON_REL`, `SIMPLIFY_MAX_ITER`) — no magic numbers
+- **`static_assert`** for enum counts, table sizes, index assumptions, constant ranges
+- **`assert`** in factories (non-null operands, arena active) and post-conditions
+- **Enum `COUNT_` sentinels** — use `case COUNT_: assert(false)` in switches, never `default:` (preserves `-Wswitch`)
 - **Data-driven** — BinOp metadata table, builtin function registry, strategy enumeration
 - **Function pointers** over `std::function`
 - **Enums** use `uint8_t` base

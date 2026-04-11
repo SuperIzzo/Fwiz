@@ -375,6 +375,23 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 - **`inline`** — everything else in headers (required for ODR in header-only code)
 - Prefer function pointers over `std::function` to avoid heap allocation
 
+### Compile-time safety (static_assert)
+
+Use `static_assert` to catch structural mistakes at compile time:
+
+- **Enum counts** — enums have a `COUNT_` sentinel. `static_assert(static_cast<int>(BinOp::COUNT_) == 5)` catches enum additions that aren't reflected in dependent code.
+- **Table sizes** — `static_assert(sizeof(table)/sizeof(table[0]) == static_cast<size_t>(BinOp::COUNT_))` catches table/enum mismatches.
+- **Index assumptions** — `static_assert(static_cast<int>(BinOp::ADD) == 0)` documents that enum values are used as array indices.
+- **Constant ranges** — `static_assert(EPSILON_ZERO > 0 && EPSILON_ZERO < 1e-6)` prevents accidental misconfiguration.
+
+### Runtime safety (assert)
+
+Use `assert` for invariants that should always hold in correct code:
+
+- **Factory methods** — assert arena is active, operands are non-null (`assert(l && r && "BinOp operands must not be null")`)
+- **Post-conditions** — assert results are non-null after operations (`assert(next && "simplify_once must not return null")`)
+- **Enum sentinels** — `case COUNT_: assert(false && "invalid BinOp")` in switch statements. Do NOT use `default:` — that suppresses the compiler's `-Wswitch` warning for missing cases. The `case COUNT_:` approach gives both the compile-time warning (for real missing cases) and the runtime trap (for the sentinel).
+
 ### Data-driven design
 
 Prefer data tables and registries over switch statements and if-else chains:
