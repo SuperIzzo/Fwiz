@@ -22,18 +22,34 @@ Current capabilities:
 - Linear algebraic solving (variable in additions, subtractions, multiplied/divided by constants)
 - Multi-equation substitution via shared variables
 - Equation chains with recursive resolution
-- Like-term combining (`y + 3*y → 4y`)
-- Built-in math functions (sqrt, sin, cos, tan, log, abs)
+- Like-term combining (`y + 3*y → 4y`) via additive/multiplicative flattening
+- Built-in math functions (sqrt, sin, cos, tan, log, abs, asin, acos, atan)
 - Default values
-- Step-by-step trace output
+- Step-by-step trace output (`--steps`, `--calc`)
+- Cross-file formula calls with explicit binding maps
+- Expression bindings in formula calls (`n=n-1`)
+- Conditions on equations (`: x >= 0`, compound `&&`/`||`)
+- Global conditions (standalone `x > 0` lines)
+- Conditional branching (piecewise functions via conditions + equation ordering)
+- Recursion (self-referencing formula calls with conditional base cases)
+- Multiple returns (`?` = all solutions, `?!` = strict one)
+- ValueSet returns (ranges when exact values unavailable)
+- Symbolic derivation (`--derive`)
+- Verification (`--verify`)
+- Explore mode (`--explore`, `--explore-full`)
+- CLI expression values (`width=2^3, height=sqrt(9)`)
+- Inline comments (`# after equations`)
+- Arena allocator for expression nodes (100% cache-friendly)
 
-Planned:
-- **Cross-file imports** — call formulas from other `.fw` files
-- **Quadratic solving** — equations where the variable appears squared
-- **Inverse functions** — solving `y = sin(x)` for `x` via `asin`
-- **Multi-solution results** — returning both roots of a quadratic
+Planned (see FUTURE.md):
+- **Iterative solving** — Newton's method for nonlinear equations
+- **Symbolic differentiation** — sensitivity analysis
+- **Batch/table mode** — parameter sweeps with range syntax
 - **Units** — dimensional analysis and automatic conversion
-- **Interactive REPL** — define equations and query interactively
+- **Fraction representation** — exact arithmetic
+- **LaTeX export**
+- **Standard library** — curated `.fw` files
+- **Interactive REPL**
 
 ---
 
@@ -60,7 +76,7 @@ Planned:
 └────────────────────────┴─────────────────────────────┘
 ```
 
-All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. The codebase is intentionally compact — under 1000 lines of implementation.
+All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~9000 lines total including tests.
 
 ### lexer.h
 
@@ -87,7 +103,9 @@ Power is currently NOT right-associative — `x^2^3` parses as `x^2` with traili
 
 The core of the system. Contains:
 
-**ExprPtr** — shared pointer to expression tree nodes. Types: `NUM`, `VAR`, `BINOP`, `UNARY_NEG`, `FUNC_CALL`.
+**ExprPtr** — raw pointer (`Expr*`) to arena-allocated expression tree nodes. Types: `NUM`, `VAR`, `BINOP`, `UNARY_NEG`, `FUNC_CALL`. All nodes allocated from `ExprArena` (contiguous chunks, 100% cache-friendly).
+
+**ValueSet** — unified representation for conditions, ranges, and solutions. Intervals (open/closed, half-infinite) + discrete points. Operations: intersect, union, filter, contains. Returned by `resolve_all()`.
 
 **collect_vars()** — Collects all variable names in a tree into a set. Used by the solver to find what needs resolving.
 
@@ -127,28 +145,33 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 
 ### system.h
 
-**FormulaSystem** — Holds equations, defaults, and the solving logic.
+**FormulaSystem** — Holds equations, defaults, formula calls, global conditions, and the solving logic.
 
 `load_file()`:
 - Strips UTF-8 BOM from first line
 - Handles CRLF, LF, and mixed line endings
-- Skips blank lines and `#` comments
-- Wraps each line parse in try/catch — bad lines are skipped, not fatal
-- Distinguishes defaults (bare numbers) from equations (expressions)
+- Strips inline `#` comments (respecting parentheses)
+- Skips blank lines and full-line `#` comments
+- Parses conditions (`: expr op expr`) on equations
+- Detects global conditions (standalone `x > 0` lines)
+- Extracts formula calls from token stream before expression parsing
+- Distinguishes defaults (bare numbers without conditions) from equations
 
-`resolve()`:
-- Takes the target variable name and a bindings map (by value — caller is never mutated)
-- Applies defaults for non-target variables
-- Calls `solve_recursive()`
+`resolve()` / `resolve_all()` / `resolve_one()`:
+- `resolve()` returns first valid result (for internal use)
+- `resolve_all()` returns `ValueSet` — all solutions or range constraints
+- `resolve_one()` errors on multiple results (`?!` mode)
 
-`solve_recursive()` — The resolver. Uses a `try_expr` lambda to unify the three strategies:
-1. **Direct**: target is on the LHS of an equation → evaluate the RHS
-2. **Invert**: target appears in an equation's RHS → algebraically isolate it using `solve_for()`
-3. **Substitute**: two equations share a LHS variable → equate their RHS sides and solve both directions
+`enumerate_candidates()` — shared strategy loop for solve/derive/verify:
+1. **Direct**: target on LHS → evaluate RHS
+2. **Invert**: target in RHS → algebraically isolate
+3. **Forward formula call**: target is formula call output_var
+4. **Substitute**: two equations share LHS → equate RHS
+5. **Reverse formula call**: target maps through a binding
 
-For each strategy, if sub-variables are unknown, it recurses to solve them first. The `visited` set prevents infinite recursion on circular dependencies.
+Conditions are checked before solving (if vars known) and after (to validate). Global conditions checked after every result. Formula call depth tracked via thread-local counter with configurable max (default 1000).
 
-Results are validated — NaN and infinity are rejected, causing the solver to try alternative equations. This means if one equation path produces `sqrt(-1)` but another gives a valid answer, the valid one is used.
+Results validated — NaN and infinity rejected, causing fallback to next equation.
 
 Error messages are specific: "No equation found for 'x'", "no value for 'y'", "all equations produced invalid results".
 
@@ -250,9 +273,9 @@ All 678 tests pass clean under every sanitizer — no leaks, no undefined behavi
 
 The architecture makes several classes of bugs structurally impossible:
 
-**No manual memory management.** All expression trees use `shared_ptr<Expr>` (`ExprPtr`). There is no `new`/`delete`, no raw pointer ownership, and no manual `free()`. Reference counting handles cleanup automatically, so use-after-free and double-free are impossible by construction.
+**Arena-allocated memory.** All expression nodes are allocated from `ExprArena` — contiguous 1024-node chunks for cache locality. `ExprPtr` is a raw `Expr*`. No `shared_ptr`, no reference counting, no individual deallocation. The arena is owned by `FormulaSystem` and cleared in bulk when destroyed. Thread-local `ExprArena::current()` provides the active arena via RAII scoping.
 
-**No reference cycles.** Expression trees are DAGs (directed acyclic graphs) — children never point back to parents. This means `shared_ptr` reference counts always reach zero, and LeakSanitizer confirms nothing leaks.
+**No reference cycles.** Expression trees are DAGs (directed acyclic graphs) — children never point back to parents.
 
 **No buffer arithmetic.** The code uses `std::string` and `std::vector` instead of raw char arrays or pointer arithmetic. Bounds are checked by the standard library in debug mode.
 
@@ -425,5 +448,8 @@ Tests are grouped by concern, not by code:
 6. CLI parsing and integration
 7. Error message quality
 8. Feature-specific (formula calls, verify, explore, derive)
-9. Pre-refactor safety nets (strategy coverage, builtin exhaustive)
-10. Simplifier improvements (rule interactions, flattening targets)
+9. Conditions (parsing, solving, errors, global, branching)
+10. Multiple returns and ValueSet
+11. Recursion (depth guard, factorial)
+12. Pre-refactor safety nets (strategy coverage, builtin exhaustive)
+13. Simplifier improvements (rule interactions, flattening targets)
