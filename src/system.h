@@ -973,14 +973,32 @@ inline CLIQuery parse_cli_query(const std::string& input,
     q.filename = input.substr(0, lparen);
     if (q.filename.find('.') == std::string::npos) q.filename += ".fw";
 
-    size_t rparen = input.find(')', lparen);
+    // Find matching closing paren (respecting nesting)
+    size_t rparen = std::string::npos;
+    { int depth = 1;
+      for (size_t i = lparen + 1; i < input.size(); i++) {
+          if (input[i] == '(') depth++;
+          else if (input[i] == ')') { if (--depth == 0) { rparen = i; break; } }
+      }
+    }
     if (rparen == std::string::npos)
         throw std::runtime_error("Missing closing parenthesis");
 
-    // Parse comma-separated "name=value" or "name=?" or "name=?alias" pairs
-    std::istringstream ss(input.substr(lparen + 1, rparen - lparen - 1));
-    std::string arg;
-    while (std::getline(ss, arg, ',')) {
+    // Split arguments by comma (respecting nested parens)
+    std::vector<std::string> args;
+    { int depth = 0; size_t start = lparen + 1;
+      for (size_t i = start; i <= rparen; i++) {
+          if (input[i] == '(') depth++;
+          else if (input[i] == ')') depth--;
+          if ((input[i] == ',' && depth == 0) || i == rparen) {
+              auto a = trim(input.substr(start, i - start));
+              if (!a.empty()) args.push_back(a);
+              start = i + 1;
+          }
+      }
+    }
+
+    for (auto& arg : args) {
         arg = trim(arg);
         if (arg.empty()) continue;
 
@@ -1000,14 +1018,24 @@ inline CLIQuery parse_cli_query(const std::string& input,
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
         } else {
-            double v;
-            try { v = std::stod(val); }
-            catch (...) {
-                if (allow_symbolic) {
-                    q.symbolic[name] = val;
-                    continue;
+            double v = 0;
+            size_t pos = 0;
+            try { v = std::stod(val, &pos); }
+            catch (...) { pos = 0; }
+            if (pos != val.size()) {
+                // Try parsing as expression (e.g. "10*2^3", "sqrt(2)")
+                try {
+                    ExprArena temp_arena;
+                    ExprArena::Scope scope(temp_arena);
+                    auto expr = Parser(Lexer(val).tokenize()).parse_expr();
+                    v = evaluate(*simplify(expr));
+                } catch (...) {
+                    if (allow_symbolic) {
+                        q.symbolic[name] = val;
+                        continue;
+                    }
+                    throw std::runtime_error("Invalid value '" + val + "' for variable '" + name + "'");
                 }
-                throw std::runtime_error("Invalid number '" + val + "' for variable '" + name + "'");
             }
             if (std::isnan(v))
                 throw std::runtime_error("NaN is not a valid value for '" + name + "'");
