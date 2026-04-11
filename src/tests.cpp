@@ -5261,6 +5261,161 @@ void test_solve_for_zero_guard() {
     }
 }
 
+// ---- Pre-refactor safety net tests ----
+
+void test_strategy_coverage() {
+    SECTION("Strategy Coverage");
+
+    // Strategy 1 (direct LHS): target = expr
+    {
+        write_fw("/tmp/tsc1.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc1.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "strategy1: direct LHS");
+    }
+
+    // Strategy 2 (inversion): target in RHS
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc1.fw");
+        ASSERT_NUM(sys.resolve("x", {{"y", 6}}), 5, "strategy2: inversion");
+    }
+
+    // Strategy 3 (forward formula call): target is output_var
+    {
+        write_fw("/tmp/tsc_sub.fw", "area = width * height\n");
+        write_fw("/tmp/tsc3.fw", "tsc_sub(area=?floor, width=w, height=h)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc3.fw");
+        ASSERT_NUM(sys.resolve("floor", {{"w", 4}, {"h", 5}}), 20,
+            "strategy3: forward formula call");
+    }
+
+    // Strategy 4 (equate RHS): two equations share LHS
+    {
+        write_fw("/tmp/tsc4.fw", "z = x + 1\nz = y * 2\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc4.fw");
+        // x + 1 = y * 2 → x = 2*y - 1
+        ASSERT_NUM(sys.resolve("x", {{"y", 5}}), 9, "strategy4: equate shared LHS");
+    }
+
+    // Strategy 5 (reverse formula call): target maps through binding
+    {
+        write_fw("/tmp/tsc5_sub.fw", "area = width * height\n");
+        write_fw("/tmp/tsc5.fw", "tsc5_sub(area=?floor, width=w, height=h)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc5.fw");
+        // h=? with floor=20, w=4 → area=20, width=4, height=20/4=5
+        ASSERT_NUM(sys.resolve("h", {{"floor", 20}, {"w", 4}}), 5,
+            "strategy5: reverse formula call");
+    }
+
+    // Strategy fallthrough: Strategy 1 fails (needs unknown), Strategy 2 succeeds
+    {
+        write_fw("/tmp/tsc_fall.fw", "y = x + z\nz = 10\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc_fall.fw");
+        // y needs z (default 10), x = y - z (inversion)
+        ASSERT_NUM(sys.resolve("x", {{"y", 15}}), 5, "fallthrough: strategy1→2");
+    }
+
+    // Strategy priority: Strategy 1 has valid answer, Strategy 2 also could work
+    {
+        write_fw("/tmp/tsc_prio.fw", "y = x + 1\ny = x * 2 - 4\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc_prio.fw");
+        // Both equations define y. First one wins (file order).
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "priority: first equation wins");
+    }
+
+    // All strategies apply to derive_recursive too
+    {
+        write_fw("/tmp/tsc_sub.fw", "area = width * height\n");
+        write_fw("/tmp/tsc_d.fw", "tsc_sub(area=?floor, width=w, height=h)\nvolume = floor * d\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsc_d.fw");
+        auto r = sys.derive("volume", {}, {{"w","w"},{"h","h"},{"d","d"}});
+        ASSERT_EQ(r, "w * h * d", "strategies work for derive too");
+    }
+}
+
+void test_builtin_exhaustive() {
+    SECTION("Builtin Functions Exhaustive");
+
+    auto ev = [](const char* s) { return evaluate(parse(s)); };
+
+    // All 9 builtins
+    ASSERT_NUM(ev("sqrt(16)"), 4, "sqrt(16)=4");
+    ASSERT_NUM(ev("abs(-7)"), 7, "abs(-7)=7");
+    ASSERT_NUM(ev("sin(0)"), 0, "sin(0)=0");
+    ASSERT_NUM(ev("cos(0)"), 1, "cos(0)=1");
+    ASSERT_NUM(ev("tan(0)"), 0, "tan(0)=0");
+    ASSERT_NUM(ev("log(1)"), 0, "log(1)=0");
+    ASSERT_NUM(ev("asin(0)"), 0, "asin(0)=0");
+    ASSERT_NUM(ev("acos(1)"), 0, "acos(1)=0");
+    ASSERT_NUM(ev("atan(0)"), 0, "atan(0)=0");
+
+    // Roundtrip consistency
+    ASSERT_NUM(ev("sin(asin(0.3))"), 0.3, "sin(asin(0.3))=0.3");
+    ASSERT_NUM(ev("cos(acos(0.7))"), 0.7, "cos(acos(0.7))=0.7");
+    ASSERT_NUM(ev("asin(sin(0.5))"), 0.5, "asin(sin(0.5))=0.5");
+
+    // Unknown function throws
+    {
+        bool threw = false;
+        try { ev("foobar(1)"); } catch (...) { threw = true; }
+        ASSERT(threw, "unknown function throws");
+    }
+
+    // Case sensitive: SIN is not sin
+    {
+        bool threw = false;
+        try { ev("SIN(0)"); } catch (...) { threw = true; }
+        ASSERT(threw, "SIN (uppercase) throws");
+    }
+
+    // Wrong arity: sqrt with 2 args
+    {
+        bool threw = false;
+        try { ev("sqrt(4, 9)"); } catch (...) { threw = true; }
+        ASSERT(threw, "sqrt(4,9) wrong arity throws");
+    }
+
+    // Zero args
+    {
+        bool threw = false;
+        try { ev("sin()"); } catch (...) { threw = true; }
+        ASSERT(threw, "sin() zero args throws");
+    }
+}
+
+void test_operator_metadata() {
+    SECTION("Operator Metadata");
+
+    auto ev = [](const char* s) { return evaluate(parse(s)); };
+
+    // All 5 operators evaluate correctly
+    ASSERT_NUM(ev("3 + 4"), 7, "ADD eval");
+    ASSERT_NUM(ev("10 - 3"), 7, "SUB eval");
+    ASSERT_NUM(ev("3 * 4"), 12, "MUL eval");
+    ASSERT_NUM(ev("12 / 4"), 3, "DIV eval");
+    ASSERT_NUM(ev("2 ^ 10"), 1024, "POW eval");
+
+    // Precedence in printing: no unnecessary parens
+    ASSERT_EQ(expr_to_string(parse("a + b * c")), "a + b * c", "MUL higher than ADD: no parens");
+    ASSERT_EQ(expr_to_string(parse("(a + b) * c")), "(a + b) * c", "ADD forced before MUL: parens");
+    ASSERT_EQ(expr_to_string(parse("a * b^c")), "a * b^c", "POW higher than MUL: no parens");
+    ASSERT_EQ(expr_to_string(parse("a - b - c")), "a - b - c", "left-assoc SUB: no parens");
+    ASSERT_EQ(expr_to_string(parse("a - (b - c)")), "a - (b - c)", "right-group SUB: needs parens");
+    ASSERT_EQ(expr_to_string(parse("a / (b / c)")), "a / (b / c)", "right-group DIV: needs parens");
+
+    // Mixed unary/binary edge cases
+    ASSERT_EQ(expr_to_string(parse("-a * b")), "-a * b", "neg*var: no extra parens");
+    ASSERT_EQ(expr_to_string(parse("-(a * b)")), "-(a * b)", "neg of product: parens");
+    ASSERT_EQ(expr_to_string(parse("-a^2")), "-(a^2)", "neg before pow: parens clarify precedence");
+}
+
 // ---- Simplifier improvement tests ----
 
 void test_simplify_rule_interactions() {
@@ -5804,6 +5959,11 @@ int main() {
 
     // Spurious zero guard
     test_solve_for_zero_guard();
+
+    // Pre-refactor safety net
+    test_strategy_coverage();
+    test_builtin_exhaustive();
+    test_operator_metadata();
 
     // Simplifier improvements
     test_simplify_rule_interactions();
