@@ -5266,13 +5266,9 @@ void test_simplify_rule_interactions() {
 
     auto ss = [](const char* s) { return expr_to_string(simplify(parse(s))); };
 
-    // Like-terms + constant reassociation: x + 2*x + 3 + 4*x + 1
-    // After refactor: "7 * x + 4"
-    {
-        auto e = simplify(parse("x + 2 * x + 3 + 4 * x + 1"));
-        double val = evaluate(substitute(e, "x", Expr::Num(10)));
-        ASSERT_NUM(val, 74, "like-terms + constant: x+2x+3+4x+1 at x=10 → 74");
-    }
+    // Like-terms + constant reassociation: x + 2*x + 3 + 4*x + 1 → 7*x + 4
+    ASSERT_EQ(ss("x + 2 * x + 3 + 4 * x + 1"), "7 * x + 4",
+        "like-terms + constant: x+2x+3+4x+1 → 7x+4");
 
     // Power mul then like-term: x^2 + x*x + 3*x^2
     // x*x → x^2 (mul-to-pow), then x^2 + x^2 + 3*x^2 → 5*x^2 (like-terms)
@@ -5323,13 +5319,8 @@ void test_simplify_rule_interactions() {
     // Negation chain: -(-(-x)) → -x
     ASSERT_EQ(ss("-(-(-x))"), "-x", "triple negation → -x");
 
-    // Mixed div/mul reassociation: ((x / 2) * 3) / 3
-    // After refactor: "x / 2"
-    {
-        auto e = simplify(parse("((x / 2) * 3) / 3"));
-        double val = evaluate(substitute(e, "x", Expr::Num(10)));
-        ASSERT_NUM(val, 5, "((x/2)*3)/3 at x=10 → 5");
-    }
+    // Mixed div/mul reassociation: ((x / 2) * 3) / 3 → x / 2
+    ASSERT_EQ(ss("((x / 2) * 3) / 3"), "x / 2", "((x/2)*3)/3 → x/2");
 }
 
 void test_simplify_flatten_targets() {
@@ -5345,41 +5336,25 @@ void test_simplify_flatten_targets() {
         "a+b-a → b (additive cancellation non-adjacent)");
 
     // Multiple like-terms across a chain: 2*x + y + 3*x → 5*x + y
-    {
-        auto e = simplify(parse("2 * x + y + 3 * x"));
-        double val = evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(1)));
-        ASSERT_NUM(val, 51, "2x+y+3x at x=10,y=1 → 51");
-    }
+    ASSERT_EQ(ss("2 * x + y + 3 * x"), "5 * x + y",
+        "non-adjacent like-terms: 2x+y+3x → 5x+y");
 
     // Constants scattered: 3 + x + 2 + y + 1 → x + y + 6
-    {
-        auto e = simplify(parse("3 + x + 2 + y + 1"));
-        double val = evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(20)));
-        ASSERT_NUM(val, 36, "3+x+2+y+1 at x=10,y=20 → 36");
-    }
+    ASSERT_EQ(ss("3 + x + 2 + y + 1"), "x + y + 6",
+        "scattered constants: 3+x+2+y+1 → x+y+6");
 
     // Multiplicative flattening: collect all factors
     // a * b / a → b (cancel across non-adjacent)
-    {
-        auto e = simplify(parse("a * b / a"));
-        double val = evaluate(substitute(substitute(e, "a", Expr::Num(5)), "b", Expr::Num(3)));
-        ASSERT_NUM(val, 3, "a*b/a at a=5,b=3 → 3");
-    }
+    ASSERT_EQ(ss("a * b / a"), "b",
+        "mul cancel non-adjacent: a*b/a → b");
 
     // Constants scattered in multiplication: 2 * x * 3 * y * 4 → 24*x*y
-    {
-        auto e = simplify(parse("2 * x * 3 * y * 4"));
-        double val = evaluate(substitute(substitute(e, "x", Expr::Num(1)), "y", Expr::Num(1)));
-        ASSERT_NUM(val, 24, "2*x*3*y*4 at x=1,y=1 → 24");
-    }
+    ASSERT_EQ(ss("2 * x * 3 * y * 4"), "24 * x * y",
+        "scattered mul constants: 2*x*3*y*4 → 24*x*y");
 
     // Mixed: x * y / x * z → y * z (cancel x across mul/div chain)
-    {
-        auto e = simplify(parse("x * y / x * z"));
-        double val = evaluate(substitute(substitute(substitute(
-            e, "x", Expr::Num(7)), "y", Expr::Num(3)), "z", Expr::Num(2)));
-        ASSERT_NUM(val, 6, "x*y/x*z at x=7,y=3,z=2 → 6");
-    }
+    ASSERT_EQ(ss("x * y / x * z"), "y * z",
+        "mul/div cancel: x*y/x*z → y*z");
 
     // Cube surface from derive: 2*s^2 + 2*s^2 + 2*s^2 → 6*s^2
     ASSERT_EQ(expr_to_string(simplify(parse("2 * s^2 + 2 * s^2 + 2 * s^2"))),
@@ -5391,12 +5366,8 @@ void test_simplify_flatten_targets() {
 
     // other^2 / (2 * side * other) → other / (2 * side)
     // (from isosceles triangle derive — needs cross-term cancellation)
-    {
-        auto e = simplify(parse("other^2 / (2 * side * other)"));
-        double val = evaluate(substitute(substitute(
-            e, "other", Expr::Num(6)), "side", Expr::Num(4)));
-        ASSERT_NUM(val, 0.75, "other^2/(2*side*other) at other=6,side=4 → 0.75");
-    }
+    ASSERT_EQ(ss("other^2 / (2 * side * other)"), "other / (2 * side)",
+        "cross-term cancel: other^2/(2*side*other) → other/(2*side)");
 }
 
 void test_simplify_like_terms() {
