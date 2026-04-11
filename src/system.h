@@ -130,6 +130,7 @@ public:
     Trace trace;
     mutable int max_formula_depth = 1000;
     bool numeric_mode = false;
+    int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
     static inline thread_local int formula_depth_ = 0;
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
     mutable std::unordered_map<std::string, double> numeric_memo_;
@@ -472,9 +473,10 @@ private:
                 for (double val : roots) {
                     bool dup = false;
                     for (auto r : results)
-                        if (std::abs(r - val) < EPSILON_ZERO) { dup = true; break; }
+                        if (approx_equal(r, val)) { dup = true; break; }
                     if (!dup) {
-                        numeric_results_[target] = false;
+                        if (!numeric_results_.count(target))
+                            numeric_results_[target] = false;
                         results.push_back(val);
                     }
                 }
@@ -1277,10 +1279,10 @@ private:
             };
 
             if (try_integer) {
-                roots = find_numeric_roots(f, lo, hi, true);
+                roots = find_numeric_roots(f, lo, hi, true, numeric_samples);
                 if (!roots.empty()) goto filter;
             }
-            roots = find_numeric_roots(f, lo, hi, false);
+            roots = find_numeric_roots(f, lo, hi, false, numeric_samples);
             if (!roots.empty()) goto filter;
         }
 
@@ -1321,10 +1323,10 @@ private:
                 };
 
                 if (try_integer) {
-                    roots = find_numeric_roots(f, lo, hi, true);
+                    roots = find_numeric_roots(f, lo, hi, true, numeric_samples);
                     if (!roots.empty()) goto filter;
                 }
-                roots = find_numeric_roots(f, lo, hi, false);
+                roots = find_numeric_roots(f, lo, hi, false, numeric_samples);
                 if (!roots.empty()) goto filter;
             }
         }
