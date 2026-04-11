@@ -117,6 +117,195 @@ fib = 0    : n = 0
 - Derive mode with recursion: derive the recursive formula symbolically? Or only derive non-recursive equations?
 - Performance: memoization for recursive calls with the same bindings
 
+## 4. Iterative Solving (Newton's Method)
+
+### Problem
+
+fwiz currently can't solve nonlinear inversions — `y = sin(x)` for `x`, `y = x^2` for `x`, or circular dependency systems. The user has to write explicit inverse equations.
+
+### Approach
+
+Derive the equation symbolically once, then use Newton-Raphson iteration to converge on a numeric solution. This combines --derive (get the symbolic equation) with numeric iteration.
+
+For `y = sin(x)`, solving for `x`:
+1. Rearrange: `f(x) = sin(x) - y = 0`
+2. Derive: `f'(x) = cos(x)`
+3. Iterate: `x_{n+1} = x_n - f(x_n) / f'(x_n)` until convergence
+
+### Why this is powerful
+
+The symbolic derivative only needs to be computed once. The iteration loop is pure numeric evaluation — fast. This turns fwiz's existing symbolic infrastructure into a general nonlinear solver.
+
+### Implementation sketch
+
+- Symbolic differentiation of expression trees (new capability in expr.h)
+- `try_resolve_iterative()` as a fallback when algebraic solving fails
+- Initial guess: 1.0 (or user-provided via syntax like `x=?~5` for "solve for x, start near 5")
+- Convergence criterion: `|f(x)| < 1e-10`
+- Max iterations: 100 (configurable)
+- Multiple starting points to find different roots
+
+## 5. Batch/Table Mode
+
+### Problem
+
+Users often want to evaluate a formula across a range of inputs — parameter sweeps, lookup tables, sensitivity analysis.
+
+### Proposed syntax
+
+```bash
+fwiz --table triangle(C=?, a=[1..10], b=4, c=5)
+```
+
+Range syntax (Python-inspired with step):
+```
+[1..10]              # 1, 2, 3, ..., 10 (integer step)
+[1..10 @ 0.5]        # 1, 1.5, 2, ..., 10 (custom step)
+[0..1 @ 0.1]         # 0, 0.1, 0.2, ..., 1
+[1..10 @ 0.1, 11..100 @ 1]  # compound: fine near 0, coarse further out
+```
+
+### Output
+
+Tab-separated table, one row per input combination:
+```
+a       C
+1       168.4630527
+2       153.4349488
+3       133.4321...
+...
+```
+
+Multiple range inputs → cartesian product (or zip mode with `--zip`).
+
+### Use cases
+
+- Parameter sweeps for engineering design
+- Generating lookup tables
+- Plotting data (pipe to gnuplot: `fwiz --table ... | gnuplot`)
+- Sensitivity analysis: how does output change across input range?
+
+## 6. Symbolic Differentiation
+
+### Problem
+
+Sensitivity analysis ("how much does C change per unit change in a?") requires derivatives. Currently impossible without external tools.
+
+### Proposed syntax
+
+```bash
+fwiz --derive triangle(dC/da=?, a=a, b=b, c=c)
+```
+
+Or as a built-in function in .fw files:
+```
+sensitivity = diff(force, mass)    # ∂force/∂mass
+```
+
+### Implementation
+
+Derivative rules on the expression tree (standard calculus):
+- `d/dx(x) = 1`, `d/dx(c) = 0`
+- `d/dx(f + g) = f' + g'`
+- `d/dx(f * g) = f'*g + f*g'` (product rule)
+- `d/dx(f / g) = (f'*g - f*g') / g^2` (quotient rule)
+- `d/dx(f^n) = n * f^(n-1) * f'` (chain rule + power)
+- `d/dx(sin(f)) = cos(f) * f'`, etc.
+
+The expression tree already supports all needed operations. The derivative is itself an ExprPtr that goes through the simplifier.
+
+### Synergy with iterative solving
+
+Newton's method needs `f'(x)`. Symbolic differentiation provides it exactly — no numerical approximation needed. This makes iterative solving both faster and more accurate.
+
+## 7. Units and Dimensional Analysis
+
+### Problem
+
+`speed = distance / time` should know that `100km / 2hr = 50 km/hr`, and reject `100kg / 2hr` as dimensionally invalid.
+
+### Proposed syntax
+
+```
+# units.fw
+distance [m]
+time [s]
+speed [m/s] = distance / time
+```
+
+Or inline:
+```bash
+fwiz physics(force=? [N], mass=10 [kg])
+```
+
+### Capabilities
+
+- Automatic unit conversion within compatible dimensions
+- Dimensional analysis: reject `mass + time` at parse time
+- Unit inference: if `speed = distance / time` and distance is in km, time in hr, speed is in km/hr
+- SI prefix handling: km → 1000m, ms → 0.001s
+
+## 8. Standard Library
+
+A curated collection of .fw files shipped with fwiz:
+
+```
+stdlib/
+  physics/
+    mechanics.fw      # F=ma, kinetic energy, momentum
+    gravity.fw        # gravitational force, orbital mechanics
+    thermodynamics.fw # ideal gas, heat transfer
+    electromagnetism.fw
+  finance/
+    compound_interest.fw
+    mortgage.fw
+    depreciation.fw
+  engineering/
+    beam_deflection.fw
+    pipe_flow.fw
+    heat_exchanger.fw
+  conversion/
+    temperature.fw
+    length.fw
+    mass.fw
+    pressure.fw
+  geometry/
+    circle.fw
+    sphere.fw
+    cylinder.fw
+    triangle.fw
+```
+
+Each file is a self-contained formula sheet. Cross-file calls compose them:
+```
+# rocket.fw
+physics/gravity(force=?weight, mass=fuel_mass, ...)
+physics/mechanics(acceleration=?thrust_accel, force=thrust, mass=total_mass)
+```
+
+## 9. LaTeX Export
+
+```bash
+fwiz --latex --derive triangle(C=?, a=a, b=b, c=c)
+# C = \arccos\left(\frac{b^2 + c^2 - a^2}{2bc}\right) \cdot \frac{180}{\pi}
+```
+
+Useful for documentation, papers, and reports. The expression tree already has all the structure needed — just a different printer.
+
+## 10. Fraction Representation
+
+### Problem
+
+`x / 2` becomes `0.5 * x` during simplification. Users prefer the fraction form, especially in derived equations.
+
+### Approach
+
+Keep rational numbers as `(numerator, denominator)` pairs internally. Only convert to decimal at output time (or when the fraction is irrational). This preserves `1/3` instead of `0.333...`, enables exact arithmetic, and produces cleaner derived equations.
+
+### Key insight
+
+Most engineering formulas use small integer fractions (1/2, 1/3, 1/4). Keeping them exact avoids floating point drift in long derivation chains.
+
 ## Interaction with existing features
 
 - **--verify**: conditions become part of verification — check that inputs satisfy all relevant conditions
