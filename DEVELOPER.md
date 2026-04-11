@@ -34,15 +34,16 @@ Current capabilities:
 - Recursion (self-referencing formula calls with conditional base cases)
 - Multiple returns (`?` = all solutions, `?!` = strict one)
 - ValueSet returns (ranges when exact values unavailable)
-- Symbolic derivation (`--derive`)
+- Symbolic derivation (`--derive`) with formula call unfolding
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
 - Inline comments (`# after equations`)
 - Arena allocator for expression nodes (100% cache-friendly)
+- Numeric solving (adaptive grid scan + Newton/bisection, enabled by default)
+- Exact/approximate result classification (`=` vs `~`)
 
 Planned (see FUTURE.md):
-- **Iterative solving** — Newton's method for nonlinear equations
 - **Symbolic differentiation** — sensitivity analysis
 - **Batch/table mode** — parameter sweeps with range syntax
 - **Units** — dimensional analysis and automatic conversion
@@ -68,7 +69,8 @@ Planned (see FUTURE.md):
 │   Token stream →       │   Expression tree:          │
 │   expression tree      │   simplify, evaluate,       │
 │                        │   substitute, solve_for,    │
-│                        │   decompose_linear          │
+│                        │   decompose_linear,         │
+│                        │   numeric root-finding      │
 ├────────────────────────┼─────────────────────────────┤
 │      lexer.h           │         trace.h             │
 │   Source text →        │   Trace levels:             │

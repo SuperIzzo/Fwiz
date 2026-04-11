@@ -215,43 +215,26 @@ fib = 0    : n = 0
 - Derive mode with recursion: derive the recursive formula symbolically? Or only derive non-recursive equations?
 - Performance: memoization for recursive calls with the same bindings
 
-## 4. Iterative Solving (Newton's Method)
+## 4. Numeric Solving — ✅ DONE
 
-### Problem
+Implemented as Strategy 6 in `enumerate_candidates()`. Enabled by default, disable with `--no-numeric`.
 
-fwiz currently can't solve nonlinear inversions — `y = sin(x)` for `x`, `y = x^2` for `x`, or circular dependency systems. The user has to write explicit inverse equations.
+**What's implemented:**
+- Adaptive grid scan with deterministic jitter (fixed seed for reproducibility)
+- Newton's method with central finite differences for derivative
+- Bisection fallback for sign-change intervals
+- System-probe fallback for recursive formula calls (evaluates forward, compares)
+- Memoization cache for recursive numeric evaluation
+- Post-validation filters wrong algebraic results via forward computation
+- Exact/approximate classification: `=` for verified exact, `~` for approximate
+- `--precision N` to control scan density
+- Conditions narrow search range (`x > 0` → scan only positive)
 
-### Approach
-
-Derive the equation symbolically once, then use Newton-Raphson iteration to converge on a numeric solution. This combines --derive (get the symbolic equation) with numeric iteration.
-
-For `y = sin(x)`, solving for `x`:
-1. Rearrange: `f(x) = sin(x) - y = 0`
-2. Derive: `f'(x) = cos(x)`
-3. Iterate: `x_{n+1} = x_n - f(x_n) / f'(x_n)` until convergence
-
-### Why this is powerful
-
-The symbolic derivative only needs to be computed once. The iteration loop is pure numeric evaluation — fast. This turns fwiz's existing symbolic infrastructure into a general nonlinear solver.
-
-### Inverse solving priority chain
-
-When solving for a variable that can't be algebraically inverted:
-
-1. **Algebraic inversion** (existing) — instant, exact, for linear equations
-2. **Recursive backward unfolding** — for recursive functions, peel layers off by running the recursion in reverse. E.g. for `factorial(n=?, result=3628800)`: divide result by successive integers until base case. Uses equation structure, not brute force.
-3. **Newton's method** — numeric iteration with symbolic derivative for smooth nonlinear functions
-4. **Bisection** — fallback for monotonic functions where Newton's fails (discontinuities, etc.)
-5. **Bounded search** — last resort for discrete/non-monotonic functions, guided by ValueSet constraints
-
-### Implementation sketch
-
-- Symbolic differentiation of expression trees (new capability in expr.h)
-- `try_resolve_iterative()` as a fallback when algebraic solving fails
-- Initial guess: 1.0 (or user-provided via syntax like `x=?~5` for "solve for x, start near 5")
-- Convergence criterion: `|f(x)| < 1e-10`
-- Max iterations: 100 (configurable)
-- Multiple starting points to find different roots
+**Remaining enhancements:**
+- Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
+- Symbolic differentiation for exact Newton derivatives (currently uses finite differences)
+- User-provided initial guess syntax (e.g., `x=?~5`)
+- Curve fitting / approximate formula derivation from scan data
 
 ## 5. Batch/Table Mode
 
@@ -322,9 +305,9 @@ Derivative rules on the expression tree (standard calculus):
 
 The expression tree already supports all needed operations. The derivative is itself an ExprPtr that goes through the simplifier.
 
-### Synergy with iterative solving
+### Synergy with numeric solving
 
-Newton's method needs `f'(x)`. Symbolic differentiation provides it exactly — no numerical approximation needed. This makes iterative solving both faster and more accurate.
+Newton's method currently uses finite differences for `f'(x)`. Symbolic differentiation would provide exact derivatives — faster convergence and more accurate results. This is a drop-in improvement to the existing numeric solver.
 
 ## 7. Units and Dimensional Analysis
 
@@ -413,6 +396,51 @@ Keep rational numbers as `(numerator, denominator)` pairs internally. Only conve
 ### Key insight
 
 Most engineering formulas use small integer fractions (1/2, 1/3, 1/4). Keeping them exact avoids floating point drift in long derivation chains.
+
+## 11. Curve Fitting / Approximate Formula Derivation
+
+### Problem
+
+Users sometimes need a rational approximation for an irrational function — e.g., replacing `sqrt(x)` with a polynomial for a deterministic physics engine, or fitting sampled data to a closed-form formula.
+
+### Approach
+
+The numeric solver's adaptive grid scan already maps out `f(x)` at many sample points. Curve fitting adds a post-processing step:
+
+1. Scan the function to collect `(x, f(x))` sample points (already done by `adaptive_scan`)
+2. Try fitting standard forms: polynomial (least squares), rational (Padé approximation), piecewise linear
+3. Output an approximate closed-form formula: `y ≈ 0.5*x^2 + 0.3*x + 0.1`
+4. Report fit quality (R², max error in range)
+
+### Proposed syntax
+
+```bash
+fwiz --fit formula(y=?, x=x)  --range x=0..10
+# y ≈ 1.234 * x^2 + 0.567 * x + 0.089  (R² = 0.9998, max error = 0.003)
+```
+
+### Use cases
+
+- Deterministic physics engines needing rational approximations for `sqrt`, `sin`, `cos`
+- Finding patterns in recursive function outputs
+- Approximating expensive formula call chains with simpler expressions
+- Discovering surprising mathematical relationships in sampled data
+
+## 12. Periodicity Detection
+
+### Problem
+
+Functions like `sin(x) = 0.5` have infinitely many roots. Listing them all is useless. Detecting the pattern is useful.
+
+### Approach
+
+Post-process the roots array from `find_numeric_roots`:
+1. Sort roots, compute differences between adjacent roots
+2. Cluster differences — if they repeat, infer period
+3. Group roots by position within one period
+4. Output pattern: `x = 0.5236 + 2kπ | x = 2.618 + 2kπ`
+
+This extends naturally from the existing numeric solver — same scan data, just pattern recognition on top.
 
 ## Interaction with existing features
 

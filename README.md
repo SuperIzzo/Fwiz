@@ -40,7 +40,7 @@ The `.fw` extension is added automatically if omitted. Use `=?` to query a varia
 ### Run tests
 
 ```bash
-make test       # functional tests (1240+ tests)
+make test       # functional tests (1300+ tests)
 make sanitize   # memory safety checks (ASan + UBSan)
 make analyze    # static analysis (clang-tidy, zero warnings)
 ```
@@ -252,28 +252,90 @@ The trace goes to stderr, so it doesn't interfere with piping the result.
 
 ---
 
+## Symbolic Derivation with `--derive`
+
+Use `--derive` to output the symbolic equation instead of a numeric result:
+
+```bash
+$ fwiz --derive convert(celsius=?, fahrenheit=f)
+celsius = (f - 32) / 1.8
+
+$ fwiz --derive physics(time=?, distance=d, speed=v)
+time = d / v
+```
+
+Derive mode unfolds formula calls — if a formula call's body is simple enough, it's inlined into the parent expression and solved algebraically:
+
+```bash
+$ fwiz --derive box(width=?, volume=V, depth=d, height=h)
+width = V / h / d
+
+$ fwiz --derive factorial(result=?, n=5)
+result = 120
+```
+
+---
+
+## Numeric Solving
+
+Numeric solving is enabled by default. When algebraic inversion can't solve an equation (target in a power, trig function, denominator, or recursive call), fwiz falls back to numeric root-finding.
+
+```bash
+$ fwiz formula(x=?, y=9)        # y = x^2
+x = -3
+x = 3
+
+$ fwiz formula(x=?, y=1)        # y = x + sin(x)
+x ~ 0.5109734294
+```
+
+Results verified as exact by forward computation show `=`. Approximate results show `~`.
+
+Use conditions to constrain the search range:
+
+```bash
+$ fwiz formula(x=?, y=9)        # y = x^2, x > 0
+x = 3
+```
+
+Flags:
+- `--no-numeric` — disable numeric solving (algebraic only)
+- `--precision N` — set scan density (default 200, higher finds more roots)
+
+---
+
 ## How the Solver Works
 
 When you ask fwiz to solve for a variable, it tries these strategies in order:
 
 1. **Direct**: Is there an equation `target = ...`? Evaluate the right side.
 2. **Invert**: Does the target appear in an equation's right side? Algebraically isolate it.
-3. **Substitute**: Do two equations share a left-hand variable? Set them equal and solve.
+3. **Forward formula call**: Is there a formula call that produces the target? Evaluate it.
+4. **Substitute**: Do two equations share a left-hand variable? Set them equal and solve.
+5. **Reverse formula call**: Does the target appear in a formula call's bindings? Solve backwards.
+6. **Numeric**: If all algebraic strategies fail, scan the equation numerically (adaptive grid + Newton/bisection).
 
 At each step, if a needed variable is unknown, fwiz recursively tries to solve for it from other equations.
 
 ### What fwiz can solve
 
-fwiz currently handles **linear** equations — where the solve target appears in additions, subtractions, and multiplied/divided by constants. This covers most practical formulas.
+**Algebraically** (exact, instant): linear equations where the solve target appears in additions, subtractions, and multiplied/divided by constants. Like terms are combined (`y + 3 * y` → `4 * y`).
 
-Things like `y + 3 * y` are understood as `4 * y` (like terms are combined).
+**Numerically** (enabled by default): nonlinear equations where algebraic inversion fails. Uses adaptive grid scan with Newton's method and bisection refinement. Finds all roots in the search range.
+
+```bash
+$ fwiz formula(x=?, y=9)     # y = x^2 → finds both roots
+x = -3
+x = 3
+
+$ fwiz formula(x=?, y=1)     # y = x + sin(x) → approximate
+x ~ 0.5109734294
+```
+
+Exact results show `=`, approximate results show `~`. Use `--no-numeric` for algebraic-only solving, or `--precision N` to control scan density (default 200).
 
 ### What fwiz can't solve (yet)
 
-- **Quadratic and higher**: `x^2 + x - 6 = 0` (target variable in a power)
-- **Automatic function inversion**: `y = sin(x)`, solving for `x` — fwiz won't derive that `x = asin(y)` on its own. Write both forms explicitly.
-- **Target in denominator**: `y = 1/x`, solving for `x` (nonlinear)
-- **Multiple solutions**: The SSA (side-side-angle) triangle case can have two valid answers. fwiz returns the first valid one.
 - **Systems of simultaneous equations**: only substitution via shared variables, not Gaussian elimination
 
 ### How fwiz chooses between equations
