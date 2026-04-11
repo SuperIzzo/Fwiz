@@ -23,6 +23,163 @@ static_assert(EPSILON_REL > 0 && EPSILON_REL < 1e-3, "EPSILON_REL must be a smal
 static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_ITER must be reasonable");
 
 // ============================================================================
+//  ValueSet — unified representation for conditions, ranges, and solutions
+// ============================================================================
+
+enum class NumberDomain : uint8_t { REAL, INTEGER, RATIONAL, COMPLEX, COUNT_ };
+
+struct Interval {
+    double low = 0, high = 0;
+    bool low_inclusive = false, high_inclusive = false;
+
+    bool contains(double v) const {
+        bool above = low_inclusive ? (v >= low) : (v > low);
+        bool below = high_inclusive ? (v <= high) : (v < high);
+        return above && below;
+    }
+
+    bool empty() const {
+        return (low > high) || (low == high && !(low_inclusive && high_inclusive));
+    }
+};
+
+class ValueSet {
+    std::vector<Interval> intervals_;
+    std::vector<double> discrete_;
+    NumberDomain domain_ = NumberDomain::REAL;
+
+public:
+    // Constructors
+    ValueSet() = default;
+
+    static ValueSet all() {
+        ValueSet s;
+        s.intervals_.push_back({-std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::infinity(), false, false});
+        return s;
+    }
+
+    static ValueSet gt(double v) {
+        ValueSet s;
+        s.intervals_.push_back({v, std::numeric_limits<double>::infinity(), false, false});
+        return s;
+    }
+
+    static ValueSet ge(double v) {
+        ValueSet s;
+        s.intervals_.push_back({v, std::numeric_limits<double>::infinity(), true, false});
+        return s;
+    }
+
+    static ValueSet lt(double v) {
+        ValueSet s;
+        s.intervals_.push_back({-std::numeric_limits<double>::infinity(), v, false, false});
+        return s;
+    }
+
+    static ValueSet le(double v) {
+        ValueSet s;
+        s.intervals_.push_back({-std::numeric_limits<double>::infinity(), v, false, true});
+        return s;
+    }
+
+    static ValueSet eq(double v) {
+        ValueSet s;
+        s.discrete_.push_back(v);
+        return s;
+    }
+
+    static ValueSet ne(double v) {
+        ValueSet s;
+        s.intervals_.push_back({-std::numeric_limits<double>::infinity(), v, false, false});
+        s.intervals_.push_back({v, std::numeric_limits<double>::infinity(), false, false});
+        return s;
+    }
+
+    static ValueSet discrete(std::initializer_list<double> values) {
+        ValueSet s;
+        s.discrete_.assign(values);
+        return s;
+    }
+
+    static ValueSet between(double lo, double hi, bool lo_inc, bool hi_inc) {
+        ValueSet s;
+        s.intervals_.push_back({lo, hi, lo_inc, hi_inc});
+        return s;
+    }
+
+    // Queries
+    bool empty() const { return intervals_.empty() && discrete_.empty(); }
+
+    bool contains(double v) const {
+        for (auto& iv : intervals_)
+            if (iv.contains(v)) return true;
+        for (auto& d : discrete_)
+            if (std::abs(d - v) < EPSILON_ZERO) return true;
+        return false;
+    }
+
+    const std::vector<Interval>& intervals() const { return intervals_; }
+    const std::vector<double>& discrete() const { return discrete_; }
+    NumberDomain domain() const { return domain_; }
+
+    // Set operations
+    ValueSet intersect(const ValueSet& other) const {
+        ValueSet result;
+
+        // Interval ∩ Interval
+        for (auto& a : intervals_)
+            for (auto& b : other.intervals_) {
+                double lo = std::max(a.low, b.low);
+                double hi = std::min(a.high, b.high);
+                bool lo_inc = (a.low == b.low) ? (a.low_inclusive && b.low_inclusive)
+                            : (lo == a.low) ? a.low_inclusive : b.low_inclusive;
+                bool hi_inc = (a.high == b.high) ? (a.high_inclusive && b.high_inclusive)
+                            : (hi == a.high) ? a.high_inclusive : b.high_inclusive;
+                Interval iv{lo, hi, lo_inc, hi_inc};
+                if (!iv.empty()) result.intervals_.push_back(iv);
+            }
+
+        // Discrete points: keep only those in both sets
+        for (auto& d : discrete_)
+            if (other.contains(d)) result.discrete_.push_back(d);
+        for (auto& d : other.discrete_)
+            if (this->contains(d)) {
+                // Avoid duplicates
+                bool dup = false;
+                for (auto& rd : result.discrete_)
+                    if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
+                if (!dup) result.discrete_.push_back(d);
+            }
+
+        return result;
+    }
+
+    ValueSet unite(const ValueSet& other) const {
+        ValueSet result;
+        result.intervals_ = intervals_;
+        result.intervals_.insert(result.intervals_.end(),
+            other.intervals_.begin(), other.intervals_.end());
+        result.discrete_ = discrete_;
+        for (auto& d : other.discrete_) {
+            bool dup = false;
+            for (auto& rd : result.discrete_)
+                if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
+            if (!dup) result.discrete_.push_back(d);
+        }
+        return result;
+    }
+
+    // Filter a list of values through this set
+    std::vector<double> filter(const std::vector<double>& values) const {
+        std::vector<double> result;
+        for (auto v : values)
+            if (contains(v)) result.push_back(v);
+        return result;
+    }
+};
+
+// ============================================================================
 //  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
 

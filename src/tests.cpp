@@ -4897,6 +4897,121 @@ void test_formula_call_errors() {
     }
 }
 
+// ---- ValueSet tests ----
+
+void test_valueset_basic() {
+    SECTION("ValueSet Basic");
+
+    // Empty set
+    {
+        ValueSet s;
+        ASSERT(s.empty(), "default is empty");
+        ASSERT(!s.contains(0), "empty doesn't contain 0");
+    }
+
+    // All reals
+    {
+        auto s = ValueSet::all();
+        ASSERT(!s.empty(), "all is not empty");
+        ASSERT(s.contains(0), "all contains 0");
+        ASSERT(s.contains(-1e18), "all contains large negative");
+        ASSERT(s.contains(1e18), "all contains large positive");
+    }
+
+    // Single interval (0, +inf)
+    {
+        auto s = ValueSet::gt(0);
+        ASSERT(s.contains(1), "gt(0) contains 1");
+        ASSERT(s.contains(0.001), "gt(0) contains 0.001");
+        ASSERT(!s.contains(0), "gt(0) doesn't contain 0");
+        ASSERT(!s.contains(-1), "gt(0) doesn't contain -1");
+    }
+
+    // Closed interval [0, +inf)
+    {
+        auto s = ValueSet::ge(0);
+        ASSERT(s.contains(0), "ge(0) contains 0");
+        ASSERT(s.contains(1), "ge(0) contains 1");
+        ASSERT(!s.contains(-1), "ge(0) doesn't contain -1");
+    }
+
+    // Less than
+    {
+        auto s = ValueSet::lt(10);
+        ASSERT(s.contains(5), "lt(10) contains 5");
+        ASSERT(!s.contains(10), "lt(10) doesn't contain 10");
+        ASSERT(!s.contains(15), "lt(10) doesn't contain 15");
+    }
+
+    // Discrete set
+    {
+        auto s = ValueSet::discrete({3, -3, 0});
+        ASSERT(s.contains(3), "discrete contains 3");
+        ASSERT(s.contains(-3), "discrete contains -3");
+        ASSERT(s.contains(0), "discrete contains 0");
+        ASSERT(!s.contains(1), "discrete doesn't contain 1");
+    }
+
+    // Not equal
+    {
+        auto s = ValueSet::ne(0);
+        ASSERT(s.contains(1), "ne(0) contains 1");
+        ASSERT(s.contains(-1), "ne(0) contains -1");
+        ASSERT(!s.contains(0), "ne(0) doesn't contain 0");
+    }
+
+    // Equal
+    {
+        auto s = ValueSet::eq(5);
+        ASSERT(s.contains(5), "eq(5) contains 5");
+        ASSERT(!s.contains(4), "eq(5) doesn't contain 4");
+    }
+}
+
+void test_valueset_operations() {
+    SECTION("ValueSet Operations");
+
+    // Intersection: (0, +inf) & (-inf, 30) = (0, 30)
+    {
+        auto s = ValueSet::gt(0).intersect(ValueSet::lt(30));
+        ASSERT(s.contains(15), "intersect: contains 15");
+        ASSERT(!s.contains(0), "intersect: not 0");
+        ASSERT(!s.contains(30), "intersect: not 30");
+        ASSERT(!s.contains(-5), "intersect: not -5");
+    }
+
+    // Union: (-inf, 0) | (0, +inf) = everything except 0
+    {
+        auto s = ValueSet::lt(0).unite(ValueSet::gt(0));
+        ASSERT(s.contains(5), "union: contains 5");
+        ASSERT(s.contains(-5), "union: contains -5");
+        ASSERT(!s.contains(0), "union: not 0");
+    }
+
+    // Filter discrete: {3, -3} & (0, +inf) = {3}
+    {
+        auto s = ValueSet::discrete({3, -3}).intersect(ValueSet::gt(0));
+        ASSERT(s.contains(3), "filter: contains 3");
+        ASSERT(!s.contains(-3), "filter: not -3");
+    }
+
+    // Intersection of closed ranges: [0, 10] & [5, 20] = [5, 10]
+    {
+        auto s = ValueSet::between(0, 10, true, true)
+                .intersect(ValueSet::between(5, 20, true, true));
+        ASSERT(s.contains(5), "closed intersect: contains 5");
+        ASSERT(s.contains(10), "closed intersect: contains 10");
+        ASSERT(!s.contains(4), "closed intersect: not 4");
+        ASSERT(!s.contains(11), "closed intersect: not 11");
+    }
+
+    // Empty intersection
+    {
+        auto s = ValueSet::lt(0).intersect(ValueSet::gt(10));
+        ASSERT(s.empty(), "disjoint intersection is empty");
+    }
+}
+
 // ---- Recursion depth guard tests ----
 
 void test_recursion_depth_guard() {
@@ -5994,6 +6109,10 @@ int main() {
 
     // Spurious zero guard
     test_solve_for_zero_guard();
+
+    // ValueSet
+    test_valueset_basic();
+    test_valueset_operations();
 
     // Recursion depth guard
     test_recursion_depth_guard();
