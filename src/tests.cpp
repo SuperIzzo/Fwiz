@@ -920,10 +920,10 @@ void test_simplify_edge() {
 
     // x - x: simplifier does NOT reduce this (no term cancellation yet)
     // This documents current behavior
-    ASSERT_EQ(ss("x - x"), "x - x", "x - x not simplified (expected)");
+    ASSERT_EQ(ss("x - x"), "0", "x - x → 0");
 
     // x / x: simplifier does NOT reduce this
-    ASSERT_EQ(ss("x / x"), "x / x", "x / x not simplified (expected)");
+    ASSERT_EQ(ss("x / x"), "1", "x / x → 1");
 
     // 0 * complex expr => 0
     {
@@ -4669,6 +4669,862 @@ void test_interface_error_messages() {
     }
 }
 
+// ---- Formula call tests ----
+
+void test_formula_call_parsing() {
+    SECTION("Formula Call Parsing");
+
+    // Form 1: standalone, no alias — output_var = query_var
+    {
+        write_fw("/tmp/fcp_rect.fw", "area = width * height\n");
+        write_fw("/tmp/fcp1.fw", "fcp_rect(area=?, width=width, height=depth)\nvolume = area * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcp1.fw");
+        ASSERT(sys.formula_calls.size() == 1, "form1: one formula call");
+        ASSERT_EQ(sys.formula_calls[0].file_stem, "fcp_rect", "form1: file_stem");
+        ASSERT_EQ(sys.formula_calls[0].query_var, "area", "form1: query_var");
+        ASSERT_EQ(sys.formula_calls[0].output_var, "area", "form1: output_var = query_var");
+        ASSERT(sys.formula_calls[0].bindings.count("width"), "form1: has width binding");
+        ASSERT(sys.formula_calls[0].bindings.count("height"), "form1: has height binding");
+        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth", "form1: height=depth");
+        // Should also have the equation: volume = area * h
+        ASSERT(sys.equations.size() == 1, "form1: one equation");
+    }
+
+    // Form 2: standalone with alias
+    {
+        write_fw("/tmp/fcp2.fw", "fcp_rect(area=?floor, width=width, height=depth)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcp2.fw");
+        ASSERT(sys.formula_calls.size() == 1, "form2: one formula call");
+        ASSERT_EQ(sys.formula_calls[0].output_var, "floor", "form2: output_var = alias");
+        ASSERT_EQ(sys.formula_calls[0].query_var, "area", "form2: query_var unchanged");
+        ASSERT(sys.equations.empty(), "form2: no equations (standalone)");
+    }
+
+    // Form 3: implied alias
+    {
+        write_fw("/tmp/fcp3.fw", "floor = fcp_rect(area=?, width=width, height=depth)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcp3.fw");
+        ASSERT(sys.formula_calls.size() == 1, "form3: one formula call");
+        ASSERT_EQ(sys.formula_calls[0].output_var, "floor", "form3: implied alias from LHS");
+        ASSERT(sys.equations.empty(), "form3: degenerate x=x skipped");
+    }
+
+    // Form 4: inline in expression
+    {
+        write_fw("/tmp/fcp4.fw", "volume = fcp_rect(area=?floor, width=width, height=depth) * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcp4.fw");
+        ASSERT(sys.formula_calls.size() == 1, "form4: one formula call");
+        ASSERT_EQ(sys.formula_calls[0].output_var, "floor", "form4: alias");
+        ASSERT(sys.equations.size() == 1, "form4: one equation");
+        ASSERT_EQ(sys.equations[0].lhs_var, "volume", "form4: equation LHS");
+        // The RHS should be "floor * h"
+        ASSERT_EQ(expr_to_string(sys.equations[0].rhs), "floor * h", "form4: formula call replaced in expr");
+    }
+
+    // Shorthand binding: bare ident
+    {
+        write_fw("/tmp/fcp5.fw", "fcp_rect(area=?, width, height=depth)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcp5.fw");
+        ASSERT_EQ(sys.formula_calls[0].bindings.at("width"), "width", "shorthand: width=width");
+        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth", "explicit: height=depth");
+    }
+}
+
+void test_formula_call_forward() {
+    SECTION("Formula Call Forward Resolution");
+
+    write_fw("/tmp/fcf_rect.fw", "area = width * height\n");
+
+    // Basic forward: solve for output_var via sub-system
+    {
+        write_fw("/tmp/fcf1.fw",
+            "fcf_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcf1.fw");
+        // floor = width*depth = 4*3 = 12, volume = 12*6 = 72
+        ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"depth", 3}, {"h", 6}}), 72,
+            "forward: volume via formula call");
+    }
+
+    // Direct query of formula call output
+    {
+        write_fw("/tmp/fcf2.fw", "fcf_rect(area=?floor, width=width, height=depth)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcf2.fw");
+        ASSERT_NUM(sys.resolve("floor", {{"width", 4}, {"depth", 3}}), 12,
+            "forward: direct query of output_var");
+    }
+
+    // Providing the output_var skips sub-system (bridge)
+    {
+        write_fw("/tmp/fcf3.fw",
+            "fcf_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcf3.fw");
+        ASSERT_NUM(sys.resolve("volume", {{"floor", 20}, {"h", 5}}), 100,
+            "forward: output_var provided directly");
+    }
+
+    // Multiple formula calls to same file with different bindings
+    {
+        write_fw("/tmp/fcf4.fw",
+            "fcf_rect(area=?a1, width=w1, height=h1)\n"
+            "fcf_rect(area=?a2, width=w2, height=h2)\n"
+            "total = a1 + a2\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcf4.fw");
+        // a1 = 3*4=12, a2 = 5*6=30, total = 42
+        ASSERT_NUM(sys.resolve("total", {{"w1",3},{"h1",4},{"w2",5},{"h2",6}}), 42,
+            "forward: two calls to same sub-system");
+    }
+
+    // Inline formula call in expression (form 4)
+    {
+        write_fw("/tmp/fcf5.fw",
+            "volume = fcf_rect(area=?floor, width=w, height=d) * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcf5.fw");
+        ASSERT_NUM(sys.resolve("volume", {{"w", 4}, {"d", 3}, {"h", 6}}), 72,
+            "forward: inline formula call");
+    }
+}
+
+void test_formula_call_reverse() {
+    SECTION("Formula Call Reverse Resolution");
+
+    write_fw("/tmp/fcr_rect.fw", "area = width * height\n");
+
+    // Reverse: solve parent var through binding
+    {
+        write_fw("/tmp/fcr1.fw",
+            "fcr_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcr1.fw");
+        // depth=? with floor=24, width=4 → area=24, height=24/4=6 → depth=6
+        ASSERT_NUM(sys.resolve("depth", {{"floor", 24}, {"width", 4}}), 6,
+            "reverse: depth through binding bridge");
+    }
+
+    // Reverse: solve through volume equation + formula call
+    {
+        write_fw("/tmp/fcr2.fw",
+            "fcr_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcr2.fw");
+        // depth=? with volume=72, width=4, h=6 → floor=72/6=12, area=12, height=12/4=3 → depth=3
+        ASSERT_NUM(sys.resolve("depth", {{"volume", 72}, {"width", 4}, {"h", 6}}), 3,
+            "reverse: depth from volume via formula call");
+    }
+
+    // Reverse: solve width through sub-system
+    {
+        write_fw("/tmp/fcr3.fw", "fcr_rect(area=?floor, width=w, height=h)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcr3.fw");
+        // w=? with floor=24, h=6 → area=24, height=6, width=24/6=4 → w=4
+        ASSERT_NUM(sys.resolve("w", {{"floor", 24}, {"h", 6}}), 4,
+            "reverse: w through binding");
+    }
+}
+
+void test_formula_call_chained() {
+    SECTION("Formula Call Chained");
+
+    // A → B → C chain
+    {
+        write_fw("/tmp/fcc_c.fw", "z = x + y\n");
+        write_fw("/tmp/fcc_b.fw", "fcc_c(z=?mid, x=a, y=b)\nresult = mid * 2\n");
+        write_fw("/tmp/fcc_a.fw", "fcc_b(result=?out, a=p, b=q)\nfinal = out + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcc_a.fw");
+        // z = p+q = 3+4=7, mid=7, result=14, out=14, final=15
+        ASSERT_NUM(sys.resolve("final", {{"p", 3}, {"q", 4}}), 15,
+            "chained: A→B→C = (3+4)*2+1 = 15");
+    }
+
+    // Sub-system uses defaults from its own file
+    {
+        write_fw("/tmp/fcc_d.fw", "g = 9.81\nforce = mass * g\n");
+        write_fw("/tmp/fcc_e.fw", "fcc_d(force=?f, mass=m)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fcc_e.fw");
+        ASSERT_NUM(sys.resolve("f", {{"m", 10}}), 98.1,
+            "chained: sub-system uses own defaults");
+    }
+}
+
+void test_formula_call_errors() {
+    SECTION("Formula Call Errors");
+
+    // Missing sub-system file
+    {
+        write_fw("/tmp/fce1.fw", "nonexistent_file(x=?, y=y)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fce1.fw");
+        auto msg = get_error([&]() { sys.resolve("x", {{"y", 5}}); });
+        ASSERT(!msg.empty(), "missing file: throws");
+        // The file error propagates through the solver
+        ASSERT(!msg.empty(), "missing file: error message not empty");
+    }
+
+    // Sub-system can't solve (missing binding)
+    {
+        write_fw("/tmp/fce_rect.fw", "area = width * height\n");
+        write_fw("/tmp/fce2.fw", "fce_rect(area=?floor, width=w)\n"); // no height binding
+        FormulaSystem sys;
+        sys.load_file("/tmp/fce2.fw");
+        auto msg = get_error([&]() { sys.resolve("floor", {{"w", 4}}); });
+        ASSERT(!msg.empty(), "missing sub-binding: throws");
+    }
+
+    // No query variable in formula call (parsed as regular function call)
+    {
+        write_fw("/tmp/fce3.fw", "y = sqrt(x)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fce3.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 9}}), 3, "regular func call still works");
+    }
+}
+
+// ---- Verify mode tests ----
+
+void test_approx_equal() {
+    SECTION("Approx Equal");
+
+    ASSERT(FormulaSystem::approx_equal(1.0, 1.0), "exact match");
+    ASSERT(FormulaSystem::approx_equal(1.0, 1.0 + 1e-10), "within epsilon");
+    ASSERT(!FormulaSystem::approx_equal(1.0, 1.01), "clearly different");
+    ASSERT(FormulaSystem::approx_equal(0.0, 0.0), "zero == zero");
+    ASSERT(FormulaSystem::approx_equal(0.0, 1e-10), "near-zero within epsilon");
+    ASSERT(!FormulaSystem::approx_equal(0.0, 1e-6), "near-zero outside epsilon");
+    // Relative tolerance for large numbers
+    ASSERT(FormulaSystem::approx_equal(1e8, 1e8 + 0.01), "large numbers: within relative eps");
+    ASSERT(!FormulaSystem::approx_equal(1e8, 1e8 + 1000), "large numbers: outside relative eps");
+    // Negative numbers
+    ASSERT(FormulaSystem::approx_equal(-5.0, -5.0), "negative exact");
+    ASSERT(FormulaSystem::approx_equal(-5.0, -5.0 + 1e-10), "negative within eps");
+    // NaN and infinity edge cases
+    ASSERT(!FormulaSystem::approx_equal(std::numeric_limits<double>::quiet_NaN(), 1.0), "NaN vs number");
+    ASSERT(!FormulaSystem::approx_equal(1.0, std::numeric_limits<double>::quiet_NaN()), "number vs NaN");
+    ASSERT(!FormulaSystem::approx_equal(std::numeric_limits<double>::quiet_NaN(),
+                                         std::numeric_limits<double>::quiet_NaN()), "NaN vs NaN");
+    ASSERT(FormulaSystem::approx_equal(std::numeric_limits<double>::infinity(),
+                                        std::numeric_limits<double>::infinity()), "+inf vs +inf");
+    ASSERT(!FormulaSystem::approx_equal(std::numeric_limits<double>::infinity(),
+                                         -std::numeric_limits<double>::infinity()), "+inf vs -inf");
+}
+
+void test_verify_variable() {
+    SECTION("Verify Variable");
+
+    // Consistent system: all equations agree
+    {
+        write_fw("/tmp/tv1.fw", "A = 180 - B - C\nB = 180 - A - C\nC = 180 - A - B\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv1.fw");
+        auto results = sys.verify_variable("A", 40, {{"A", 40}, {"B", 60}, {"C", 80}});
+        ASSERT(!results.empty(), "consistent: has results");
+        bool all_pass = true;
+        for (auto& r : results) if (!r.pass) all_pass = false;
+        ASSERT(all_pass, "consistent: all pass");
+    }
+
+    // Inconsistent system: some equations disagree
+    {
+        write_fw("/tmp/tv2.fw", "A = 180 - B - C\nB = 180 - A - C\nC = 180 - A - B\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv2.fw");
+        auto results = sys.verify_variable("A", 40, {{"A", 40}, {"B", 60}, {"C", 120}});
+        ASSERT(!results.empty(), "inconsistent: has results");
+        bool any_fail = false;
+        for (auto& r : results) if (!r.pass) any_fail = true;
+        ASSERT(any_fail, "inconsistent: some fail");
+    }
+
+    // Variable with no verifiable equations
+    {
+        write_fw("/tmp/tv3.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv3.fw");
+        // z is not in any equation
+        auto results = sys.verify_variable("z", 5, {{"z", 5}});
+        ASSERT(results.empty(), "unknown var: no results");
+    }
+
+    // Strategy 1 (direct LHS): y = x + 1, verify y=6 with x=5
+    {
+        write_fw("/tmp/tv4.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv4.fw");
+        auto results = sys.verify_variable("y", 6, {{"y", 6}, {"x", 5}});
+        ASSERT(results.size() >= 1, "direct: has result");
+        ASSERT(results[0].pass, "direct: 5+1=6 passes");
+    }
+
+    // Strategy 1 fail: y = x + 1, verify y=10 with x=5
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv4.fw");
+        auto results = sys.verify_variable("y", 10, {{"y", 10}, {"x", 5}});
+        ASSERT(results.size() >= 1, "direct fail: has result");
+        ASSERT(!results[0].pass, "direct fail: 5+1≠10");
+        ASSERT_NUM(results[0].computed, 6, "direct fail: computed 6");
+    }
+
+    // Strategy 2 (inversion): y = x + 1, verify x=5 with y=6
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv4.fw");
+        auto results = sys.verify_variable("x", 5, {{"x", 5}, {"y", 6}});
+        ASSERT(!results.empty(), "inversion: has results");
+        bool found_pass = false;
+        for (auto& r : results) if (r.pass) found_pass = true;
+        ASSERT(found_pass, "inversion: x=6-1=5 passes");
+    }
+
+    // Multiple equations: all should be checked
+    {
+        write_fw("/tmp/tv5.fw", "y = x + 1\ny = x * 2\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tv5.fw");
+        // y=6, x=5: first eq says y=6 (pass), second says y=10 (fail)
+        auto results = sys.verify_variable("y", 6, {{"y", 6}, {"x", 5}});
+        ASSERT(results.size() >= 2, "multiple: at least 2 results");
+        int passes = 0, fails = 0;
+        for (auto& r : results) { if (r.pass) passes++; else fails++; }
+        ASSERT(passes >= 1, "multiple: at least one pass");
+        ASSERT(fails >= 1, "multiple: at least one fail");
+    }
+}
+
+void test_verify_binary_integration() {
+    SECTION("Verify Binary Integration");
+
+    write_fw("/tmp/tvb.fw", "A = 180 - B - C\nB = 180 - A - C\nC = 180 - A - B\n");
+
+    // --verify all with consistent inputs: exit 0
+    {
+        int rc = system("./bin/fwiz --verify all '/tmp/tvb(A=40, B=60, C=80)' > /dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 0, "verify consistent: exit 0");
+    }
+
+    // --verify all with inconsistent inputs: exit 1
+    {
+        int rc = system("./bin/fwiz --verify all '/tmp/tvb(A=40, B=60, C=120)' > /dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 1, "verify inconsistent: exit 1");
+    }
+
+    // --verify specific vars
+    {
+        int rc = system("./bin/fwiz --verify A '/tmp/tvb(A=40, B=60, C=80)' > /dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 0, "verify specific var: exit 0");
+    }
+
+    // --verify with query: solve then verify
+    {
+        int rc = system("./bin/fwiz --verify all '/tmp/tvb(C=?, A=40, B=60)' > /dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 0, "verify after solve: exit 0");
+    }
+
+    // --verify without argument: exit 1 (error)
+    {
+        int rc = system("./bin/fwiz --verify > /dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 1, "verify no arg: exit 1");
+    }
+}
+
+// ---- Explore mode tests ----
+
+void test_all_variables() {
+    SECTION("All Variables");
+
+    {
+        write_fw("/tmp/tav1.fw", "area = width * height\nperimeter = 2 * width + 2 * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tav1.fw");
+        auto vars = sys.all_variables();
+        ASSERT(vars.count("area"), "has area");
+        ASSERT(vars.count("width"), "has width");
+        ASSERT(vars.count("height"), "has height");
+        ASSERT(vars.count("perimeter"), "has perimeter");
+    }
+
+    // Variables from defaults
+    {
+        write_fw("/tmp/tav2.fw", "g = 9.81\nforce = mass * g\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tav2.fw");
+        auto vars = sys.all_variables();
+        ASSERT(vars.count("g"), "has default g");
+        ASSERT(vars.count("force"), "has force");
+        ASSERT(vars.count("mass"), "has mass");
+    }
+
+    // Variables from formula calls
+    {
+        write_fw("/tmp/tav_r.fw", "area = width * height\n");
+        write_fw("/tmp/tav3.fw", "tav_r(area=?floor, width=w, height=d)\nvolume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tav3.fw");
+        auto vars = sys.all_variables();
+        ASSERT(vars.count("floor"), "has formula call output_var");
+        ASSERT(vars.count("w"), "has binding parent_var w");
+        ASSERT(vars.count("d"), "has binding parent_var d");
+        ASSERT(vars.count("h"), "has equation var h");
+        ASSERT(vars.count("volume"), "has equation var volume");
+    }
+}
+
+void test_explore_binary_integration() {
+    SECTION("Explore Binary Integration");
+
+    write_fw("/tmp/tex.fw", "y = x + 1\nz = x * 2\n");
+
+    // --explore with queries: solved and unsolvable
+    {
+        // y=? solvable with x=5, z=? solvable
+        int rc = system("./bin/fwiz --explore '/tmp/tex(y=?, z=?, x=5)' 2>/dev/null "
+                        "| grep -q 'y = 6'");
+        ASSERT(WEXITSTATUS(rc) == 0, "explore: y=6 in output");
+    }
+
+    // --explore with unsolvable: prints ?
+    {
+        int rc = system("./bin/fwiz --explore '/tmp/tex(y=?)' 2>/dev/null "
+                        "| grep -q '?'");
+        ASSERT(WEXITSTATUS(rc) == 0, "explore unsolvable: ? in output");
+    }
+
+    // --explore-full: shows all variables
+    {
+        int rc = system("./bin/fwiz --explore-full '/tmp/tex(x=5)' 2>/dev/null "
+                        "| grep -q 'z = 10'");
+        ASSERT(WEXITSTATUS(rc) == 0, "explore-full: z=10 in output");
+    }
+
+    // --explore without queries: just prints inputs
+    {
+        int rc = system("./bin/fwiz --explore '/tmp/tex(x=5)' 2>/dev/null "
+                        "| grep -q 'x = 5'");
+        ASSERT(WEXITSTATUS(rc) == 0, "explore no queries: x=5 in output");
+    }
+
+    // --explore no queries: should NOT print variables not mentioned
+    {
+        int rc = system("./bin/fwiz --explore '/tmp/tex(x=5)' 2>/dev/null "
+                        "| grep -q 'y'");
+        ASSERT(WEXITSTATUS(rc) != 0, "explore no queries: y not in output");
+    }
+}
+
+// ---- Additional formula call tests ----
+
+void test_formula_call_additional() {
+    SECTION("Formula Call Additional Coverage");
+
+    write_fw("/tmp/fca_rect.fw", "area = width * height\n");
+
+    // Implied alias (Form 3) with actual resolution
+    {
+        write_fw("/tmp/fca1.fw", "floor = fca_rect(area=?, width=width, height=depth)\nvolume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca1.fw");
+        ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"depth", 3}, {"h", 6}}), 72,
+            "implied alias: resolves through formula call");
+        ASSERT_NUM(sys.resolve("floor", {{"width", 5}, {"depth", 7}}), 35,
+            "implied alias: direct query");
+    }
+
+    // Inline formula call without alias — area enters scope
+    {
+        write_fw("/tmp/fca2.fw", "volume = depth * fca_rect(area=?, width=width, height=height)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca2.fw");
+        // area is the output_var (no alias), used in equation as: volume = depth * area
+        ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"height", 3}, {"depth", 5}}), 60,
+            "inline no alias: volume = depth * area");
+    }
+
+    // Shorthand bindings resolve correctly
+    {
+        write_fw("/tmp/fca3.fw", "fca_rect(area=?a, width, height)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca3.fw");
+        ASSERT_NUM(sys.resolve("a", {{"width", 6}, {"height", 7}}), 42,
+            "shorthand bindings: width=width, height=height");
+    }
+
+    // Sub-system caching: two calls share one loaded file
+    {
+        write_fw("/tmp/fca4.fw",
+            "fca_rect(area=?a1, width=w1, height=h1)\n"
+            "fca_rect(area=?a2, width=w2, height=h2)\n"
+            "total = a1 + a2\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca4.fw");
+        ASSERT_NUM(sys.resolve("total", {{"w1",3},{"h1",4},{"w2",5},{"h2",6}}), 42,
+            "caching: two calls resolve correctly");
+        ASSERT(sys.sub_systems.size() == 1, "caching: only one sub-system loaded");
+    }
+
+    // parse_cli_query with allow_no_queries
+    {
+        auto q = parse_cli_query("f(x=5, y=10)", true);
+        ASSERT(q.queries.empty(), "allow_no_queries: no queries");
+        ASSERT_NUM(q.bindings.at("x"), 5, "allow_no_queries: x=5");
+        ASSERT_NUM(q.bindings.at("y"), 10, "allow_no_queries: y=10");
+    }
+
+    // parse_cli_query without allow_no_queries: throws
+    {
+        auto msg = get_error([&]() { parse_cli_query("f(x=5, y=10)"); });
+        ASSERT(msg.find("No query") != std::string::npos, "no queries: throws");
+    }
+
+    // Binding as last arg before closing paren (boundary in parse_call_args)
+    {
+        write_fw("/tmp/fca_bound.fw", "area = width * height\n");
+        write_fw("/tmp/fca_last.fw", "fca_bound(area=?, height=depth)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca_last.fw");
+        ASSERT(sys.formula_calls.size() == 1, "last-binding: one call");
+        ASSERT(sys.formula_calls[0].bindings.count("height"), "last-binding: has height binding");
+        ASSERT_EQ(sys.formula_calls[0].bindings.at("height"), "depth",
+            "last-binding: height=depth parsed correctly");
+    }
+
+    // Trailing shorthand binding (single ident before closing paren)
+    {
+        write_fw("/tmp/fca_trail.fw", "fca_bound(area=?, width)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/fca_trail.fw");
+        ASSERT(sys.formula_calls[0].bindings.count("width"), "trailing shorthand: has width");
+        ASSERT_EQ(sys.formula_calls[0].bindings.at("width"), "width",
+            "trailing shorthand: width=width");
+    }
+}
+
+// ---- Spurious zero fix additional tests ----
+
+void test_solve_for_zero_guard() {
+    SECTION("Solve For Zero Guard");
+
+    // Concrete numeric coefficient with zero rest: target=0 is valid
+    {
+        // 3*c + 0 = 0 → c = 0
+        auto lhs = Parser(Lexer("3 * c").tokenize()).parse_expr();
+        auto rhs = Expr::Num(0);
+        auto sol = solve_for(lhs, rhs, "c");
+        ASSERT(sol != nullptr, "concrete coeff: solution found");
+        double val = evaluate(sol);
+        ASSERT_NUM(val, 0, "concrete coeff: c=0");
+    }
+
+    // Symbolic coefficient with zero rest: target=0 is rejected
+    {
+        // a*c - a*c = 0 → coeff is symbolic, rest=0, should reject
+        auto lhs = Parser(Lexer("a * c").tokenize()).parse_expr();
+        auto rhs = Parser(Lexer("a * c").tokenize()).parse_expr();
+        auto sol = solve_for(lhs, rhs, "c");
+        ASSERT(sol == nullptr, "symbolic coeff zero rest: rejected");
+    }
+
+    // Symbolic coefficient with non-zero rest: should solve normally
+    {
+        // a*c + 5 = 0 → c = -5/a (valid even though coeff is symbolic)
+        auto lhs = Parser(Lexer("a * c + 5").tokenize()).parse_expr();
+        auto rhs = Expr::Num(0);
+        auto sol = solve_for(lhs, rhs, "c");
+        ASSERT(sol != nullptr, "symbolic coeff nonzero rest: solution found");
+    }
+
+    // Numeric coefficient with non-zero rest: c = -rest/coeff
+    {
+        // 2*c + 6 = 0 → c = -3
+        auto lhs = Parser(Lexer("2 * c + 6").tokenize()).parse_expr();
+        auto rhs = Expr::Num(0);
+        auto sol = solve_for(lhs, rhs, "c");
+        ASSERT(sol != nullptr, "numeric coeff nonzero rest: found");
+        double val = evaluate(sol);
+        ASSERT_NUM(val, -3, "numeric coeff nonzero rest: c=-3");
+    }
+}
+
+// ---- Simplifier improvement tests ----
+
+void test_simplify_like_terms() {
+    SECTION("Simplifier: Like-Term Combining");
+
+    // x + x → 2 * x
+    ASSERT_EQ(expr_to_string(simplify(parse("x + x"))), "2 * x", "x + x → 2*x");
+
+    // 2*x + 3*x → 5*x
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * x + 3 * x"))), "5 * x", "2x + 3x → 5x");
+
+    // x + 2*x → 3*x
+    ASSERT_EQ(expr_to_string(simplify(parse("x + 2 * x"))), "3 * x", "x + 2x → 3x");
+
+    // x - x → 0
+    ASSERT_EQ(expr_to_string(simplify(parse("x - x"))), "0", "x - x → 0");
+
+    // 3*x - x → 2*x
+    ASSERT_EQ(expr_to_string(simplify(parse("3 * x - x"))), "2 * x", "3x - x → 2x");
+
+    // 3*x - 2*x → x
+    ASSERT_EQ(expr_to_string(simplify(parse("3 * x - 2 * x"))), "x", "3x - 2x → x");
+
+    // 2*s + 2*s → 4*s (from derive: perimeter of square)
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * s + 2 * s"))), "4 * s", "2s + 2s → 4s");
+
+    // 2*s + 2*s + 2*s → 6*s (cube surface: 3 pairs of faces)
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * s + 2 * s + 2 * s"))), "6 * s",
+        "2s + 2s + 2s → 6s");
+
+    // Additive cancellation: (a + b) - a → b
+    ASSERT_EQ(expr_to_string(simplify(parse("(a + b) - a"))), "b", "(a+b)-a → b");
+
+    // (a + b) - b → a
+    ASSERT_EQ(expr_to_string(simplify(parse("(a + b) - b"))), "a", "(a+b)-b → a");
+
+    // a - (a + b) → -b
+    ASSERT_EQ(expr_to_string(simplify(parse("a - (a + b)"))), "-b", "a-(a+b) → -b");
+
+    // a - (b + a) → -b
+    ASSERT_EQ(expr_to_string(simplify(parse("a - (b + a)"))), "-b", "a-(b+a) → -b");
+
+    // Like-term with negation: -x + x → 0
+    ASSERT_EQ(expr_to_string(simplify(parse("-x + x"))), "0", "-x + x → 0");
+
+    // Like-term: x + (-2*x) → -x
+    ASSERT_EQ(expr_to_string(simplify(parse("x + (-2) * x"))), "-x", "x + (-2)*x → -x");
+
+    // Different bases: x + y stays
+    ASSERT_EQ(expr_to_string(simplify(parse("x + y"))), "x + y", "x+y: different bases unchanged");
+}
+
+void test_simplify_mul_to_pow() {
+    SECTION("Simplifier: Multiplication to Power");
+
+    // x * x → x^2
+    ASSERT_EQ(expr_to_string(simplify(parse("x * x"))), "x^2", "x*x → x^2");
+
+    // x * x * x → x^3
+    ASSERT_EQ(expr_to_string(simplify(parse("x * x * x"))), "x^3", "x*x*x → x^3");
+
+    // x^2 * x → x^3
+    ASSERT_EQ(expr_to_string(simplify(parse("x^2 * x"))), "x^3", "x^2 * x → x^3");
+
+    // x * x^2 → x^3
+    ASSERT_EQ(expr_to_string(simplify(parse("x * x^2"))), "x^3", "x * x^2 → x^3");
+
+    // x^2 * x^3 → x^5
+    ASSERT_EQ(expr_to_string(simplify(parse("x^2 * x^3"))), "x^5", "x^2 * x^3 → x^5");
+
+    // Coefficient preserved: 2*s*s → 2*s^2
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * s * s"))), "2 * s^2", "2*s*s → 2*s^2");
+
+    // 3*x * x^2 → 3*x^3
+    ASSERT_EQ(expr_to_string(simplify(parse("3 * x * x^2"))), "3 * x^3", "3*x * x^2 → 3*x^3");
+
+    // Different bases: x*y stays as is
+    ASSERT_EQ(expr_to_string(simplify(parse("x * y"))), "x * y", "x*y: different bases unchanged");
+}
+
+void test_simplify_self_division() {
+    SECTION("Simplifier: Self-Division");
+
+    // x / x → 1
+    ASSERT_EQ(expr_to_string(simplify(parse("x / x"))), "1", "x/x → 1");
+
+    // (2*x) / x → 2
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * x / x"))), "2", "2x/x → 2");
+
+    // x / (2*x) → 1/2 = 0.5
+    ASSERT_EQ(expr_to_string(simplify(parse("x / (2 * x)"))), "0.5", "x/(2x) → 0.5");
+
+    // (3*x) / x → 3
+    ASSERT_EQ(expr_to_string(simplify(parse("3 * x / x"))), "3", "3x/x → 3");
+
+    // x^3 / x^2 → x
+    ASSERT_EQ(expr_to_string(simplify(parse("x^3 / x^2"))), "x", "x^3/x^2 → x");
+
+    // x^3 / x → x^2
+    ASSERT_EQ(expr_to_string(simplify(parse("x^3 / x"))), "x^2", "x^3/x → x^2");
+
+    // x^2 / x^2 → 1
+    ASSERT_EQ(expr_to_string(simplify(parse("x^2 / x^2"))), "1", "x^2/x^2 → 1");
+
+    // Different bases: x / y stays
+    ASSERT_EQ(expr_to_string(simplify(parse("x / y"))), "x / y", "x/y: different bases unchanged");
+}
+
+void test_simplify_constant_collection() {
+    SECTION("Simplifier: Constant Collection");
+
+    // K1 + expr + K2 → expr + (K1+K2) — constants migrate together
+    // This tests: 16 + c^2 - 9 → c^2 + 7 (from derive: mixed triangle)
+    auto e = simplify(parse("16 + x - 9"));
+    // Should have x and 7, in some form
+    double val = evaluate(substitute(e, "x", Expr::Num(0)));
+    ASSERT_NUM(val, 7, "16 + x - 9 with x=0 → 7");
+}
+
+// ---- Derive mode tests ----
+
+void test_derive_basic() {
+    SECTION("Derive Basic");
+
+    // Simple symbolic derivation
+    {
+        write_fw("/tmp/td1.fw", "area = width * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td1.fw");
+        auto result = sys.derive("area", {}, {{"width", "w"}, {"height", "h"}});
+        ASSERT_EQ(result, "w * h", "derive: area = w * h");
+    }
+
+    // Inverse derivation
+    {
+        write_fw("/tmp/td2.fw", "area = width * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td2.fw");
+        auto result = sys.derive("width", {}, {{"area", "a"}, {"height", "h"}});
+        ASSERT_EQ(result, "a / h", "derive: width = a / h");
+    }
+
+    // Mixed numeric + symbolic
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/td2.fw");
+        auto result = sys.derive("width", {{"height", 5}}, {{"area", "a"}});
+        ASSERT_EQ(result, "a / 5", "derive: mixed numeric + symbolic");
+    }
+
+    // Fully numeric collapses to a number
+    {
+        FormulaSystem sys;
+        sys.load_file("/tmp/td2.fw");
+        auto result = sys.derive("area", {{"width", 4}, {"height", 3}}, {});
+        ASSERT_EQ(result, "12", "derive: fully numeric = 12");
+    }
+
+    // Defaults are substituted numerically
+    {
+        write_fw("/tmp/td3.fw", "g = 9.81\nforce = mass * g\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td3.fw");
+        auto result = sys.derive("force", {}, {{"mass", "m"}});
+        ASSERT_EQ(result, "m * 9.81", "derive: default substituted");
+    }
+}
+
+void test_derive_same_name() {
+    SECTION("Derive Same-Name Collapse");
+
+    // Same-name parameters simplify
+    {
+        write_fw("/tmp/tds1.fw", "area = width * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tds1.fw");
+        // width=s, height=s → area = s * s
+        auto result = sys.derive("area", {}, {{"width", "s"}, {"height", "s"}});
+        ASSERT_EQ(result, "s^2", "same-name: s^2");
+    }
+
+    // Same-name with addition: perimeter = 2*w + 2*h, w=s, h=s → 2*s + 2*s
+    {
+        write_fw("/tmp/tds2.fw", "perimeter = 2 * width + 2 * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tds2.fw");
+        auto result = sys.derive("perimeter", {}, {{"width", "s"}, {"height", "s"}});
+        ASSERT_EQ(result, "4 * s", "same-name: 4*s");
+    }
+}
+
+void test_derive_formula_call() {
+    SECTION("Derive Formula Calls");
+
+    // Cross-file derive
+    {
+        write_fw("/tmp/tdf_rect.fw", "area = width * height\n");
+        write_fw("/tmp/tdf1.fw",
+            "tdf_rect(area=?floor, width=width, height=depth)\n"
+            "volume = floor * h\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdf1.fw");
+        auto result = sys.derive("volume", {}, {{"width", "w"}, {"depth", "d"}, {"h", "h"}});
+        ASSERT_EQ(result, "w * d * h", "derive through formula call");
+    }
+}
+
+void test_derive_errors() {
+    SECTION("Derive Errors");
+
+    // No equation for target
+    {
+        write_fw("/tmp/tde1.fw", "y = x + 1\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tde1.fw");
+        auto msg = get_error([&]() { sys.derive("z", {}, {{"x", "x"}}); });
+        ASSERT(msg.find("Cannot derive") != std::string::npos, "derive: unknown var throws");
+    }
+}
+
+void test_derive_cli_parsing() {
+    SECTION("Derive CLI Parsing");
+
+    // Symbolic values parsed correctly
+    {
+        auto q = parse_cli_query("f(x=?, a=side, b=3)", false, true);
+        ASSERT(q.symbolic.count("a"), "symbolic: a is symbolic");
+        ASSERT_EQ(q.symbolic.at("a"), "side", "symbolic: a=side");
+        ASSERT(q.bindings.count("b"), "symbolic: b is numeric");
+        ASSERT_NUM(q.bindings.at("b"), 3, "symbolic: b=3");
+    }
+
+    // Without allow_symbolic, non-numeric throws
+    {
+        auto msg = get_error([&]() { parse_cli_query("f(x=?, a=side)"); });
+        ASSERT(msg.find("Invalid number") != std::string::npos, "no symbolic: throws");
+    }
+}
+
+void test_derive_binary_integration() {
+    SECTION("Derive Binary Integration");
+
+    write_fw("/tmp/tdbi.fw", "area = width * height\n");
+
+    // --derive flag works
+    {
+        int rc = system("./bin/fwiz --derive '/tmp/tdbi(area=?, width=w, height=h)' 2>/dev/null "
+                        "| grep -q 'area = w \\* h'");
+        ASSERT(WEXITSTATUS(rc) == 0, "derive binary: area = w * h");
+    }
+
+    // --derive with alias
+    {
+        int rc = system("./bin/fwiz --derive '/tmp/tdbi(area=?A, width=w, height=h)' 2>/dev/null "
+                        "| grep -q 'A = w \\* h'");
+        ASSERT(WEXITSTATUS(rc) == 0, "derive binary: alias works");
+    }
+
+    // --derive fully numeric
+    {
+        int rc = system("./bin/fwiz --derive '/tmp/tdbi(area=?, width=4, height=3)' 2>/dev/null "
+                        "| grep -q 'area = 12'");
+        ASSERT(WEXITSTATUS(rc) == 0, "derive binary: fully numeric");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -4788,6 +5644,40 @@ int main() {
     test_free_var_chains();
     test_multi_query_free_vars();
     test_interface_error_messages();
+
+    // Formula calls (cross-file)
+    test_formula_call_parsing();
+    test_formula_call_forward();
+    test_formula_call_reverse();
+    test_formula_call_chained();
+    test_formula_call_errors();
+    test_formula_call_additional();
+
+    // Verify mode
+    test_approx_equal();
+    test_verify_variable();
+    test_verify_binary_integration();
+
+    // Explore mode
+    test_all_variables();
+    test_explore_binary_integration();
+
+    // Spurious zero guard
+    test_solve_for_zero_guard();
+
+    // Simplifier improvements
+    test_simplify_like_terms();
+    test_simplify_mul_to_pow();
+    test_simplify_self_division();
+    test_simplify_constant_collection();
+
+    // Derive mode
+    test_derive_basic();
+    test_derive_same_name();
+    test_derive_formula_call();
+    test_derive_errors();
+    test_derive_cli_parsing();
+    test_derive_binary_integration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

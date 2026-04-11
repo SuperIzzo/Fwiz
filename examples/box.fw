@@ -1,0 +1,11 @@
+# bottom face: width x depth
+rectangle(area=?bottom, width=width, height=depth)
+top = bottom
+# front face: width x height
+rectangle(area=?front, width=width, height=height)
+back = front
+# side face: depth x height
+rectangle(area=?side, width=depth, height=height)
+right = side
+surface = 2 * bottom + 2 * front + 2 * side
+volume = bottom * height
