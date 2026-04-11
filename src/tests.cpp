@@ -5217,6 +5217,100 @@ void test_global_conditions() {
     }
 }
 
+// ---- Conditional branching tests ----
+
+void test_conditional_branching() {
+    SECTION("Conditional Branching");
+
+    // Piecewise: absolute value
+    {
+        write_fw("/tmp/tcb_abs.fw",
+            "result = x : x >= 0\n"
+            "result = -x : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_abs.fw");
+        ASSERT_NUM(sys.resolve("result", {{"x", 5}}), 5, "abs: positive");
+        ASSERT_NUM(sys.resolve("result", {{"x", -5}}), 5, "abs: negative");
+        ASSERT_NUM(sys.resolve("result", {{"x", 0}}), 0, "abs: zero");
+    }
+
+    // Three-way branch: sign function
+    {
+        write_fw("/tmp/tcb_sign.fw",
+            "sign = 1 : x > 0\n"
+            "sign = 0 : x = 0\n"
+            "sign = -1 : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_sign.fw");
+        ASSERT_NUM(sys.resolve("sign", {{"x", 42}}), 1, "sign: positive");
+        ASSERT_NUM(sys.resolve("sign", {{"x", 0}}), 0, "sign: zero");
+        ASSERT_NUM(sys.resolve("sign", {{"x", -7}}), -1, "sign: negative");
+    }
+
+    // Multi-bracket tax
+    {
+        write_fw("/tmp/tcb_tax.fw",
+            "tax = 0 : income <= 0\n"
+            "tax = income * 0.1 : income > 0 && income <= 50000\n"
+            "tax = 5000 + (income - 50000) * 0.2 : income > 50000 && income <= 100000\n"
+            "tax = 15000 + (income - 100000) * 0.3 : income > 100000\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_tax.fw");
+        ASSERT_NUM(sys.resolve("tax", {{"income", -100}}), 0, "tax: negative income");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 30000}}), 3000, "tax: low bracket");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 80000}}), 11000, "tax: mid bracket");
+        ASSERT_NUM(sys.resolve("tax", {{"income", 150000}}), 30000, "tax: high bracket");
+    }
+
+    // Branching with equations (not just constants)
+    {
+        write_fw("/tmp/tcb_clamp.fw",
+            "result = low : x < low\n"
+            "result = high : x > high\n"
+            "result = x : x >= low && x <= high\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_clamp.fw");
+        ASSERT_NUM(sys.resolve("result", {{"x", 5}, {"low", 0}, {"high", 10}}), 5, "clamp: in range");
+        ASSERT_NUM(sys.resolve("result", {{"x", -3}, {"low", 0}, {"high", 10}}), 0, "clamp: below");
+        ASSERT_NUM(sys.resolve("result", {{"x", 15}, {"low", 0}, {"high", 10}}), 10, "clamp: above");
+    }
+
+    // Branching with global condition
+    {
+        write_fw("/tmp/tcb_global.fw",
+            "x >= 0\n"
+            "y = sqrt(x)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_global.fw");
+        ASSERT_NUM(sys.resolve("y", {{"x", 9}}), 3, "global + branch: sqrt works");
+        auto msg = get_error([&]() { sys.resolve("y", {{"x", -1}}); });
+        ASSERT(!msg.empty(), "global + branch: negative x fails");
+    }
+
+    // Inverse through conditional equation
+    {
+        write_fw("/tmp/tcb_inv.fw",
+            "y = x * 2 : x >= 0\n"
+            "y = x * 3 : x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_inv.fw");
+        // Forward: x=5 → y=10 (first branch)
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 10, "cond inverse: forward x=5");
+        // Forward: x=-2 → y=-6 (second branch)
+        ASSERT_NUM(sys.resolve("y", {{"x", -2}}), -6, "cond inverse: forward x=-2");
+    }
+
+    // Derive with conditions: should show condition in output
+    {
+        write_fw("/tmp/tcb_derive.fw",
+            "y = sqrt(x) : x >= 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tcb_derive.fw");
+        auto r = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT_EQ(r, "sqrt(x)", "derive with condition: expression correct");
+    }
+}
+
 // ---- Recursion depth guard tests ----
 
 void test_recursion_depth_guard() {
@@ -6324,6 +6418,7 @@ int main() {
     test_condition_solving();
     test_condition_errors();
     test_global_conditions();
+    test_conditional_branching();
 
     // Recursion depth guard
     test_recursion_depth_guard();
