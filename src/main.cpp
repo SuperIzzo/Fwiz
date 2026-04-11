@@ -15,7 +15,8 @@ int main(int argc, char* argv[]) {
                   << "  --verify all   verify all known variables against all equations\n"
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
-                  << "  --numeric      enable numeric solving for nonlinear equations\n"
+                  << "  --no-numeric   disable numeric solving (algebraic only)\n"
+                  << "  --precision N  set numeric scan density (default 200)\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
@@ -29,7 +30,8 @@ int main(int argc, char* argv[]) {
         bool explore = false;
         bool explore_full = false;
         bool derive_mode = false;
-        bool numeric_mode = false;
+        bool numeric_mode = true;
+        int sys_samples = NUMERIC_DEFAULT_SAMPLES;
         std::string verify_arg;
         std::string query_str;
 
@@ -40,7 +42,13 @@ int main(int argc, char* argv[]) {
             else if (arg == "--explore")      explore = true;
             else if (arg == "--explore-full") { explore = true; explore_full = true; }
             else if (arg == "--derive")       derive_mode = true;
-            else if (arg == "--numeric")      numeric_mode = true;
+            else if (arg == "--no-numeric")   numeric_mode = false;
+            else if (arg == "--precision") {
+                if (i + 1 < argc) {
+                    try { sys_samples = std::stoi(argv[++i]); }
+                    catch (...) { std::cerr << "Error: --precision requires a number\n"; return 1; }
+                } else { std::cerr << "Error: --precision requires an argument\n"; return 1; }
+            }
             else if (arg == "--verify") {
                 if (i + 1 < argc) verify_arg = argv[++i];
                 else { std::cerr << "Error: --verify requires an argument (all or var1,var2,...)\n"; return 1; }
@@ -59,6 +67,7 @@ int main(int argc, char* argv[]) {
         FormulaSystem sys;
         sys.trace.level = level;
         sys.numeric_mode = numeric_mode;
+        sys.numeric_samples = sys_samples;
         sys.load_file(query.filename);
 
         // --- Derive mode ---

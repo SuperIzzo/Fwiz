@@ -916,14 +916,13 @@ constexpr int    NUMERIC_MAX_ITER      = 200;
 constexpr double NUMERIC_TOLERANCE     = 1e-10;
 constexpr double NUMERIC_DEFAULT_LO    = -1000.0;
 constexpr double NUMERIC_DEFAULT_HI    =  1000.0;
-constexpr int    NUMERIC_COARSE_POINTS = 200;
-constexpr int    NUMERIC_FINE_POINTS   = 1000;
+constexpr int    NUMERIC_DEFAULT_SAMPLES = 200;  // coarse scan points (fine = 5x)
 constexpr double NUMERIC_JITTER_FRAC   = 0.1;
 constexpr uint64_t NUMERIC_SEED        = 0x46'77'69'7A; // "Fwiz"
 
 static_assert(NUMERIC_MAX_ITER > 0 && NUMERIC_MAX_ITER <= 10000);
 static_assert(NUMERIC_TOLERANCE > 0 && NUMERIC_TOLERANCE < 1e-4);
-static_assert(NUMERIC_COARSE_POINTS >= 10 && NUMERIC_FINE_POINTS >= 100);
+static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 
 // Snap to nearest integer if within tolerance
 inline double snap_integer(double x, double tol = EPSILON_ZERO) {
@@ -989,7 +988,7 @@ inline std::optional<double> bisection_solve(
 // Deterministic: uses fixed seed for reproducible jitter.
 inline std::vector<std::pair<double, double>> adaptive_scan(
         const std::function<double(double)>& f, double lo, double hi,
-        bool integer_only = false) {
+        bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES) {
     struct Sample { double x, fx; };
     std::vector<Sample> samples;
 
@@ -1004,10 +1003,10 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
         // Coarse pass with deterministic jitter
         std::mt19937_64 rng(NUMERIC_SEED);
         std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
-        double step = (hi - lo) / NUMERIC_COARSE_POINTS;
-        for (int i = 0; i <= NUMERIC_COARSE_POINTS; i++) {
+        double step = (hi - lo) / n_samples;
+        for (int i = 0; i <= n_samples; i++) {
             double x = lo + i * step;
-            if (i > 0 && i < NUMERIC_COARSE_POINTS)
+            if (i > 0 && i < n_samples)
                 x += jitter(rng) * step; // jitter interior points
             double fx = f(x);
             if (std::isfinite(fx)) samples.push_back({x, fx});
@@ -1027,9 +1026,10 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
         }
 
         // Refine pass: add dense samples in regions of interest
+        int fine_points = n_samples * 5;
         int points_per_region = refine_regions.empty() ? 0
-            : NUMERIC_FINE_POINTS / static_cast<int>(refine_regions.size());
-        points_per_region = std::min(points_per_region, NUMERIC_FINE_POINTS);
+            : fine_points / static_cast<int>(refine_regions.size());
+        points_per_region = std::min(points_per_region, fine_points);
         for (auto& [rlo, rhi] : refine_regions) {
             // Expand region slightly
             double margin = (rhi - rlo) * 0.5;
@@ -1066,8 +1066,8 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
 // Uses adaptive scan to find intervals, then refines with Newton/bisection.
 inline std::vector<double> find_numeric_roots(
         const std::function<double(double)>& f, double lo, double hi,
-        bool integer_only = false) {
-    auto intervals = adaptive_scan(f, lo, hi, integer_only);
+        bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES) {
+    auto intervals = adaptive_scan(f, lo, hi, integer_only, n_samples);
     std::vector<double> roots;
 
     for (auto& [a, b] : intervals) {

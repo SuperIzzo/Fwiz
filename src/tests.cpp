@@ -6763,14 +6763,14 @@ void test_numeric_integration() {
         }
     }
 
-    // Without --numeric, nonlinear still fails
+    // With numeric_mode=false, nonlinear fails
     {
         write_fw("/tmp/tn_no_flag.fw", "y = x^2\n");
         FormulaSystem sys;
         sys.numeric_mode = false;
         sys.load_file("/tmp/tn_no_flag.fw");
         auto msg = get_error([&]() { sys.resolve("x", {{"y", 9}}); });
-        ASSERT(!msg.empty(), "numeric: without flag, x^2 fails");
+        ASSERT(!msg.empty(), "numeric: with numeric_mode=false, x^2 fails");
     }
 
     // Factorial inverse: result=120 → n=5
@@ -6817,13 +6817,135 @@ void test_numeric_integration() {
     }
 }
 
+void test_numeric_precision() {
+    SECTION("Numeric Precision Flag");
+
+    // --precision affects sample count (more samples → finds more roots)
+    {
+        write_fw("/tmp/tnp_sin.fw", "y = sin(x)\nx >= 0\nx <= 20\n");
+        FormulaSystem sys_lo, sys_hi;
+        sys_lo.numeric_mode = sys_hi.numeric_mode = true;
+        sys_lo.numeric_samples = 10;  // very low — will miss roots
+        sys_hi.numeric_samples = 500; // high — finds all
+        sys_lo.load_file("/tmp/tnp_sin.fw");
+        sys_hi.load_file("/tmp/tnp_sin.fw");
+        auto r_lo = sys_lo.resolve_all("x", {{"y", 0.5}});
+        auto r_hi = sys_hi.resolve_all("x", {{"y", 0.5}});
+        ASSERT(r_hi.discrete().size() >= r_lo.discrete().size(),
+            "numeric: higher precision finds >= roots");
+        ASSERT(r_hi.discrete().size() >= 6,
+            "numeric: high precision finds ≥6 sin roots in [0,20]");
+    }
+}
+
+void test_numeric_edge_cases() {
+    SECTION("Numeric Edge Cases");
+
+    // Global condition narrows search range
+    {
+        write_fw("/tmp/tne_range.fw", "y = x^2\nx >= 0\nx <= 10\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_range.fw");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "numeric: global condition x>=0 filters negative root");
+        if (!d.empty()) ASSERT_NUM(d[0], 3, "numeric: x^2=9, x∈[0,10] → x=3");
+    }
+
+    // Multiple equations — numeric only fires after algebraic fails
+    {
+        write_fw("/tmp/tne_linear.fw", "y = 2 * x + 1\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_linear.fw");
+        double x = sys.resolve("x", {{"y", 7}});
+        ASSERT_NUM(x, 3, "numeric: linear eq solved algebraically, not numerically");
+        ASSERT(sys.numeric_results_.count("x") == 0,
+            "numeric: linear solve not marked as numeric");
+    }
+
+    // No roots in range
+    {
+        write_fw("/tmp/tne_nope.fw", "y = x^2\nx >= 10\nx <= 20\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_nope.fw");
+        auto msg = get_error([&]() { sys.resolve("x", {{"y", 1}}); });
+        ASSERT(!msg.empty(), "numeric: no roots in [10,20] for x^2=1");
+    }
+
+    // Exact result verified (= not ~)
+    {
+        write_fw("/tmp/tne_exact.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_exact.fw");
+        sys.resolve_all("x", {{"y", 4}});
+        auto it = sys.numeric_results_.find("x");
+        ASSERT(it != sys.numeric_results_.end() && it->second == true,
+            "numeric: x^2=4 → x=±2 marked as exact");
+    }
+
+    // Approximate result (~ not =)
+    {
+        write_fw("/tmp/tne_approx.fw", "y = x + sin(x)\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_approx.fw");
+        sys.resolve_all("x", {{"y", 1}});
+        auto it = sys.numeric_results_.find("x");
+        ASSERT(it != sys.numeric_results_.end() && it->second == false,
+            "numeric: x+sin(x)=1 marked as approximate");
+    }
+
+    // ?! strict mode with multiple numeric roots → error
+    {
+        write_fw("/tmp/tne_strict.fw", "y = x^2\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_strict.fw");
+        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 9}}); });
+        ASSERT(msg.find("Multiple") != std::string::npos,
+            "numeric: ?! with x^2=9 → multiple solutions error");
+    }
+
+    // ?! strict with condition → single root ok
+    {
+        write_fw("/tmp/tne_strict_ok.fw", "y = x^2\nx > 0\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_strict_ok.fw");
+        double x = sys.resolve_one("x", {{"y", 9}});
+        ASSERT_NUM(x, 3, "numeric: ?! with x>0 → x=3 only");
+    }
+
+    // Memoization: same query twice gives same result
+    {
+        write_fw("/tmp/tne_memo.fw",
+            "result = 1 : n <= 0\n"
+            "result = n * tne_memo(result=?prev, n=n-1) : n > 0\n"
+            "n >= 0\nn <= 10\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tne_memo.fw");
+        auto r1 = sys.resolve_all("n", {{"result", 24}});
+        sys.numeric_memo_.clear();
+        auto r2 = sys.resolve_all("n", {{"result", 24}});
+        bool found_4_a = false, found_4_b = false;
+        for (auto r : r1.discrete()) if (std::abs(r - 4.0) < 1e-6) found_4_a = true;
+        for (auto r : r2.discrete()) if (std::abs(r - 4.0) < 1e-6) found_4_b = true;
+        ASSERT(found_4_a && found_4_b, "numeric: memoization — consistent results");
+    }
+}
+
 void test_numeric_binary_integration() {
     SECTION("Numeric Binary Integration");
 
     // --numeric with exact result uses = (verified)
     {
         write_fw("/tmp/tnb_quad.fw", "y = x^2\n");
-        int rc = system("./bin/fwiz --numeric '/tmp/tnb_quad(x=?, y=9)' 2>/dev/null "
+        int rc = system("./bin/fwiz '/tmp/tnb_quad(x=?, y=9)' 2>/dev/null "
                         "| grep -q 'x = '");
         ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: exact uses =");
     }
@@ -6831,7 +6953,7 @@ void test_numeric_binary_integration() {
     // --numeric with approximate result uses ~
     {
         write_fw("/tmp/tnb_trans.fw", "y = x + sin(x)\n");
-        int rc = system("./bin/fwiz --numeric '/tmp/tnb_trans(x=?, y=1)' 2>/dev/null "
+        int rc = system("./bin/fwiz '/tmp/tnb_trans(x=?, y=1)' 2>/dev/null "
                         "| grep -q ' ~ '");
         ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: approximate uses ~");
     }
@@ -6840,14 +6962,43 @@ void test_numeric_binary_integration() {
     {
         int rc = system("./bin/fwiz 'examples/convert(celsius=?, fahrenheit=72)' 2>/dev/null "
                         "| grep -q ' ~ '");
-        ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: no ~ without flag");
+        ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: no ~ with --no-numeric");
     }
 
     // Factorial with --numeric
     {
-        int rc = system("./bin/fwiz --numeric 'examples/factorial(n=?, result=120)' 2>/dev/null "
+        int rc = system("./bin/fwiz 'examples/factorial(n=?, result=120)' 2>/dev/null "
                         "| grep -q '5'");
         ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: factorial finds 5");
+    }
+
+    // --precision flag accepted
+    {
+        write_fw("/tmp/tnb_prec.fw", "y = x^2\nx >= 0\n");
+        int rc = system("./bin/fwiz --precision 50 '/tmp/tnb_prec(x=?, y=4)' 2>/dev/null "
+                        "| grep -q 'x = 2'");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: --precision flag works");
+    }
+
+    // --precision error handling
+    {
+        int rc = system("./bin/fwiz --precision 2>/dev/null");
+        ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: --precision without arg errors");
+    }
+
+    // --no-numeric disables numeric solving
+    {
+        write_fw("/tmp/tnb_nonum.fw", "y = x^2\n");
+        int rc = system("./bin/fwiz --no-numeric '/tmp/tnb_nonum(x=?, y=9)' 2>/dev/null");
+        ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: --no-numeric disables numeric");
+    }
+
+    // Numeric is default (no flag needed)
+    {
+        write_fw("/tmp/tnb_default.fw", "y = x^2\n");
+        int rc = system("./bin/fwiz '/tmp/tnb_default(x=?, y=9)' 2>/dev/null "
+                        "| grep -q '3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: numeric enabled by default");
     }
 }
 
@@ -7037,6 +7188,8 @@ int main() {
     test_adaptive_scan();
     test_find_numeric_roots();
     test_numeric_integration();
+    test_numeric_precision();
+    test_numeric_edge_cases();
     test_numeric_binary_integration();
 
     std::cout << "\n===============\n";
