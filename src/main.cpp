@@ -108,10 +108,15 @@ int main(int argc, char* argv[]) {
                         std::cout << q.alias << " = " << fmt_num(result) << '\n';
                         solved[q.variable] = result;
                     } else {
-                        auto results = sys.resolve_all(q.variable, query.bindings);
-                        for (auto r : results)
-                            std::cout << q.alias << " = " << fmt_num(r) << '\n';
-                        if (!results.empty()) solved[q.variable] = results[0];
+                        auto result = sys.resolve_all(q.variable, query.bindings);
+                        if (result.is_discrete()) {
+                            for (auto r : result.discrete())
+                                std::cout << q.alias << " = " << fmt_num(r) << '\n';
+                            if (!result.discrete().empty())
+                                solved[q.variable] = result.discrete()[0];
+                        } else {
+                            std::cout << q.alias << " : " << result.to_string() << '\n';
+                        }
                     }
                 } catch (const std::exception& e) {
                     if (has_verify) {

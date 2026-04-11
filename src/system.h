@@ -38,6 +38,64 @@ struct CondClause {
 struct Condition {
     std::vector<CondClause> clauses;
     std::vector<CondLogic> connectors; // size = clauses.size() - 1
+
+    // Convert condition to a ValueSet for a specific variable
+    // Only works for simple conditions like "x > 0", "x <= 10"
+    ValueSet to_valueset(const std::string& var,
+                         const std::map<std::string, double>& bindings = {}) const {
+        ValueSet result = ValueSet::all();
+        for (size_t i = 0; i < clauses.size(); i++) {
+            auto& c = clauses[i];
+            // Check if this clause constrains `var`
+            bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
+            bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
+            if (!lhs_is_var && !rhs_is_var) continue;
+
+            // Try to evaluate the other side
+            ExprPtr other = lhs_is_var ? c.rhs : c.lhs;
+            ExprPtr resolved = other;
+            std::set<std::string> vars;
+            collect_vars(other, vars);
+            for (auto& v : vars) {
+                if (auto it = bindings.find(v); it != bindings.end())
+                    resolved = substitute(resolved, v, Expr::Num(it->second));
+                else return ValueSet::all(); // can't evaluate — return unconstrained
+            }
+            double val;
+            try { val = evaluate(*simplify(resolved)); }
+            catch (...) { return ValueSet::all(); }
+
+            // Build ValueSet from operator (flip if var is on RHS)
+            CondOp op = c.op;
+            if (rhs_is_var) {
+                // Flip: "5 > x" becomes "x < 5"
+                switch (op) {
+                    case CondOp::GT: op = CondOp::LT; break;
+                    case CondOp::GE: op = CondOp::LE; break;
+                    case CondOp::LT: op = CondOp::GT; break;
+                    case CondOp::LE: op = CondOp::GE; break;
+                    default: break;
+                }
+            }
+
+            ValueSet clause_set;
+            switch (op) {
+                case CondOp::GT: clause_set = ValueSet::gt(val); break;
+                case CondOp::GE: clause_set = ValueSet::ge(val); break;
+                case CondOp::LT: clause_set = ValueSet::lt(val); break;
+                case CondOp::LE: clause_set = ValueSet::le(val); break;
+                case CondOp::EQ: clause_set = ValueSet::eq(val); break;
+                case CondOp::NE: clause_set = ValueSet::ne(val); break;
+                case CondOp::COUNT_: break;
+            }
+
+            if (i == 0 || (i > 0 && connectors[i-1] == CondLogic::AND))
+                result = result.intersect(clause_set);
+            else
+                result = result.unite(clause_set);
+        }
+        return result;
+    }
 };
 
 struct Equation {
@@ -242,25 +300,45 @@ public:
         return solve_recursive(target, prepared, {}, 0);
     }
 
-    std::vector<double> resolve_all(const std::string& target,
-                                     std::map<std::string, double> bindings) const {
+    ValueSet resolve_all(const std::string& target,
+                          std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         auto prepared = prepare_bindings(target, bindings);
-        if (auto it = prepared.find(target); it != prepared.end()) return {it->second};
-        return solve_all(target, prepared, {}, 0);
+        if (auto it = prepared.find(target); it != prepared.end())
+            return ValueSet::eq(it->second);
+
+        // Try solving for exact values
+        try {
+            auto results = solve_all(target, prepared, {}, 0);
+            return ValueSet::discrete(results);
+        } catch (...) {}
+
+        // No exact solution — collect constraints from conditions
+        ValueSet constraints = ValueSet::all();
+        for (auto& eq : equations)
+            if (eq.lhs_var == target && eq.condition)
+                constraints = constraints.intersect(eq.condition->to_valueset(target, prepared));
+        for (auto& gc : global_conditions)
+            constraints = constraints.intersect(gc.to_valueset(target, prepared));
+
+        if (!constraints.empty() && constraints.to_string() != ValueSet::all().to_string())
+            return constraints;
+
+        throw std::runtime_error("Cannot solve for '" + target + "'");
     }
 
     double resolve_one(const std::string& target,
                         std::map<std::string, double> bindings) const {
-        auto results = resolve_all(target, std::move(bindings));
-        if (results.empty())
-            throw std::runtime_error("Cannot solve for '" + target + "'");
-        if (results.size() > 1) {
+        auto result = resolve_all(target, std::move(bindings));
+        auto& disc = result.discrete();
+        if (disc.empty())
+            throw std::runtime_error("Cannot solve for '" + target + "': result is a range " + result.to_string());
+        if (disc.size() > 1) {
             std::string vals;
-            for (auto r : results) vals += (vals.empty() ? "" : ", ") + fmt_num(r);
+            for (auto r : disc) vals += (vals.empty() ? "" : ", ") + fmt_num(r);
             throw std::runtime_error("Multiple solutions for '" + target + "': " + vals);
         }
-        return results[0];
+        return disc[0];
     }
 
 private:

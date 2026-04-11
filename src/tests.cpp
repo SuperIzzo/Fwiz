@@ -5226,16 +5226,10 @@ void test_multiple_returns() {
             "x = -sqrt(y)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_multi.fw");
-        auto results = sys.resolve_all("x", {{"y", 9}});
-        ASSERT(results.size() == 2, "two solutions found");
-        // Should contain 3 and -3
-        bool has_pos = false, has_neg = false;
-        for (auto r : results) {
-            if (std::abs(r - 3) < 1e-6) has_pos = true;
-            if (std::abs(r + 3) < 1e-6) has_neg = true;
-        }
-        ASSERT(has_pos, "has positive root");
-        ASSERT(has_neg, "has negative root");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        ASSERT(result.discrete().size() == 2, "two solutions found");
+        ASSERT(result.contains(3), "has positive root");
+        ASSERT(result.contains(-3), "has negative root");
     }
 
     // Single equation: one result
@@ -5243,9 +5237,9 @@ void test_multiple_returns() {
         write_fw("/tmp/tmr_single.fw", "y = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_single.fw");
-        auto results = sys.resolve_all("y", {{"x", 5}});
-        ASSERT(results.size() == 1, "one solution");
-        ASSERT_NUM(results[0], 6, "y = 6");
+        auto result = sys.resolve_all("y", {{"x", 5}});
+        ASSERT(result.discrete().size() == 1, "one solution");
+        ASSERT_NUM(result.discrete()[0], 6, "y = 6");
     }
 
     // Conditions filter results
@@ -5255,9 +5249,8 @@ void test_multiple_returns() {
             "x = -sqrt(y) : x < 0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_cond.fw");
-        // Both solutions valid for y=9
-        auto all = sys.resolve_all("x", {{"y", 9}});
-        ASSERT(all.size() == 2, "both branches valid");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        ASSERT(result.discrete().size() == 2, "both branches valid");
     }
 
     // Deduplication: same result from different equations
@@ -5267,8 +5260,22 @@ void test_multiple_returns() {
             "y = 1 + x\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_dedup.fw");
-        auto results = sys.resolve_all("y", {{"x", 5}});
-        ASSERT(results.size() == 1, "deduplicated: one result");
+        auto result = sys.resolve_all("y", {{"x", 5}});
+        ASSERT(result.discrete().size() == 1, "deduplicated: one result");
+    }
+
+    // Range return: only constraints, no exact solution
+    {
+        write_fw("/tmp/tmr_range.fw",
+            "x > 0\n"
+            "x <= 100\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tmr_range.fw");
+        auto result = sys.resolve_all("x", {});
+        ASSERT(!result.is_discrete(), "range: not discrete");
+        ASSERT(result.contains(50), "range: contains 50");
+        ASSERT(!result.contains(-1), "range: not -1");
+        ASSERT(!result.contains(101), "range: not 101");
     }
 
     // resolve_one: succeeds with single result
