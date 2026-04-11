@@ -7,8 +7,14 @@
 #include <set>
 #include <map>
 #include <vector>
+#include <optional>
 #include <stdexcept>
 #include <functional>
+
+// Thresholds used throughout the solver
+constexpr double EPSILON_ZERO = 1e-12;   // treat |x| < this as zero (coefficient guard, like-term combining)
+constexpr double EPSILON_REL  = 1e-9;    // relative tolerance for verify mode (approx_equal)
+constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 
 // ============================================================================
 //  Expression tree
@@ -295,7 +301,7 @@ inline ExprPtr rebuild_additive(const std::vector<std::pair<double, ExprPtr>>& t
 
     ExprPtr result = nullptr;
     for (auto& [coeff, base] : terms) {
-        if (std::abs(coeff) < 1e-12) continue; // skip zero terms
+        if (std::abs(coeff) < EPSILON_ZERO) continue; // skip zero terms
         auto term = make_term(std::abs(coeff), base);
         if (!result) {
             result = (coeff < 0) ? Expr::Neg(term) : term;
@@ -344,7 +350,7 @@ inline ExprPtr rebuild_multiplicative(double coeff,
 
     std::vector<ExprPtr> parts;
     for (auto& [base, exp] : factors) {
-        if (std::abs(exp) < 1e-12) continue; // base^0 = 1, skip
+        if (std::abs(exp) < EPSILON_ZERO) continue; // base^0 = 1, skip
         parts.push_back(make_factor(base, exp));
     }
 
@@ -389,7 +395,76 @@ inline void group_multiplicative(std::vector<std::pair<ExprPtr, double>>& factor
     }
 }
 
-// ---- Simplify ----
+// ---- Simplify: per-operator helpers ----
+
+inline ExprPtr simplify_additive(const ExprPtr& combined) {
+    std::vector<std::pair<double, ExprPtr>> terms;
+    flatten_additive(combined, 1.0, terms);
+    double constant = 0;
+    std::vector<std::pair<double, ExprPtr>> symbolic;
+    for (auto& [c, b] : terms) {
+        if (!b) constant += c;
+        else    symbolic.push_back({c, b});
+    }
+    group_additive(symbolic);
+    if (std::abs(constant) >= EPSILON_ZERO)
+        symbolic.push_back({constant, nullptr});
+    return rebuild_additive(symbolic);
+}
+
+inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
+    if (is_zero(l) || is_zero(r)) return Expr::Num(0);
+    auto combined = Expr::BinOpExpr(BinOp::MUL, l, r);
+    double coeff = 1.0;
+    std::vector<std::pair<ExprPtr, double>> factors;
+    flatten_multiplicative(combined, coeff, factors);
+    group_multiplicative(factors);
+    return rebuild_multiplicative(coeff, factors);
+}
+
+inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
+    if (is_zero(l)) return Expr::Num(0);
+    if (is_one(r)) return l;
+    if (is_neg_one(r)) return Expr::Neg(l);
+    if (is_neg_num(r))
+        return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
+    if (is_neg(l) && is_neg(r))
+        return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
+    if (is_neg(l))
+        return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
+    // Constant reassociation: (K * a) / K2 or (a * K) / K2
+    if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
+        if (is_num(l->right))
+            return Expr::BinOpExpr(BinOp::MUL, l->left, Expr::Num(l->right->num / r->num));
+        if (is_num(l->left))
+            return Expr::BinOpExpr(BinOp::MUL, Expr::Num(l->left->num / r->num), l->right);
+    }
+    if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::DIV && is_num(l->right))
+        return Expr::BinOpExpr(BinOp::DIV, l->left, Expr::Num(l->right->num * r->num));
+    // Cross-term cancellation: flatten both sides, cancel matching bases
+    double lc = 1.0, rc = 1.0;
+    std::vector<std::pair<ExprPtr, double>> lf, rf;
+    flatten_multiplicative(l, lc, lf);
+    flatten_multiplicative(r, rc, rf);
+    bool changed = false;
+    for (auto& [lb, le] : lf) {
+        if (!lb) continue;
+        for (auto& [rb, re] : rf) {
+            if (!rb) continue;
+            if (expr_equal(lb, rb)) { le -= re; re = 0; rb = nullptr; changed = true; }
+        }
+    }
+    if (changed) {
+        auto top = rebuild_multiplicative(lc, lf);
+        auto bot = rebuild_multiplicative(rc, rf);
+        if (is_one(bot)) return top;
+        if (is_neg_one(bot)) return Expr::Neg(top);
+        return Expr::BinOpExpr(BinOp::DIV, top, bot);
+    }
+    return Expr::BinOpExpr(BinOp::DIV, l, r);
+}
+
+// ---- Simplify: main entry ----
 
 inline ExprPtr simplify_once(const ExprPtr& e) {
     if (!e) return e;
@@ -402,26 +477,10 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             auto c = simplify_once(e->child);
             if (is_num(c)) return Expr::Num(-c->num);
             if (is_neg(c)) return c->child;
-            // Negate an additive expression: flatten with -1 sign
-            if (c->type == ExprType::BINOP && is_additive(c->op)) {
-                std::vector<std::pair<double, ExprPtr>> terms;
-                flatten_additive(c, -1.0, terms);
-                double constant = 0;
-                std::vector<std::pair<double, ExprPtr>> symbolic;
-                for (auto& [coeff, base] : terms) {
-                    if (!base) constant += coeff;
-                    else symbolic.push_back({coeff, base});
-                }
-                group_additive(symbolic);
-                if (std::abs(constant) >= 1e-12)
-                    symbolic.push_back({constant, nullptr});
-                return rebuild_additive(symbolic);
-            }
-            // Negate a division: push negation through
-            if (c->type == ExprType::BINOP && c->op == BinOp::DIV) {
-                // -(a/b) → (-a)/b, let DIV rules handle double negation
+            if (c->type == ExprType::BINOP && is_additive(c->op))
+                return simplify_additive(Expr::Neg(c));
+            if (c->type == ExprType::BINOP && c->op == BinOp::DIV)
                 return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(c->left), c->right);
-            }
             return Expr::Neg(c);
         }
 
@@ -440,104 +499,19 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
         case ExprType::BINOP: {
             auto l = simplify_once(e->left);
             auto r = simplify_once(e->right);
-
-            // Constant fold
             if (is_num(l) && is_num(r))
                 return Expr::Num(binop_info(e->op).eval(l->num, r->num));
 
-            if (is_additive(e->op)) {
-                // Flatten, group, rebuild
-                auto combined = Expr::BinOpExpr(e->op, l, r);
-                std::vector<std::pair<double, ExprPtr>> terms;
-                flatten_additive(combined, 1.0, terms);
-
-                // Collect bare constants
-                double constant = 0;
-                std::vector<std::pair<double, ExprPtr>> symbolic;
-                for (auto& [c, b] : terms) {
-                    if (!b) constant += c;
-                    else    symbolic.push_back({c, b});
-                }
-
-                // Group like terms
-                group_additive(symbolic);
-
-                // Add constant back if nonzero
-                if (std::abs(constant) >= 1e-12)
-                    symbolic.push_back({constant, nullptr});
-
-                return rebuild_additive(symbolic);
+            switch (e->op) {
+                case BinOp::ADD: case BinOp::SUB:
+                    return simplify_additive(Expr::BinOpExpr(e->op, l, r));
+                case BinOp::MUL: return simplify_mul(l, r);
+                case BinOp::DIV: return simplify_div(l, r);
+                case BinOp::POW:
+                    if (is_zero(r)) return Expr::Num(1);
+                    if (is_one(r)) return l;
+                    return Expr::BinOpExpr(BinOp::POW, l, r);
             }
-
-            if (e->op == BinOp::MUL) {
-                if (is_zero(l) || is_zero(r)) return Expr::Num(0);
-
-                // Flatten MUL chain, group, rebuild
-                auto combined = Expr::BinOpExpr(BinOp::MUL, l, r);
-                double coeff = 1.0;
-                std::vector<std::pair<ExprPtr, double>> factors;
-                flatten_multiplicative(combined, coeff, factors);
-                group_multiplicative(factors);
-                return rebuild_multiplicative(coeff, factors);
-            }
-
-            if (e->op == BinOp::DIV) {
-                if (is_zero(l)) return Expr::Num(0);
-                if (is_one(r)) return l;
-                if (is_neg_one(r)) return Expr::Neg(l);
-                if (is_neg_num(r))
-                    return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
-                if (is_neg(l) && is_neg(r))
-                    return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
-                if (is_neg(l))
-                    return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
-                // Constant reassociation: (K * a) / K2 or (a * K) / K2
-                if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
-                    if (is_num(l->right))
-                        return Expr::BinOpExpr(BinOp::MUL, l->left, Expr::Num(l->right->num / r->num));
-                    if (is_num(l->left))
-                        return Expr::BinOpExpr(BinOp::MUL, Expr::Num(l->left->num / r->num), l->right);
-                }
-                if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::DIV && is_num(l->right))
-                    return Expr::BinOpExpr(BinOp::DIV, l->left, Expr::Num(l->right->num * r->num));
-                // Self-division and power-aware: flatten both sides, cancel
-                {
-                    double lc = 1.0, rc = 1.0;
-                    std::vector<std::pair<ExprPtr, double>> lf, rf;
-                    flatten_multiplicative(l, lc, lf);
-                    flatten_multiplicative(r, rc, rf);
-                    // Cancel matching bases
-                    bool changed = false;
-                    for (auto& [lb, le] : lf) {
-                        if (!lb) continue;
-                        for (auto& [rb, re] : rf) {
-                            if (!rb) continue;
-                            if (expr_equal(lb, rb)) {
-                                le -= re;
-                                re = 0;
-                                rb = nullptr;
-                                changed = true;
-                            }
-                        }
-                    }
-                    if (changed) {
-                        auto top = rebuild_multiplicative(lc, lf);
-                        auto bot = rebuild_multiplicative(rc, rf);
-                        // If denominator simplified to 1, just return numerator
-                        if (bot->type == ExprType::NUM && bot->num == 1.0) return top;
-                        if (bot->type == ExprType::NUM && bot->num == -1.0) return Expr::Neg(top);
-                        return Expr::BinOpExpr(BinOp::DIV, top, bot);
-                    }
-                }
-                return Expr::BinOpExpr(BinOp::DIV, l, r);
-            }
-
-            if (e->op == BinOp::POW) {
-                if (is_zero(r)) return Expr::Num(1);
-                if (is_one(r)) return l;
-            }
-
-            return Expr::BinOpExpr(e->op, l, r);
         }
     }
     return e;
@@ -545,7 +519,7 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
 
 inline ExprPtr simplify(const ExprPtr& e) {
     ExprPtr cur = e;
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < SIMPLIFY_MAX_ITER; i++) {
         auto next = simplify_once(cur);
         if (expr_equal(next, cur)) break;
         cur = next;
@@ -557,13 +531,13 @@ inline ExprPtr simplify(const ExprPtr& e) {
 //  Linear solver: decompose expr into coeff * target + rest
 // ============================================================================
 
-struct LinearForm { ExprPtr coeff, rest; bool ok; };
+struct LinearForm { ExprPtr coeff, rest; };
 
-inline LinearForm decompose_linear(const ExprPtr& e, const std::string& t) {
-    if (!e) return {Expr::Num(0), Expr::Num(0), true};
+inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::string& t) {
+    if (!e) return LinearForm{Expr::Num(0), Expr::Num(0)};
 
-    auto ok = [](ExprPtr c, ExprPtr r) { return LinearForm{c, r, true}; };
-    auto fail = []() { return LinearForm{nullptr, nullptr, false}; };
+    auto ok = [](ExprPtr c, ExprPtr r) -> std::optional<LinearForm> { return LinearForm{c, r}; };
+    auto fail = []() -> std::optional<LinearForm> { return std::nullopt; };
     auto S = simplify;
 
     switch (e->type) {
@@ -575,18 +549,18 @@ inline LinearForm decompose_linear(const ExprPtr& e, const std::string& t) {
                                   : ok(Expr::Num(0), e);
 
         case ExprType::UNARY_NEG: {
-            auto [c, r, v] = decompose_linear(e->child, t);
-            return v ? ok(S(Expr::Neg(c)), S(Expr::Neg(r))) : fail();
+            auto d = decompose_linear(e->child, t);
+            return d ? ok(S(Expr::Neg(d->coeff)), S(Expr::Neg(d->rest))) : fail();
         }
 
         case ExprType::BINOP:
             switch (e->op) {
                 case BinOp::ADD: case BinOp::SUB: {
-                    auto [lc, lr, lv] = decompose_linear(e->left, t);
-                    auto [rc, rr, rv] = decompose_linear(e->right, t);
-                    if (!lv || !rv) return fail();
-                    return ok(S(Expr::BinOpExpr(e->op, lc, rc)),
-                              S(Expr::BinOpExpr(e->op, lr, rr)));
+                    auto ld = decompose_linear(e->left, t);
+                    auto rd = decompose_linear(e->right, t);
+                    if (!ld || !rd) return fail();
+                    return ok(S(Expr::BinOpExpr(e->op, ld->coeff, rd->coeff)),
+                              S(Expr::BinOpExpr(e->op, ld->rest, rd->rest)));
                 }
                 case BinOp::MUL: {
                     bool lh = contains_var(e->left, t), rh = contains_var(e->right, t);
@@ -594,15 +568,15 @@ inline LinearForm decompose_linear(const ExprPtr& e, const std::string& t) {
                     if (!lh && !rh) return ok(Expr::Num(0), e);
                     auto [side, factor] = lh ? std::pair{e->left, e->right}
                                              : std::pair{e->right, e->left};
-                    auto [c, r, v] = decompose_linear(side, t);
-                    return v ? ok(S(Expr::BinOpExpr(BinOp::MUL, factor, c)),
-                                  S(Expr::BinOpExpr(BinOp::MUL, factor, r))) : fail();
+                    auto d = decompose_linear(side, t);
+                    return d ? ok(S(Expr::BinOpExpr(BinOp::MUL, factor, d->coeff)),
+                                  S(Expr::BinOpExpr(BinOp::MUL, factor, d->rest))) : fail();
                 }
                 case BinOp::DIV: {
                     if (contains_var(e->right, t)) return fail();
-                    auto [c, r, v] = decompose_linear(e->left, t);
-                    return v ? ok(S(Expr::BinOpExpr(BinOp::DIV, c, e->right)),
-                                  S(Expr::BinOpExpr(BinOp::DIV, r, e->right))) : fail();
+                    auto d = decompose_linear(e->left, t);
+                    return d ? ok(S(Expr::BinOpExpr(BinOp::DIV, d->coeff, e->right)),
+                                  S(Expr::BinOpExpr(BinOp::DIV, d->rest, e->right))) : fail();
                 }
                 case BinOp::POW:
                     if (contains_var(e->left, t) || contains_var(e->right, t)) return fail();
@@ -618,16 +592,16 @@ inline LinearForm decompose_linear(const ExprPtr& e, const std::string& t) {
 
 inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::string& target) {
     auto combined = simplify(Expr::BinOpExpr(BinOp::SUB, lhs, rhs));
-    auto [coeff, rest, ok] = decompose_linear(combined, target);
-    if (!ok) return nullptr;
+    auto decomp = decompose_linear(combined, target);
+    if (!decomp) return nullptr;
 
-    auto sc = simplify(coeff);
-    if (is_num(sc) && std::abs(sc->num) < 1e-12) return nullptr;
+    auto sc = simplify(decomp->coeff);
+    if (is_num(sc) && std::abs(sc->num) < EPSILON_ZERO) return nullptr;
 
-    auto sr = simplify(rest);
+    auto sr = simplify(decomp->rest);
     // If rest is zero and coeff is symbolic, the equation is coeff * target = 0.
     // Reject to avoid spurious zeros from underdetermined systems.
-    if (is_num(sr) && std::abs(sr->num) < 1e-12 && !is_num(sc))
+    if (is_num(sr) && std::abs(sr->num) < EPSILON_ZERO && !is_num(sc))
         return nullptr;
 
     // coeff · target + rest = 0  →  target = −rest / coeff
