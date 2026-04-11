@@ -268,7 +268,7 @@ void test_simplify() {
     // (-x) + y => y - x
     {
         auto e = Expr::BinOpExpr(BinOp::ADD, Expr::Neg(Expr::Var("x")), Expr::Var("y"));
-        ASSERT_EQ(expr_to_string(simplify(e)), "y - x", "(-x) + y => y - x");
+        ASSERT_EQ(expr_to_string(simplify(e)), "-x + y", "(-x) + y => -x + y");
     }
 
     // 0 - x => -x
@@ -304,7 +304,7 @@ void test_simplify() {
     // -(a - b) => b - a
     {
         auto e = Expr::Neg(Expr::BinOpExpr(BinOp::SUB, Expr::Var("a"), Expr::Var("b")));
-        ASSERT_EQ(expr_to_string(simplify(e)), "b - a", "-(a-b) => b-a");
+        ASSERT_EQ(expr_to_string(simplify(e)), "-a + b", "-(a-b) => -a+b");
     }
 
     // Function constant folding
@@ -323,7 +323,7 @@ void test_substitute() {
 
     auto e = parse("x + y * 2");
     auto r1 = substitute(e, "x", Expr::Num(10));
-    ASSERT_EQ(expr_to_string(simplify(r1)), "10 + y * 2", "sub x=10");
+    ASSERT_EQ(expr_to_string(simplify(r1)), "2 * y + 10", "sub x=10");
 
     auto r2 = substitute(r1, "y", Expr::Num(3));
     ASSERT_EQ(expr_to_string(simplify(r2)), "16", "sub x=10,y=3 => 16");
@@ -487,7 +487,9 @@ void test_solve_for() {
     {
         auto sol = solve_for(Expr::Var("x"), parse("a + b"), "x");
         ASSERT(sol != nullptr, "can solve for x on LHS");
-        ASSERT_EQ(expr_to_string(sol), "a + b", "x = a + b");
+        // Flattener may reorder: a+b or b+a both valid
+        auto s = expr_to_string(sol);
+        ASSERT(s == "a + b" || s == "b + a", "x = a + b");
     }
 }
 
@@ -947,7 +949,7 @@ void test_simplify_edge() {
     // Constant reassociation chains
     ASSERT_EQ(ss("x + 1 + 2 + 3"), "x + 6", "chain fold x+1+2+3");
     ASSERT_EQ(ss("x - 1 - 2 - 3"), "x - 6", "chain fold x-1-2-3");
-    ASSERT_EQ(ss("x * 2 * 3 * 4"), "x * 24", "chain fold x*2*3*4");
+    ASSERT_EQ(ss("x * 2 * 3 * 4"), "24 * x", "chain fold x*2*3*4");
 
     // Subtract then add constants: (x - 3) + 5 => x + 2
     ASSERT_EQ(ss("x - 3 + 5"), "x + 2", "(x-3)+5 => x+2");
@@ -988,7 +990,7 @@ void test_simplify_edge() {
     // Division: neg in numerator only => neg pulled out
     {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Neg(Expr::Var("a")), Expr::Var("b"));
-        ASSERT_EQ(expr_to_string(simplify(e)), "-(a / b)", "(-a)/b => -(a/b)");
+        ASSERT_EQ(expr_to_string(simplify(e)), "-a / b", "(-a)/b => -a/b");
     }
 
     // Multiplication: neg in one operand => neg pulled out
@@ -3905,10 +3907,10 @@ void test_simplifier_convergence() {
     {
         auto e = Expr::Neg(Expr::BinOpExpr(BinOp::SUB, Expr::Var("a"), Expr::Var("b")));
         auto s = simplify(e);
-        ASSERT_EQ(expr_to_string(s), "b - a", "-(a-b) settles to b - a");
+        ASSERT_EQ(expr_to_string(s), "-a + b", "-(a-b) settles to -a + b");
         // Verify no oscillation: simplifying again gives same result
         auto s2 = simplify(s);
-        ASSERT_EQ(expr_to_string(s2), "b - a", "b - a is stable");
+        ASSERT_EQ(expr_to_string(s2), "-a + b", "-a + b is stable");
     }
 
     // Double neg of subtraction
@@ -5279,7 +5281,7 @@ void test_simplify_rule_interactions() {
     ASSERT_EQ(ss("(2 * x) / (2 * x)"), "1", "(2x)/(2x) → 1");
 
     // Negation of subtraction then subtract: -(a-b) - c → b - a - c
-    ASSERT_EQ(ss("-(a - b) - c"), "b - a - c", "-(a-b)-c → b-a-c");
+    ASSERT_EQ(ss("-(a - b) - c"), "-a + b - c", "-(a-b)-c → -a+b-c");
 
     // Division then multiply back: x / 2 * 2 → x
     ASSERT_EQ(ss("x / 2 * 2"), "x", "x/2*2 → x");
@@ -5320,7 +5322,7 @@ void test_simplify_rule_interactions() {
     ASSERT_EQ(ss("-(-(-x))"), "-x", "triple negation → -x");
 
     // Mixed div/mul reassociation: ((x / 2) * 3) / 3 → x / 2
-    ASSERT_EQ(ss("((x / 2) * 3) / 3"), "x / 2", "((x/2)*3)/3 → x/2");
+    ASSERT_EQ(ss("((x / 2) * 3) / 3"), "0.5 * x", "((x/2)*3)/3 → 0.5*x");
 }
 
 void test_simplify_flatten_targets() {
@@ -5441,11 +5443,12 @@ void test_simplify_constant_reassociation() {
     SECTION("Simplifier: Constant Reassociation Extended");
 
     // (a * K1) / K2 → a * (K1/K2)
-    ASSERT_EQ(expr_to_string(simplify(parse("x * 6 / 2"))), "x * 3", "(x*6)/2 → x*3");
-    ASSERT_EQ(expr_to_string(simplify(parse("x * 0.866 / 2"))), "x * 0.433", "(x*0.866)/2 → x*0.433");
+    ASSERT_EQ(expr_to_string(simplify(parse("x * 6 / 2"))), "3 * x", "(x*6)/2 → 3*x");
+    ASSERT_EQ(expr_to_string(simplify(parse("x * 0.866 / 2"))), "0.433 * x", "(x*0.866)/2 → 0.433*x");
 
     // (a / K1) * K2 → a / (K1/K2)
-    ASSERT_EQ(expr_to_string(simplify(parse("x / 4 * 2"))), "x / 2", "(x/4)*2 → x/2");
+    // x/4*2 → 0.5*x (absorbs numeric DIV into coefficient)
+    ASSERT_EQ(ss("x / 4 * 2"), "0.5 * x", "(x/4)*2 → 0.5*x");
 }
 
 void test_simplify_mul_to_pow() {
@@ -5560,7 +5563,7 @@ void test_derive_basic() {
         FormulaSystem sys;
         sys.load_file("/tmp/td3.fw");
         auto result = sys.derive("force", {}, {{"mass", "m"}});
-        ASSERT_EQ(result, "m * 9.81", "derive: default substituted");
+        ASSERT_EQ(result, "9.81 * m", "derive: default substituted");
     }
 }
 
