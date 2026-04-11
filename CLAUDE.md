@@ -10,7 +10,7 @@ fwiz is a bidirectional formula solver. You write equations once in `.fw` files,
 
 ```bash
 make              # build fwiz binary (requires C++17, GCC 7+ or Clang 5+)
-make test         # build + run all functional tests (678 tests)
+make test         # build + run all functional tests
 make sanitize     # run ASan + UBSan sanitizer checks
 make asan         # AddressSanitizer only
 make ubsan        # UndefinedBehaviorSanitizer only
@@ -29,7 +29,7 @@ Key modules:
 - **lexer.h** — Tokenizer. Does not handle scientific notation or newlines (file parser splits lines first).
 - **parser.h** — Recursive descent parser. Known limitation: `^` is not right-associative.
 - **expr.h** — Core algebra engine. `decompose_linear()` is the key function: decomposes expressions into `coeff * target + rest`. `solve_for()` uses this to isolate variables. `simplify()` runs to fixpoint (max 20 iterations).
-- **system.h** — `FormulaSystem` class. Loads `.fw` files, stores equations/defaults, runs recursive solving with three strategies: direct evaluation, algebraic inversion, and substitution via shared variables. Results validated against NaN/infinity.
+- **system.h** — `FormulaSystem` class. Loads `.fw` files, stores equations/defaults/formula calls, runs recursive solving with six strategies: direct evaluation, algebraic inversion, forward formula call, substitution via shared variables, reverse formula call through bindings. Results validated against NaN/infinity. Formula calls are extracted from the token stream before expression parsing — the parser never sees them.
 - **trace.h** — Three trace levels (NONE, STEPS, CALC). Output goes to stderr.
 - **main.cpp** — CLI parsing and flag handling.
 - **tests.cpp** — All tests with a minimal built-in assertion framework (no test library).
@@ -46,6 +46,17 @@ Key modules:
 1. Add evaluation dispatch in `evaluate()` in `expr.h`
 2. Consider nonlinearity — most functions make `decompose_linear()` return `ok=false`
 3. Add tests in `tests.cpp`
+
+## Cross-file formula calls
+
+Formula calls let `.fw` files reference equations from other files:
+```
+rectangle(area=?floor, width=width, height=depth)   # standalone with alias
+floor = rectangle(area=?, width=width, height=depth) # implied alias (equivalent)
+volume = rectangle(area=?floor, width=w, height=d) * h  # inline in expression
+```
+
+Arguments: `area=?` (query), `area=?alias` (query+alias), `width=width` (binding), `width` (shorthand), `height=depth` (rename). Only the alias/output name enters parent scope. Bindings are bidirectional — providing the output bridges to the query variable, and solving for a bound parent variable resolves through the sub-system.
 
 ## Extending the solver
 

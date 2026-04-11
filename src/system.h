@@ -7,6 +7,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -30,12 +31,43 @@ struct Equation {
     ExprPtr rhs;
 };
 
+struct VerifyResult {
+    std::string equation_desc;
+    double computed;
+    bool pass;
+};
+
+struct FormulaCall {
+    std::string file_stem;    // e.g. "rectangle"
+    std::string query_var;    // internal to sub-system, e.g. "area"
+    std::string output_var;   // exposed to parent scope, e.g. "floor"
+    // sub_system_var -> parent_var
+    std::map<std::string, std::string> bindings;
+};
+
 class FormulaSystem {
 public:
     std::vector<Equation> equations;
     std::map<std::string, double> defaults;
+    std::vector<FormulaCall> formula_calls;
     std::string base_dir;
     Trace trace;
+    mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
+
+    std::set<std::string> all_variables() const {
+        std::set<std::string> vars;
+        for (auto& eq : equations) {
+            vars.insert(eq.lhs_var);
+            collect_vars(eq.rhs, vars);
+        }
+        for (auto& [k, v] : defaults) vars.insert(k);
+        for (auto& fc : formula_calls) {
+            vars.insert(fc.output_var);
+            for (auto& [sub_var, parent_var] : fc.bindings)
+                vars.insert(parent_var);
+        }
+        return vars;
+    }
 
     void load_file(const std::string& path) {
         if (path.empty())
@@ -72,7 +104,139 @@ public:
                 trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
             for (auto& [k, v] : defaults)
                 trace.step("  default: " + k + " = " + fmt_num(v));
+            for (auto& fc : formula_calls) {
+                std::string s = "  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var;
+                for (auto& [sv, pv] : fc.bindings) s += ", " + sv + "=" + pv;
+                trace.step(s + ")");
+            }
         }
+    }
+
+    static bool approx_equal(double a, double b) {
+        if (std::isnan(a) || std::isnan(b)) return false;
+        if (std::isinf(a) || std::isinf(b)) return a == b;
+        double eps = std::max(1e-9, 1e-9 * std::max(std::abs(a), std::abs(b)));
+        return std::abs(a - b) < eps;
+    }
+
+    std::vector<VerifyResult> verify_variable(
+        const std::string& target, double known_value,
+        std::map<std::string, double> bindings) const
+    {
+        std::vector<VerifyResult> results;
+        bindings.erase(target);
+
+        // Apply defaults (except for target)
+        for (auto& [k, v] : defaults)
+            if (k != target && !bindings.count(k)) bindings[k] = v;
+
+        // Helper: try evaluating an expression and record result
+        auto try_verify = [&](const ExprPtr& expr, const std::string& desc) {
+            std::set<std::string> vars;
+            collect_vars(expr, vars);
+            ExprPtr resolved = expr;
+            for (auto& v : vars) {
+                if (v == target) return; // target in expr — can't evaluate
+                if (bindings.count(v)) {
+                    resolved = substitute(resolved, v, Expr::Num(bindings.at(v)));
+                } else {
+                    // Try solving for this variable
+                    try {
+                        auto b2 = bindings;
+                        double val = solve_recursive(v, b2, {target}, 0);
+                        resolved = substitute(resolved, v, Expr::Num(val));
+                    } catch (...) { return; } // can't resolve — skip this equation
+                }
+            }
+            try {
+                double computed = evaluate(simplify(resolved));
+                if (std::isnan(computed) || std::isinf(computed)) return;
+                results.push_back({desc, computed, approx_equal(computed, known_value)});
+            } catch (...) {}
+        };
+
+        // Strategy 1: target on LHS — evaluate RHS
+        for (auto& eq : equations)
+            if (eq.lhs_var == target)
+                try_verify(eq.rhs, target + " = " + expr_to_string(eq.rhs));
+
+        // Strategy 2: target in RHS — invert and evaluate
+        for (auto& eq : equations) {
+            if (!contains_var(eq.rhs, target)) continue;
+            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
+            if (sol)
+                try_verify(sol, target + " = " + expr_to_string(sol)
+                    + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")");
+        }
+
+        // Strategy 3: forward formula call
+        for (auto& call : formula_calls) {
+            if (call.output_var != target) continue;
+            try {
+                auto sub_binds = prepare_sub_bindings_for_verify(call, bindings, target);
+                auto& sub_sys = load_sub_system(call.file_stem);
+                double computed = sub_sys.resolve(call.query_var, sub_binds);
+                if (!std::isnan(computed) && !std::isinf(computed))
+                    results.push_back({target + " via " + call.file_stem + "(" + call.query_var + "=?)",
+                        computed, approx_equal(computed, known_value)});
+            } catch (...) {}
+        }
+
+        // Strategy 4: equating shared-LHS equations
+        for (size_t i = 0; i < equations.size(); i++)
+            for (size_t j = i + 1; j < equations.size(); j++) {
+                if (equations[i].lhs_var != equations[j].lhs_var) continue;
+                for (auto& [a, b] : {std::pair{i, j}, std::pair{j, i}}) {
+                    auto sol = solve_for(equations[a].rhs, equations[b].rhs, target);
+                    if (sol) {
+                        std::string desc = target + " = " + expr_to_string(sol)
+                            + "  (via " + equations[i].lhs_var + ")";
+                        try_verify(sol, desc);
+                    }
+                }
+            }
+
+        // Strategy 5: reverse formula call
+        for (auto& call : formula_calls) {
+            for (auto& [sub_var, parent_var] : call.bindings) {
+                if (parent_var != target) continue;
+                try {
+                    auto sub_binds = prepare_sub_bindings_for_verify(call, bindings, target);
+                    auto& sub_sys = load_sub_system(call.file_stem);
+                    double computed = sub_sys.resolve(sub_var, sub_binds);
+                    if (!std::isnan(computed) && !std::isinf(computed))
+                        results.push_back({target + " via " + call.file_stem + "(" + sub_var + ")",
+                            computed, approx_equal(computed, known_value)});
+                } catch (...) {}
+            }
+        }
+
+        return results;
+    }
+
+    // --- Derive (symbolic) ---
+
+    std::string derive(const std::string& target,
+                       const std::map<std::string, double>& numeric_bindings,
+                       const std::map<std::string, std::string>& symbolic_bindings) const {
+        // Build unified ExprPtr bindings: numeric as Num, symbolic as Var(new_name)
+        std::map<std::string, ExprPtr> bindings;
+        for (auto& [k, v] : numeric_bindings) bindings[k] = Expr::Num(v);
+        for (auto& [k, v] : symbolic_bindings) bindings[k] = Expr::Var(v);
+        // Apply defaults as numeric
+        for (auto& [k, v] : defaults)
+            if (!bindings.count(k) && k != target) bindings[k] = Expr::Num(v);
+
+        auto result = derive_recursive(target, bindings, {}, 0);
+        if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
+
+        // Try to evaluate to a number
+        try {
+            double val = evaluate(result);
+            if (!std::isnan(val) && !std::isinf(val)) return fmt_num(val);
+        } catch (...) {}
+
+        return expr_to_string(result);
     }
 
     double resolve(const std::string& target,
@@ -104,28 +268,311 @@ private:
             line = line.substr(3);
     }
 
+    // --- Formula call extraction ---
+
+    static size_t find_matching_rparen(const std::vector<Token>& tok, size_t lparen_pos) {
+        int depth = 1;
+        for (size_t i = lparen_pos + 1; i < tok.size(); i++) {
+            if (tok[i].type == TokenType::LPAREN) depth++;
+            else if (tok[i].type == TokenType::RPAREN) { if (--depth == 0) return i; }
+        }
+        return std::string::npos;
+    }
+
+    static bool has_question_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
+        for (size_t i = from; i < to; i++)
+            if (tok[i].type == TokenType::QUESTION) return true;
+        return false;
+    }
+
+    static FormulaCall parse_call_args(const std::vector<Token>& tok, size_t name_pos, size_t rparen_pos) {
+        FormulaCall call;
+        call.file_stem = tok[name_pos].text;
+
+        // Parse comma-separated args between LPAREN and RPAREN
+        size_t i = name_pos + 2; // skip IDENT and LPAREN
+        while (i < rparen_pos) {
+            // Skip commas
+            if (tok[i].type == TokenType::COMMA) { i++; continue; }
+
+            if (tok[i].type != TokenType::IDENT) { i++; continue; }
+
+            // Check for query: IDENT EQUALS QUESTION [IDENT]
+            if (i + 2 < rparen_pos
+                && tok[i + 1].type == TokenType::EQUALS
+                && tok[i + 2].type == TokenType::QUESTION) {
+                call.query_var = tok[i].text;
+                // Check for alias after ?
+                if (i + 3 < rparen_pos && tok[i + 3].type == TokenType::IDENT) {
+                    call.output_var = tok[i + 3].text;
+                    i += 4;
+                } else {
+                    call.output_var = call.query_var;
+                    i += 3;
+                }
+            }
+            // Check for binding: IDENT EQUALS IDENT
+            else if (i + 2 < rparen_pos
+                     && tok[i + 1].type == TokenType::EQUALS
+                     && tok[i + 2].type == TokenType::IDENT) {
+                call.bindings[tok[i].text] = tok[i + 2].text;
+                i += 3;
+            }
+            // Shorthand binding: bare IDENT
+            else {
+                call.bindings[tok[i].text] = tok[i].text;
+                i++;
+            }
+        }
+
+        if (call.query_var.empty())
+            throw std::runtime_error("Formula call '" + call.file_stem + "' has no query variable (use var=?)");
+
+        return call;
+    }
+
+    std::pair<std::vector<Token>, std::vector<FormulaCall>>
+    extract_formula_calls(const std::vector<Token>& tok) {
+        // Quick check: any QUESTION inside parens?
+        int paren_depth = 0;
+        bool has_call = false;
+        for (auto& t : tok) {
+            if (t.type == TokenType::LPAREN) paren_depth++;
+            else if (t.type == TokenType::RPAREN) paren_depth--;
+            else if (t.type == TokenType::QUESTION && paren_depth > 0) { has_call = true; break; }
+        }
+        if (!has_call) return {tok, {}};
+
+        std::vector<Token> result;
+        std::vector<FormulaCall> calls;
+        size_t i = 0;
+
+        while (i < tok.size()) {
+            if (tok[i].type == TokenType::IDENT
+                && i + 1 < tok.size()
+                && tok[i + 1].type == TokenType::LPAREN) {
+                size_t rparen = find_matching_rparen(tok, i + 1);
+                if (rparen != std::string::npos && has_question_in_range(tok, i + 2, rparen)) {
+                    auto call = parse_call_args(tok, i, rparen);
+
+                    // Implied alias: if preceded by "IDENT =" and call has no explicit alias
+                    if (call.output_var == call.query_var
+                        && result.size() >= 2
+                        && result[result.size() - 1].type == TokenType::EQUALS
+                        && result[result.size() - 2].type == TokenType::IDENT) {
+                        call.output_var = result[result.size() - 2].text;
+                    }
+
+                    calls.push_back(call);
+                    result.push_back(Token{TokenType::IDENT, call.output_var, 0});
+                    i = rparen + 1;
+                    continue;
+                }
+            }
+            result.push_back(tok[i]);
+            i++;
+        }
+
+        return {result, calls};
+    }
+
     void parse_line(const std::string& line) {
         auto tok = Lexer(line).tokenize();
-        if (tok.size() < 3) return;
-        if (tok[0].type != TokenType::IDENT || tok[1].type != TokenType::EQUALS) return;
+        if (tok.size() < 2) return;
 
-        const std::string& lhs = tok[0].text;
+        // Extract formula calls before expression parsing
+        auto [mod_tok, calls] = extract_formula_calls(tok);
+        for (auto& c : calls) formula_calls.push_back(std::move(c));
+
+        // Standalone formula call: just "output_var END" after extraction
+        if (mod_tok.size() <= 2) return;
+
+        if (mod_tok[0].type != TokenType::IDENT || mod_tok[1].type != TokenType::EQUALS) return;
+
+        const std::string& lhs = mod_tok[0].text;
+
+        // Degenerate "x = x" from implied alias — skip
+        if (mod_tok[2].type == TokenType::IDENT && mod_tok[2].text == lhs
+            && mod_tok[3].type == TokenType::END)
+            return;
 
         // Default: "x = 42" or "x = -42"
-        if (tok[2].type == TokenType::NUMBER && tok[3].type == TokenType::END) {
-            defaults[lhs] = tok[2].numval;
+        if (mod_tok[2].type == TokenType::NUMBER && mod_tok[3].type == TokenType::END) {
+            defaults[lhs] = mod_tok[2].numval;
             return;
         }
-        if (tok[2].type == TokenType::MINUS
-            && tok[3].type == TokenType::NUMBER
-            && tok[4].type == TokenType::END) {
-            defaults[lhs] = -tok[3].numval;
+        if (mod_tok[2].type == TokenType::MINUS
+            && mod_tok[3].type == TokenType::NUMBER
+            && mod_tok[4].type == TokenType::END) {
+            defaults[lhs] = -mod_tok[3].numval;
             return;
         }
 
         // Equation: parse RHS as expression
-        Parser p(std::vector<Token>(tok.begin() + 2, tok.end()));
+        Parser p(std::vector<Token>(mod_tok.begin() + 2, mod_tok.end()));
         equations.push_back({lhs, p.parse_expr()});
+    }
+
+    // --- Sub-system loading ---
+
+    const FormulaSystem& load_sub_system(const std::string& file_stem) const {
+        std::string path = base_dir + "/" + file_stem;
+        if (path.find('.') == std::string::npos) path += ".fw";
+        std::string abs_path = std::filesystem::weakly_canonical(path).string();
+
+        auto it = sub_systems.find(abs_path);
+        if (it != sub_systems.end()) return *it->second;
+
+        auto sub = std::make_shared<FormulaSystem>();
+        sub->trace = trace;
+        sub->load_file(abs_path);
+        sub_systems[abs_path] = sub;
+        return *sub;
+    }
+
+    std::map<std::string, double> prepare_sub_bindings(
+        const FormulaCall& call,
+        std::map<std::string, double>& parent_bindings,
+        std::set<std::string> visited, int depth,
+        const std::string& skip_parent_var = "") const
+    {
+        std::map<std::string, double> sub;
+
+        for (auto& [sub_var, parent_var] : call.bindings) {
+            if (parent_var == skip_parent_var) continue;
+            if (parent_bindings.count(parent_var)) {
+                sub[sub_var] = parent_bindings.at(parent_var);
+            } else {
+                try {
+                    double val = solve_recursive(parent_var, parent_bindings, visited, depth + 1);
+                    sub[sub_var] = val;
+                } catch (...) {
+                    // Leave unmapped — let the sub-system report the error if needed
+                }
+            }
+        }
+
+        // Bridge: output_var -> query_var
+        if (parent_bindings.count(call.output_var)) {
+            sub[call.query_var] = parent_bindings.at(call.output_var);
+        } else if (call.output_var != skip_parent_var) {
+            try {
+                double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1);
+                sub[call.query_var] = val;
+            } catch (...) {
+                // Leave unmapped
+            }
+        }
+
+        return sub;
+    }
+
+    std::map<std::string, double> prepare_sub_bindings_for_verify(
+        const FormulaCall& call,
+        const std::map<std::string, double>& parent_bindings,
+        const std::string& skip_var) const
+    {
+        std::map<std::string, double> sub;
+        for (auto& [sub_var, parent_var] : call.bindings) {
+            if (parent_var == skip_var) continue;
+            if (parent_bindings.count(parent_var))
+                sub[sub_var] = parent_bindings.at(parent_var);
+        }
+        if (parent_bindings.count(call.output_var) && call.output_var != skip_var)
+            sub[call.query_var] = parent_bindings.at(call.output_var);
+        return sub;
+    }
+
+    // --- Derive (symbolic solver) ---
+
+    ExprPtr try_derive(const ExprPtr& expr, const std::string& target,
+                       std::map<std::string, ExprPtr>& bindings,
+                       std::set<std::string> visited, int depth) const {
+        std::set<std::string> vars;
+        collect_vars(expr, vars);
+
+        ExprPtr resolved = expr;
+        for (auto& v : vars) {
+            if (v == target) return nullptr;
+            if (bindings.count(v)) {
+                resolved = substitute(resolved, v, bindings.at(v));
+            } else {
+                auto sub_expr = derive_recursive(v, bindings, visited, depth + 1);
+                if (sub_expr)
+                    resolved = substitute(resolved, v, sub_expr);
+                else
+                    return nullptr; // Can't resolve this variable — try next equation
+            }
+        }
+
+        auto result = simplify(resolved);
+        // Try full evaluation — if it works, return a clean number
+        try {
+            double val = evaluate(result);
+            if (!std::isnan(val) && !std::isinf(val)) return Expr::Num(val);
+        } catch (...) {}
+        return result;
+    }
+
+    ExprPtr derive_recursive(const std::string& target,
+                             std::map<std::string, ExprPtr>& bindings,
+                             std::set<std::string> visited, int depth) const {
+        if (bindings.count(target)) return bindings.at(target);
+        if (visited.count(target)) return nullptr;
+        visited.insert(target);
+
+        // Strategy 1: target on LHS — derive from RHS
+        for (auto& eq : equations) {
+            if (eq.lhs_var != target) continue;
+            auto result = try_derive(eq.rhs, target, bindings, visited, depth);
+            if (result) { bindings[target] = result; return result; }
+        }
+
+        // Strategy 2: target in RHS — invert and derive
+        for (auto& eq : equations) {
+            if (!contains_var(eq.rhs, target)) continue;
+            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
+            if (!sol) continue;
+            auto result = try_derive(sol, target, bindings, visited, depth);
+            if (result) { bindings[target] = result; return result; }
+        }
+
+        // Strategy 3: forward formula call
+        for (auto& call : formula_calls) {
+            if (call.output_var != target) continue;
+            // Build sub-bindings from parent, mapping through call.bindings
+            std::map<std::string, ExprPtr> sub_binds;
+            for (auto& [sub_var, parent_var] : call.bindings) {
+                if (bindings.count(parent_var))
+                    sub_binds[sub_var] = bindings.at(parent_var);
+            }
+            if (bindings.count(call.output_var))
+                sub_binds[call.query_var] = bindings.at(call.output_var);
+
+            try {
+                auto& sub_sys = load_sub_system(call.file_stem);
+                // Apply sub-system defaults
+                for (auto& [k, v] : sub_sys.defaults)
+                    if (!sub_binds.count(k) && k != call.query_var)
+                        sub_binds[k] = Expr::Num(v);
+                auto result = sub_sys.derive_recursive(call.query_var, sub_binds, {}, depth + 1);
+                if (result) { bindings[target] = result; return result; }
+            } catch (...) {}
+        }
+
+        // Strategy 4: equate RHS of equations sharing a LHS variable
+        for (size_t i = 0; i < equations.size(); i++)
+            for (size_t j = i + 1; j < equations.size(); j++) {
+                if (equations[i].lhs_var != equations[j].lhs_var) continue;
+                for (auto& [a, b] : {std::pair{i, j}, std::pair{j, i}}) {
+                    auto sol = solve_for(equations[a].rhs, equations[b].rhs, target);
+                    if (!sol) continue;
+                    auto result = try_derive(sol, target, bindings, visited, depth);
+                    if (result) { bindings[target] = result; return result; }
+                }
+            }
+
+        return nullptr;
     }
 
     // --- Solver ---
@@ -172,7 +619,31 @@ private:
             }
         }
 
-        // Strategy 3: equate RHS of equations sharing a LHS variable
+        // Strategy 3: forward formula call — target is a formula call output_var
+        for (auto& call : formula_calls) {
+            if (call.output_var != target) continue;
+            found_eq = true;
+            trace.step("formula call: " + call.file_stem + "(" + call.query_var
+                + "=?" + call.output_var + ")", depth + 1);
+            try {
+                auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth);
+                auto& sub_sys = load_sub_system(call.file_stem);
+                for (auto& [sv, val] : sub_binds)
+                    trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
+                double result = sub_sys.resolve(call.query_var, sub_binds);
+                if (std::isnan(result) || std::isinf(result)) {
+                    had_nan_inf = true;
+                    continue;
+                }
+                trace.step("  result: " + call.output_var + " = " + fmt_num(result), depth + 1);
+                bindings[target] = result;
+                return result;
+            } catch (const std::exception& e) {
+                trace.step("  failed: " + std::string(e.what()), depth + 2);
+            }
+        }
+
+        // Strategy 4: equate RHS of equations sharing a LHS variable
         for (size_t i = 0; i < equations.size(); i++)
             for (size_t j = i + 1; j < equations.size(); j++) {
                 if (equations[i].lhs_var != equations[j].lhs_var) continue;
@@ -200,6 +671,32 @@ private:
                             return bindings.at(target);
                 }
             }
+
+        // Strategy 6: reverse formula call — target maps through a binding
+        for (auto& call : formula_calls) {
+            for (auto& [sub_var, parent_var] : call.bindings) {
+                if (parent_var != target) continue;
+                found_eq = true;
+                trace.step("formula call reverse: " + call.file_stem + "(" + sub_var
+                    + " -> " + target + ")", depth + 1);
+                try {
+                    auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, target);
+                    auto& sub_sys = load_sub_system(call.file_stem);
+                    for (auto& [sv, val] : sub_binds)
+                        trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
+                    double result = sub_sys.resolve(sub_var, sub_binds);
+                    if (std::isnan(result) || std::isinf(result)) {
+                        had_nan_inf = true;
+                        continue;
+                    }
+                    trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
+                    bindings[target] = result;
+                    return result;
+                } catch (const std::exception& e) {
+                    trace.step("  failed: " + std::string(e.what()), depth + 2);
+                }
+            }
+        }
 
         // Error reporting
         if (!found_eq)
@@ -268,9 +765,12 @@ struct CLIQuery {
     std::string filename;
     std::vector<std::pair<std::string, std::string>> queries; // {variable, alias}
     std::map<std::string, double> bindings;
+    std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
 };
 
-inline CLIQuery parse_cli_query(const std::string& input) {
+inline CLIQuery parse_cli_query(const std::string& input,
+                                bool allow_no_queries = false,
+                                bool allow_symbolic = false) {
     CLIQuery q;
 
     size_t lparen = input.find('(');
@@ -310,6 +810,10 @@ inline CLIQuery parse_cli_query(const std::string& input) {
             double v;
             try { v = std::stod(val); }
             catch (...) {
+                if (allow_symbolic) {
+                    q.symbolic[name] = val;
+                    continue;
+                }
                 throw std::runtime_error("Invalid number '" + val + "' for variable '" + name + "'");
             }
             if (std::isnan(v))
@@ -320,7 +824,7 @@ inline CLIQuery parse_cli_query(const std::string& input) {
         }
     }
 
-    if (q.queries.empty())
+    if (q.queries.empty() && !allow_no_queries)
         throw std::runtime_error("No query variable (use var=?)");
     return q;
 }
