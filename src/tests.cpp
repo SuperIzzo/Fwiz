@@ -5261,6 +5261,144 @@ void test_solve_for_zero_guard() {
 
 // ---- Simplifier improvement tests ----
 
+void test_simplify_rule_interactions() {
+    SECTION("Simplifier: Rule Interactions");
+
+    auto ss = [](const char* s) { return expr_to_string(simplify(parse(s))); };
+
+    // Like-terms + constant reassociation: x + 2*x + 3 + 4*x + 1
+    // After refactor: "7 * x + 4"
+    {
+        auto e = simplify(parse("x + 2 * x + 3 + 4 * x + 1"));
+        double val = evaluate(substitute(e, "x", Expr::Num(10)));
+        ASSERT_NUM(val, 74, "like-terms + constant: x+2x+3+4x+1 at x=10 → 74");
+    }
+
+    // Power mul then like-term: x^2 + x*x + 3*x^2
+    // x*x → x^2 (mul-to-pow), then x^2 + x^2 + 3*x^2 → 5*x^2 (like-terms)
+    ASSERT_EQ(ss("x^2 + x * x + 3 * x^2"), "5 * x^2",
+        "pow-mul then like-term: x^2+x*x+3x^2 → 5x^2");
+
+    // Symmetric self-division: (2*x) / (2*x) → 1
+    ASSERT_EQ(ss("(2 * x) / (2 * x)"), "1", "(2x)/(2x) → 1");
+
+    // Negation of subtraction then subtract: -(a-b) - c → b - a - c
+    ASSERT_EQ(ss("-(a - b) - c"), "b - a - c", "-(a-b)-c → b-a-c");
+
+    // Division then multiply back: x / 2 * 2 → x
+    ASSERT_EQ(ss("x / 2 * 2"), "x", "x/2*2 → x");
+
+    // Deep mixed chain: ((x/2)*3 - 4)*2 + 5
+    // x/2*3 → x*1.5, (x*1.5 - 4)*2 → 2*x*1.5 - 8 → x*3 - 8, +5 → x*3 - 3
+    {
+        auto e = simplify(parse("((x / 2) * 3 - 4) * 2 + 5"));
+        double val = evaluate(substitute(e, "x", Expr::Num(10)));
+        ASSERT_NUM(val, 27, "deep chain: ((10/2)*3-4)*2+5 = 27");
+    }
+
+    // One to any power: 1^x → 1
+    // (not currently simplified, but should evaluate correctly)
+    {
+        auto e = simplify(parse("1^999"));
+        ASSERT_EQ(expr_to_string(e), "1", "1^999 → 1");
+    }
+
+    // Function arg simplification: sqrt((x+0) * 1) → sqrt(x)
+    ASSERT_EQ(ss("sqrt((x + 0) * 1)"), "sqrt(x)", "func args simplified: sqrt((x+0)*1) → sqrt(x)");
+
+    // x*x - x*x → 0 (mul-to-pow then like-term subtraction)
+    ASSERT_EQ(ss("x * x - x * x"), "0", "x*x - x*x → 0");
+
+    // Alternating powers and constants: x^2 * 2 * x^2 * 3
+    // Should eventually reach 6*x^4
+    {
+        auto e = simplify(parse("x^2 * 2 * x^2 * 3"));
+        double val = evaluate(substitute(e, "x", Expr::Num(2)));
+        ASSERT_NUM(val, 96, "x^2*2*x^2*3 at x=2 → 96 (6*16)");
+    }
+
+    // Chain: 2*x + 3*x - x → 4*x
+    ASSERT_EQ(ss("2 * x + 3 * x - x"), "4 * x", "2x+3x-x → 4x");
+
+    // Negation chain: -(-(-x)) → -x
+    ASSERT_EQ(ss("-(-(-x))"), "-x", "triple negation → -x");
+
+    // Mixed div/mul reassociation: ((x / 2) * 3) / 3
+    // After refactor: "x / 2"
+    {
+        auto e = simplify(parse("((x / 2) * 3) / 3"));
+        double val = evaluate(substitute(e, "x", Expr::Num(10)));
+        ASSERT_NUM(val, 5, "((x/2)*3)/3 at x=10 → 5");
+    }
+}
+
+void test_simplify_flatten_targets() {
+    SECTION("Simplifier: Flatten Targets (post-refactor)");
+
+    // These test the SEMANTIC correctness of expressions that the current
+    // simplifier can't fully reduce. After the flattening refactor,
+    // the string assertions can be tightened.
+
+    // Additive flattening: collect all terms
+    // a + b - a → b (three terms, cancellation across non-adjacent)
+    ASSERT_EQ(expr_to_string(simplify(parse("a + b - a"))), "b",
+        "a+b-a → b (additive cancellation non-adjacent)");
+
+    // Multiple like-terms across a chain: 2*x + y + 3*x → 5*x + y
+    {
+        auto e = simplify(parse("2 * x + y + 3 * x"));
+        double val = evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(1)));
+        ASSERT_NUM(val, 51, "2x+y+3x at x=10,y=1 → 51");
+    }
+
+    // Constants scattered: 3 + x + 2 + y + 1 → x + y + 6
+    {
+        auto e = simplify(parse("3 + x + 2 + y + 1"));
+        double val = evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(20)));
+        ASSERT_NUM(val, 36, "3+x+2+y+1 at x=10,y=20 → 36");
+    }
+
+    // Multiplicative flattening: collect all factors
+    // a * b / a → b (cancel across non-adjacent)
+    {
+        auto e = simplify(parse("a * b / a"));
+        double val = evaluate(substitute(substitute(e, "a", Expr::Num(5)), "b", Expr::Num(3)));
+        ASSERT_NUM(val, 3, "a*b/a at a=5,b=3 → 3");
+    }
+
+    // Constants scattered in multiplication: 2 * x * 3 * y * 4 → 24*x*y
+    {
+        auto e = simplify(parse("2 * x * 3 * y * 4"));
+        double val = evaluate(substitute(substitute(e, "x", Expr::Num(1)), "y", Expr::Num(1)));
+        ASSERT_NUM(val, 24, "2*x*3*y*4 at x=1,y=1 → 24");
+    }
+
+    // Mixed: x * y / x * z → y * z (cancel x across mul/div chain)
+    {
+        auto e = simplify(parse("x * y / x * z"));
+        double val = evaluate(substitute(substitute(substitute(
+            e, "x", Expr::Num(7)), "y", Expr::Num(3)), "z", Expr::Num(2)));
+        ASSERT_NUM(val, 6, "x*y/x*z at x=7,y=3,z=2 → 6");
+    }
+
+    // Cube surface from derive: 2*s^2 + 2*s^2 + 2*s^2 → 6*s^2
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * s^2 + 2 * s^2 + 2 * s^2"))),
+        "6 * s^2", "2s^2+2s^2+2s^2 → 6s^2");
+
+    // Isosceles derive: s^2 + other^2 - s^2 → other^2
+    ASSERT_EQ(expr_to_string(simplify(parse("s^2 + other^2 - s^2"))),
+        "other^2", "s^2+other^2-s^2 → other^2");
+
+    // other^2 / (2 * side * other) → other / (2 * side)
+    // (from isosceles triangle derive — needs cross-term cancellation)
+    {
+        auto e = simplify(parse("other^2 / (2 * side * other)"));
+        double val = evaluate(substitute(substitute(
+            e, "other", Expr::Num(6)), "side", Expr::Num(4)));
+        ASSERT_NUM(val, 0.75, "other^2/(2*side*other) at other=6,side=4 → 0.75");
+    }
+}
+
 void test_simplify_like_terms() {
     SECTION("Simplifier: Like-Term Combining");
 
@@ -5677,6 +5815,8 @@ int main() {
     test_solve_for_zero_guard();
 
     // Simplifier improvements
+    test_simplify_rule_interactions();
+    test_simplify_flatten_targets();
     test_simplify_like_terms();
     test_simplify_mul_to_pow();
     test_simplify_self_division();
