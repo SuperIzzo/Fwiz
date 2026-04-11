@@ -15,6 +15,7 @@ int main(int argc, char* argv[]) {
                   << "  --verify all   verify all known variables against all equations\n"
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
+                  << "  --numeric      enable numeric solving for nonlinear equations\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
@@ -28,6 +29,7 @@ int main(int argc, char* argv[]) {
         bool explore = false;
         bool explore_full = false;
         bool derive_mode = false;
+        bool numeric_mode = false;
         std::string verify_arg;
         std::string query_str;
 
@@ -38,6 +40,7 @@ int main(int argc, char* argv[]) {
             else if (arg == "--explore")      explore = true;
             else if (arg == "--explore-full") { explore = true; explore_full = true; }
             else if (arg == "--derive")       derive_mode = true;
+            else if (arg == "--numeric")      numeric_mode = true;
             else if (arg == "--verify") {
                 if (i + 1 < argc) verify_arg = argv[++i];
                 else { std::cerr << "Error: --verify requires an argument (all or var1,var2,...)\n"; return 1; }
@@ -55,6 +58,7 @@ int main(int argc, char* argv[]) {
             explore || explore_full || has_verify || derive_mode, derive_mode);
         FormulaSystem sys;
         sys.trace.level = level;
+        sys.numeric_mode = numeric_mode;
         sys.load_file(query.filename);
 
         // --- Derive mode ---
@@ -103,15 +107,20 @@ int main(int argc, char* argv[]) {
         } else if (!query.queries.empty()) {
             for (auto& q : query.queries) {
                 try {
+                    auto eq_sign = [&](const std::string& var) {
+                        auto it = sys.numeric_results_.find(var);
+                        if (it == sys.numeric_results_.end()) return " = ";
+                        return it->second ? " = " : " ~ ";
+                    };
                     if (q.strict) {
                         double result = sys.resolve_one(q.variable, query.bindings);
-                        std::cout << q.alias << " = " << fmt_num(result) << '\n';
+                        std::cout << q.alias << eq_sign(q.variable) << fmt_num(result) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
                         if (result.is_discrete()) {
                             for (auto r : result.discrete())
-                                std::cout << q.alias << " = " << fmt_num(r) << '\n';
+                                std::cout << q.alias << eq_sign(q.variable) << fmt_num(r) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
                         } else {

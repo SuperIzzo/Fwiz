@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <memory>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -128,8 +129,11 @@ public:
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;
+    bool numeric_mode = false;
     static inline thread_local int formula_depth_ = 0;
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
+    mutable std::unordered_map<std::string, double> numeric_memo_;
+    mutable std::map<std::string, bool> numeric_results_; // var → true if exact (verified)
 
     std::set<std::string> all_variables() const {
         std::set<std::string> vars;
@@ -258,6 +262,8 @@ public:
                     try_verify_formula(*c.call, c.call->query_var, c.desc); break;
                 case CandidateType::FORMULA_REV:
                     try_verify_formula(*c.call, c.sub_var, c.desc); break;
+                case CandidateType::NUMERIC: break; // numeric not used for verify
+                case CandidateType::COUNT_: assert(false); break;
             }
             return false; // verify collects ALL, never stops
         });
@@ -310,6 +316,51 @@ public:
         // Try solving for exact values
         try {
             auto results = solve_all(target, prepared, {}, 0);
+
+            // In numeric mode, post-validate and classify results.
+            if (numeric_mode) {
+                auto verify_result = [&](double r) -> bool {
+                    for (auto& [bvar, bval] : prepared) {
+                        if (bvar == target) continue;
+                        try {
+                            auto test = prepared;
+                            test[target] = r;
+                            test.erase(bvar);
+                            double computed = resolve(bvar, test);
+                            if (!approx_equal(computed, bval)) return false;
+                        } catch (...) {}
+                    }
+                    return true;
+                };
+
+                // Filter invalid results (only when multiple — one might be right)
+                if (results.size() > 1) {
+                    std::vector<double> validated;
+                    for (double r : results)
+                        if (verify_result(r)) validated.push_back(r);
+                    if (!validated.empty()) results = validated;
+                }
+
+                // Mark numeric results as exact if they verify with strict equality
+                if (numeric_results_.count(target)) {
+                    bool all_exact = true;
+                    for (double r : results) {
+                        for (auto& [bvar, bval] : prepared) {
+                            if (bvar == target) continue;
+                            try {
+                                auto test = prepared;
+                                test[target] = r;
+                                test.erase(bvar);
+                                double computed = resolve(bvar, test);
+                                if (computed != bval) { all_exact = false; break; }
+                            } catch (...) { all_exact = false; break; }
+                        }
+                        if (!all_exact) break;
+                    }
+                    numeric_results_[target] = all_exact;
+                }
+            }
+
             return ValueSet::discrete(results);
         } catch (...) {}
 
@@ -415,6 +466,18 @@ private:
                         results.push_back(val);
                     }
                 } catch (...) {}
+            } else if (c.type == CandidateType::NUMERIC) {
+                auto roots = try_resolve_numeric(c.expr, target, bindings,
+                    visited, depth, c.condition);
+                for (double val : roots) {
+                    bool dup = false;
+                    for (auto r : results)
+                        if (std::abs(r - val) < EPSILON_ZERO) { dup = true; break; }
+                    if (!dup) {
+                        numeric_results_[target] = false;
+                        results.push_back(val);
+                    }
+                }
             }
             // FORMULA_REV handled similarly but less common for multi-return
             return false; // never stop — collect ALL results
@@ -815,7 +878,7 @@ private:
 
     // --- Strategy enumeration ---
 
-    enum class CandidateType : uint8_t { EXPR, FORMULA_FWD, FORMULA_REV };
+    enum class CandidateType : uint8_t { EXPR, FORMULA_FWD, FORMULA_REV, NUMERIC, COUNT_ };
     struct Candidate {
         CandidateType type;
         ExprPtr expr;           // for EXPR candidates
@@ -885,14 +948,47 @@ private:
                 }
             }
 
-        // Strategy 5: reverse formula call (only for simple Var bindings)
+        // Strategy 5: reverse formula call (target appears in a binding)
         for (auto& call : formula_calls)
             for (auto& [sub_var, expr] : call.bindings)
-                if (is_var(expr) && expr->name == target)
+                if (contains_var(expr, target))
                     if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
                         target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
                         &call, sub_var, nullptr}))
                         return;
+
+        // Strategy 6: numeric root-finding (--numeric only)
+        if (numeric_mode) {
+            for (auto& eq : equations) {
+                if (eq.lhs_var != target && !contains_var(eq.rhs, target)) continue;
+                auto combined = simplify(Expr::BinOpExpr(BinOp::SUB,
+                    Expr::Var(eq.lhs_var), eq.rhs));
+                if (handler(Candidate{CandidateType::NUMERIC, combined,
+                    target + " ~= numeric  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")",
+                    nullptr, "", eq.condition ? &*eq.condition : nullptr}))
+                    return;
+            }
+        }
+    }
+
+    // --- Derive helpers ---
+
+    // Build a mapping from sub-system variable names to parent-scope expressions,
+    // substituting known bindings into the call's binding expressions.
+    std::map<std::string, ExprPtr> derive_unfold_bindings(
+            const FormulaCall& call,
+            const std::map<std::string, ExprPtr>& bindings) const {
+        std::map<std::string, ExprPtr> parent_map;
+        for (auto& [sv, expr] : call.bindings) {
+            ExprPtr resolved = expr;
+            std::set<std::string> vars;
+            collect_vars(expr, vars);
+            for (auto& v : vars)
+                if (auto it = bindings.find(v); it != bindings.end())
+                    resolved = substitute(resolved, v, it->second);
+            parent_map[sv] = simplify(resolved);
+        }
+        return parent_map;
     }
 
     // --- Derive (symbolic solver) ---
@@ -903,21 +999,34 @@ private:
         std::set<std::string> vars;
         collect_vars(expr, vars);
 
+        bool has_target = false;
         ExprPtr resolved = expr;
         for (auto& v : vars) {
-            if (v == target) return nullptr;
+            if (v == target) { has_target = true; continue; }
             if (auto it = bindings.find(v); it != bindings.end()) {
                 resolved = substitute(resolved, v, it->second);
             } else {
                 auto sub_expr = derive_recursive(v, bindings, visited, depth + 1);
-                if (sub_expr)
+                if (sub_expr) {
                     resolved = substitute(resolved, v, sub_expr);
-                else
+                    // After substitution, the target might have been introduced
+                    if (contains_var(sub_expr, target)) has_target = true;
+                } else {
                     return nullptr; // Can't resolve this variable — try next equation
+                }
             }
         }
 
         auto result = simplify(resolved);
+
+        // If the target appears in the resolved expression, we have:
+        //   target = f(target, ...) — try to solve algebraically
+        if (has_target) {
+            auto sol = solve_for(Expr::Var(target), result, target);
+            if (sol) return simplify(sol);
+            return nullptr; // Non-linear in target — can't solve
+        }
+
         // Try full evaluation — if it works, return a clean number
         try {
             double val = evaluate(result);
@@ -933,40 +1042,308 @@ private:
         if (visited.count(target)) return nullptr;
         visited.insert(target);
 
+        // Check condition using symbolic bindings (evaluate what we can)
+        auto derive_check_condition = [&](const Condition* cond) -> bool {
+            if (!cond) return true; // no condition = always valid
+            std::map<std::string, double> numeric;
+            for (auto& [k, v] : bindings) {
+                try { numeric[k] = evaluate(*v); } catch (...) {}
+            }
+            return check_condition(*cond, numeric);
+        };
+
         ExprPtr found = nullptr;
         enumerate_candidates(target, [&](const Candidate& c) {
+            // Check condition before trying the candidate
+            if (!derive_check_condition(c.condition)) return false;
+
             if (c.type == CandidateType::EXPR) {
                 auto result = try_derive(c.expr, target, bindings, visited, depth);
                 if (result) { bindings[target] = result; found = result; return true; }
             } else if (c.type == CandidateType::FORMULA_FWD) {
-                std::map<std::string, ExprPtr> sub_binds;
-                for (auto& [sv, expr] : c.call->bindings) {
-                    // Substitute known symbolic bindings into the expression
-                    ExprPtr resolved = expr;
-                    std::set<std::string> vars;
-                    collect_vars(expr, vars);
-                    bool all_resolved = true;
-                    for (auto& v : vars)
-                        if (auto it = bindings.find(v); it != bindings.end())
-                            resolved = substitute(resolved, v, it->second);
-                        else all_resolved = false;
-                    if (all_resolved) sub_binds[sv] = simplify(resolved);
-                }
-                if (auto it = bindings.find(c.call->output_var); it != bindings.end())
-                    sub_binds[c.call->query_var] = it->second;
+                // Try unfolding: substitute the sub-system's equation body
+                // into the parent scope as a symbolic expression
                 try {
                     auto& sub_sys = load_sub_system(c.call->file_stem);
-                    for (auto& [k, v] : sub_sys.defaults)
-                        if (!sub_binds.count(k) && k != c.call->query_var)
-                            sub_binds[k] = Expr::Num(v);
-                    auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
-                    if (result) { bindings[target] = result; found = result; return true; }
-                } catch (...) { return false; }
+                    auto parent_map = derive_unfold_bindings(*c.call, bindings);
+                    for (auto& eq : sub_sys.equations) {
+                        if (eq.lhs_var != c.call->query_var) continue;
+                        // Check sub-system equation condition (with mapped bindings)
+                        if (eq.condition) {
+                            std::map<std::string, double> cond_binds;
+                            for (auto& [sv, pe] : parent_map) {
+                                try { cond_binds[sv] = evaluate(*pe); } catch (...) {}
+                            }
+                            if (!sub_sys.check_condition(*eq.condition, cond_binds))
+                                continue;
+                        }
+                        // Substitute sub-system vars with parent expressions
+                        ExprPtr unfolded = eq.rhs;
+                        for (auto& [sv, pe] : parent_map)
+                            unfolded = substitute(unfolded, sv, pe);
+                        for (auto& [k, v] : sub_sys.defaults) {
+                            if (parent_map.count(k)) continue;
+                            if (k == c.call->query_var) continue;
+                            unfolded = substitute(unfolded, k, Expr::Num(v));
+                        }
+                        unfolded = simplify(unfolded);
+                        // Only use unfold if the result doesn't contain
+                        // formula call outputs (which would need further
+                        // resolution and may cause infinite expansion)
+                        std::set<std::string> remaining;
+                        collect_vars(unfolded, remaining);
+                        bool has_formula_output = false;
+                        for (auto& fc : sub_sys.formula_calls)
+                            if (remaining.count(fc.output_var))
+                                { has_formula_output = true; break; }
+                        if (!has_formula_output) {
+                            bindings[target] = unfolded;
+                            found = unfolded;
+                            return true;
+                        }
+                    }
+                } catch (...) {}
+
+                // Fallback: derive into sub-system directly (original approach)
+                {
+                    std::map<std::string, ExprPtr> sub_binds;
+                    for (auto& [sv, expr] : c.call->bindings) {
+                        ExprPtr resolved = expr;
+                        std::set<std::string> vars;
+                        collect_vars(expr, vars);
+                        bool all_resolved = true;
+                        for (auto& v : vars)
+                            if (auto it = bindings.find(v); it != bindings.end())
+                                resolved = substitute(resolved, v, it->second);
+                            else all_resolved = false;
+                        if (all_resolved) sub_binds[sv] = simplify(resolved);
+                    }
+                    if (auto it = bindings.find(c.call->output_var); it != bindings.end())
+                        sub_binds[c.call->query_var] = it->second;
+                    try {
+                        auto& sub_sys = load_sub_system(c.call->file_stem);
+                        for (auto& [k, v] : sub_sys.defaults)
+                            if (!sub_binds.count(k) && k != c.call->query_var)
+                                sub_binds[k] = Expr::Num(v);
+                        auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
+                        if (result) { bindings[target] = result; found = result; return true; }
+                    } catch (...) { return false; }
+                }
+            } else if (c.type == CandidateType::FORMULA_REV) {
+                // Unfold: substitute sub-system equation body into parent scope
+                // then solve for target (which appears in a binding expression)
+                try {
+                    auto& sub_sys = load_sub_system(c.call->file_stem);
+                    // Build parent_map WITHOUT substituting bindings —
+                    // keep parent variable names so try_derive can resolve them
+                    std::map<std::string, ExprPtr> parent_map;
+                    for (auto& [sv, expr] : c.call->bindings)
+                        parent_map[sv] = expr;
+                    std::string sub_target = c.sub_var;
+                    ExprPtr binding_expr = parent_map[sub_target];
+                    for (auto& eq : sub_sys.equations) {
+                        if (eq.lhs_var != c.call->query_var) continue;
+                        ExprPtr unfolded = eq.rhs;
+                        for (auto& [sv, pe] : parent_map) {
+                            if (sv == sub_target) continue; // keep solve target
+                            unfolded = substitute(unfolded, sv, pe);
+                        }
+                        for (auto& [k, v] : sub_sys.defaults) {
+                            if (parent_map.count(k)) continue;
+                            if (k == c.call->query_var || k == sub_target) continue;
+                            unfolded = substitute(unfolded, k, Expr::Num(v));
+                        }
+                        unfolded = simplify(unfolded);
+                        // Solve: output_var = unfolded → sub_target = ...
+                        auto sol = solve_for(Expr::Var(c.call->output_var), unfolded, sub_target);
+                        if (!sol) continue;
+                        // sub_target = sol, and binding says sub_target = binding_expr(target)
+                        // So: binding_expr(target) = sol → solve for target
+                        if (is_var(binding_expr) && binding_expr->name == target) {
+                            // Simple case: sub_target maps directly to target
+                            auto result = try_derive(sol, target, bindings, visited, depth);
+                            if (result) { bindings[target] = result; found = result; return true; }
+                        } else {
+                            // Expression binding: solve binding_expr = sol for target
+                            auto final_sol = solve_for(sol, binding_expr, target);
+                            if (!final_sol) continue;
+                            auto result = try_derive(final_sol, target, bindings, visited, depth);
+                            if (result) { bindings[target] = result; found = result; return true; }
+                        }
+                    }
+                } catch (...) {}
             }
-            // FORMULA_REV not needed for derive (symbolic doesn't reverse through bindings)
             return false;
         });
         return found;
+    }
+
+    // --- Numeric solver ---
+
+    // Memoized resolve for numeric scanning — caches results to avoid
+    // redundant recursive evaluations (critical for factorial, fibonacci)
+    double resolve_memoized(const std::string& target,
+                            std::map<std::string, double> bindings) const {
+        // Build cache key: target + sorted bindings
+        std::string key = target;
+        for (auto& [k, v] : bindings)
+            key += "," + k + "=" + fmt_num(v);
+
+        auto it = numeric_memo_.find(key);
+        if (it != numeric_memo_.end()) return it->second;
+
+        double result = resolve(target, bindings);
+        numeric_memo_[key] = result;
+        return result;
+    }
+
+    // Extract numeric bounds for a variable from conditions and global conditions
+    std::pair<double, double> extract_bounds(
+            const std::string& target,
+            const std::map<std::string, double>& bindings,
+            const Condition* eq_condition = nullptr) const {
+        double lo = NUMERIC_DEFAULT_LO, hi = NUMERIC_DEFAULT_HI;
+
+        auto apply_valueset = [&](const ValueSet& vs) {
+            for (auto& iv : vs.intervals()) {
+                if (!std::isinf(iv.low) && iv.low > lo) lo = iv.low;
+                if (!std::isinf(iv.high) && iv.high < hi) hi = iv.high;
+            }
+        };
+
+        // Equation condition
+        if (eq_condition) apply_valueset(eq_condition->to_valueset(target, bindings));
+
+        // Global conditions
+        for (auto& gc : global_conditions)
+            apply_valueset(gc.to_valueset(target, bindings));
+
+        return {lo, hi};
+    }
+
+    // Try to solve for target numerically by finding roots of f(target) = 0
+    std::vector<double> try_resolve_numeric(
+            const ExprPtr& combined, const std::string& target,
+            std::map<std::string, double>& bindings,
+            std::set<std::string> visited, int depth,
+            const Condition* eq_condition = nullptr) const {
+
+        // Build set of formula call output vars (may depend on target circularly)
+        std::set<std::string> formula_outputs;
+        for (auto& fc : formula_calls)
+            formula_outputs.insert(fc.output_var);
+
+        // Substitute all known bindings, resolve unknowns recursively
+        // Skip formula call outputs — they may depend on the target
+        ExprPtr expr = combined;
+        std::set<std::string> vars;
+        collect_vars(expr, vars);
+        bool has_formula_vars = false;
+        for (auto& v : vars) {
+            if (v == target) continue;
+            if (formula_outputs.count(v)) { has_formula_vars = true; continue; }
+            if (auto it = bindings.find(v); it != bindings.end()) {
+                expr = substitute(expr, v, Expr::Num(it->second));
+            } else {
+                try {
+                    double val = solve_recursive(v, bindings, visited, depth + 1);
+                    expr = substitute(expr, v, Expr::Num(val));
+                } catch (...) { has_formula_vars = true; } // treat as unresolvable
+            }
+        }
+        expr = simplify(expr);
+
+        // Extract bounds from conditions
+        auto [lo, hi] = extract_bounds(target, bindings, eq_condition);
+        if (lo >= hi) return {};
+
+        // Check if target still appears after substitution
+        bool has_target = contains_var(expr, target);
+
+        // Heuristic: try integer mode if bounds are reasonable integers
+        bool try_integer = (lo >= -10000 && hi <= 10000
+            && std::floor(lo) == lo && std::floor(hi) == hi
+            && (hi - lo) <= 20000);
+
+        std::vector<double> roots;
+
+        if (has_target && !has_formula_vars) {
+            // Equation-based: f(target) = combined_expr(target) = 0
+            auto f = [&, expr](double x) -> double {
+                try {
+                    ExprPtr subst = substitute(expr, target, Expr::Num(x));
+                    return evaluate(*simplify(subst));
+                } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+            };
+
+            if (try_integer) {
+                roots = find_numeric_roots(f, lo, hi, true);
+                if (!roots.empty()) goto filter;
+            }
+            roots = find_numeric_roots(f, lo, hi, false);
+            if (!roots.empty()) goto filter;
+        }
+
+        // System-probe fallback: for each candidate target value,
+        // evaluate the system forward and check if known bindings match.
+        // This handles recursive calls where the equation can't be evaluated in isolation.
+        {
+            // Find variables that are both known (in bindings) and computable from target
+            // e.g., for factorial: result=120 is known, result can be computed from n
+            std::vector<std::string> probe_vars;
+            for (auto& eq : equations) {
+                if (eq.lhs_var == target) continue; // target on LHS = normal direction
+                if (contains_var(eq.rhs, target)) continue; // target in RHS = equation-based (tried above)
+                // eq.lhs_var is defined by equations — if it's in bindings, we can probe
+                if (bindings.count(eq.lhs_var))
+                    probe_vars.push_back(eq.lhs_var);
+            }
+            // Also check: any variable in bindings that could be computed from target
+            for (auto& [bvar, bval] : bindings) {
+                if (bvar == target) continue;
+                bool found = false;
+                for (auto& pv : probe_vars) if (pv == bvar) { found = true; break; }
+                if (!found) probe_vars.push_back(bvar);
+            }
+
+            for (auto& probe_var : probe_vars) {
+                if (!bindings.count(probe_var)) continue;
+                double expected = bindings.at(probe_var);
+
+                auto f = [&](double x) -> double {
+                    try {
+                        auto test_binds = bindings;
+                        test_binds[target] = x;
+                        test_binds.erase(probe_var); // remove so it gets recomputed
+                        double computed = resolve_memoized(probe_var, test_binds);
+                        return computed - expected;
+                    } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+                };
+
+                if (try_integer) {
+                    roots = find_numeric_roots(f, lo, hi, true);
+                    if (!roots.empty()) goto filter;
+                }
+                roots = find_numeric_roots(f, lo, hi, false);
+                if (!roots.empty()) goto filter;
+            }
+        }
+
+        return {};
+
+        filter:
+        // Filter by equation condition and global conditions
+        std::vector<double> filtered;
+        for (double r : roots) {
+            auto test_binds = bindings;
+            test_binds[target] = r;
+            bool ok = true;
+            if (eq_condition && !check_condition(*eq_condition, test_binds)) ok = false;
+            for (auto& gc : global_conditions)
+                if (!check_condition(gc, test_binds)) ok = false;
+            if (ok) filtered.push_back(r);
+        }
+        return filtered;
     }
 
     // --- Solver ---
@@ -1037,6 +1414,19 @@ private:
                     ok = try_formula(*c.call, c.call->query_var); break;
                 case CandidateType::FORMULA_REV:
                     ok = try_formula(*c.call, c.sub_var, target); break;
+                case CandidateType::NUMERIC: {
+                    found_eq = true;
+                    trace.step(c.desc, depth + 1);
+                    auto roots = try_resolve_numeric(c.expr, target, bindings,
+                        visited, depth, c.condition);
+                    if (!roots.empty()) {
+                        bindings[target] = roots[0];
+                        numeric_results_[target] = false;
+                        ok = true;
+                    }
+                    break;
+                }
+                case CandidateType::COUNT_: assert(false); break;
             }
 
             if (ok) {
