@@ -5128,11 +5128,92 @@ void test_condition_solving() {
 
     // Edge case: :: in equation (should not crash)
     {
-        // A line like "y = x + 1 :: some note" — second : has empty condition
         write_fw("/tmp/tcs_dcolon.fw", "y = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs_dcolon.fw");
         ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "no colon: works normally");
+    }
+}
+
+void test_condition_errors() {
+    SECTION("Condition Error Handling");
+
+    // Empty condition after colon — should skip gracefully (no condition)
+    {
+        write_fw("/tmp/tce1.fw", "y = x + 1 :\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tce1.fw");
+        ASSERT(sys.equations.size() == 1, "empty condition: parses as equation");
+        ASSERT(!sys.equations[0].condition.has_value(), "empty condition: no condition stored");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "empty condition: resolves normally");
+    }
+
+    // Double colon :: — first : splits off condition, second : is in condition text
+    // Should not crash, equation should still parse
+    {
+        write_fw("/tmp/tce2.fw", "y = x + 1 :: x > 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tce2.fw");
+        ASSERT(sys.equations.size() == 1, "double colon: equation parses");
+        // The condition text ": x > 0" is malformed — should be treated as no condition
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "double colon: resolves");
+    }
+
+    // Colon before equation (no LHS) — should be skipped
+    {
+        write_fw("/tmp/tce3.fw", ": x > 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tce3.fw");
+        ASSERT(sys.equations.empty(), "colon first: no equations");
+    }
+
+    // Malformed condition (no operator) — should skip condition, keep equation
+    {
+        write_fw("/tmp/tce4.fw", "y = x + 1 : garbage\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tce4.fw");
+        ASSERT(sys.equations.size() == 1, "malformed condition: equation preserved");
+        ASSERT(!sys.equations[0].condition.has_value(), "malformed condition: no condition");
+    }
+
+    // Multiple conditions with || (OR)
+    {
+        write_fw("/tmp/tce5.fw", "y = 1 : x < -10 || x > 10\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tce5.fw");
+        ASSERT(sys.equations[0].condition.has_value(), "OR condition: parsed");
+        ASSERT_NUM(sys.resolve("y", {{"x", 20}}), 1, "OR condition: x=20 passes");
+        ASSERT_NUM(sys.resolve("y", {{"x", -20}}), 1, "OR condition: x=-20 passes");
+        auto msg = get_error([&]() { sys.resolve("y", {{"x", 0}}); });
+        ASSERT(!msg.empty(), "OR condition: x=0 fails");
+    }
+}
+
+void test_global_conditions() {
+    SECTION("Global Conditions");
+
+    // Standalone condition line: "area >= 0" constrains area globally
+    {
+        write_fw("/tmp/tgc1.fw",
+            "area >= 0\n"
+            "area = width * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tgc1.fw");
+        ASSERT(!sys.global_conditions.empty(), "global condition: parsed");
+        ASSERT_NUM(sys.resolve("area", {{"width", 5}, {"height", 3}}), 15,
+            "global condition: positive area works");
+    }
+
+    // Global condition prevents invalid result
+    {
+        write_fw("/tmp/tgc2.fw",
+            "side > 0\n"
+            "side = x\n"
+            "side = -x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tgc2.fw");
+        ASSERT_NUM(sys.resolve("side", {{"x", 5}}), 5, "global: side=5 passes");
+        ASSERT_NUM(sys.resolve("side", {{"x", -5}}), 5, "global: side=-(-5)=5 passes");
     }
 }
 
@@ -6241,6 +6322,8 @@ int main() {
     // Conditions
     test_condition_parsing();
     test_condition_solving();
+    test_condition_errors();
+    test_global_conditions();
 
     // Recursion depth guard
     test_recursion_depth_guard();
