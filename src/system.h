@@ -108,7 +108,7 @@ public:
                 trace.step("  default: " + k + " = " + fmt_num(v));
             for (auto& fc : formula_calls) {
                 std::string s = "  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var;
-                for (auto& [sv, pv] : fc.bindings) s += ", " + sv + "=" + pv;
+                for (auto& [sv, pv] : fc.bindings) { s += ", "; s += sv; s += "="; s += pv; }
                 trace.step(s + ")");
             }
         }
@@ -151,7 +151,7 @@ public:
                 double computed = evaluate(simplify(resolved));
                 if (std::isnan(computed) || std::isinf(computed)) return;
                 results.push_back({desc, computed, approx_equal(computed, known_value)});
-            } catch (...) {}
+            } catch (...) { return; }
         };
 
         auto try_verify_formula = [&](const FormulaCall& call, const std::string& resolve_var,
@@ -162,7 +162,7 @@ public:
                 double computed = sub_sys.resolve(resolve_var, sub_binds);
                 if (!std::isnan(computed) && !std::isinf(computed))
                     results.push_back({desc, computed, approx_equal(computed, known_value)});
-            } catch (...) {}
+            } catch (...) { return; }
         };
 
         enumerate_candidates(target, [&](const Candidate& c) {
@@ -196,11 +196,13 @@ public:
         auto result = derive_recursive(target, bindings, {}, 0);
         if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
 
-        // Try to evaluate to a number
+        // Try to evaluate to a number; if symbolic vars remain, return as expression
         try {
             double val = evaluate(result);
             if (!std::isnan(val) && !std::isinf(val)) return fmt_num(val);
-        } catch (...) {}
+        } catch (const std::exception& ex) {
+            trace.calc("derive: symbolic result (cannot evaluate: " + std::string(ex.what()) + ")");
+        }
 
         return expr_to_string(result);
     }
@@ -413,7 +415,7 @@ private:
                 try {
                     solve_recursive(parent_var, parent_bindings, visited, depth + 1);
                     return true;
-                } catch (...) {}
+                } catch (...) { return false; }
             }
             return false;
         };
@@ -433,7 +435,7 @@ private:
 
     // --- Strategy enumeration ---
 
-    enum class CandidateType { EXPR, FORMULA_FWD, FORMULA_REV };
+    enum class CandidateType : uint8_t { EXPR, FORMULA_FWD, FORMULA_REV };
     struct Candidate {
         CandidateType type;
         ExprPtr expr;           // for EXPR candidates
@@ -506,7 +508,7 @@ private:
             for (auto& [sub_var, parent_var] : call.bindings)
                 if (parent_var == target)
                     if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
-                        target + " via " + call.file_stem + "(" + sub_var + ")",
+                        target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
                         &call, sub_var}))
                         return;
     }
@@ -515,7 +517,7 @@ private:
 
     ExprPtr try_derive(const ExprPtr& expr, const std::string& target,
                        std::map<std::string, ExprPtr>& bindings,
-                       std::set<std::string> visited, int depth) const {
+                       std::set<std::string> visited, int depth) const { // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
         std::set<std::string> vars;
         collect_vars(expr, vars);
 
@@ -538,7 +540,7 @@ private:
         try {
             double val = evaluate(result);
             if (!std::isnan(val) && !std::isinf(val)) return Expr::Num(val);
-        } catch (...) {}
+        } catch (...) { return result; }
         return result;
     }
 
@@ -567,7 +569,7 @@ private:
                             sub_binds[k] = Expr::Num(v);
                     auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
                     if (result) { bindings[target] = result; found = result; return true; }
-                } catch (...) {}
+                } catch (...) { return false; }
             }
             // FORMULA_REV not needed for derive (symbolic doesn't reverse through bindings)
             return false;
@@ -652,7 +654,7 @@ private:
 
     bool try_resolve(const ExprPtr& expr, const std::string& target,
                      std::map<std::string, double>& bindings,
-                     std::set<std::string> visited, int depth,
+                     std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
                      bool& had_nan_inf, std::set<std::string>& missing) const {
         // Resolve all free variables in the expression
         std::set<std::string> vars;

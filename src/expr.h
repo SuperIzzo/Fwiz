@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <cstdint>
 #include <memory>
 #include <cmath>
 #include <sstream>
@@ -21,8 +22,8 @@ constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 //  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
 
-enum class ExprType { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL };
-enum class BinOp   { ADD, SUB, MUL, DIV, POW };
+enum class ExprType : uint8_t { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL };
+enum class BinOp   : uint8_t { ADD, SUB, MUL, DIV, POW };
 
 struct Expr;
 using ExprPtr = Expr*;
@@ -183,7 +184,7 @@ inline bool expr_equal(const ExprPtr& a, const ExprPtr& b) {
 // ============================================================================
 
 inline std::string fmt_num(double v) {
-    if (std::abs(v) < 1e12 && v == static_cast<long long>(v))
+    if (std::abs(v) < 1e12 && v == static_cast<double>(static_cast<long long>(v)))
         return std::to_string(static_cast<long long>(v));
     std::ostringstream os;
     os << std::setprecision(10) << v;
@@ -251,6 +252,7 @@ inline ExprPtr substitute(const ExprPtr& e, const std::string& var, const ExprPt
                                       substitute(e->right, var, val));
         case ExprType::FUNC_CALL: {
             std::vector<ExprPtr> a;
+            a.reserve(e->args.size());
             for (auto& arg : e->args) a.push_back(substitute(arg, var, val));
             return Expr::Call(e->name, a);
         }

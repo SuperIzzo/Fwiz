@@ -1,8 +1,9 @@
 #pragma once
 #include <string>
+#include <cstdint>
 #include <iostream>
 
-enum class TraceLevel { NONE, STEPS, CALC };
+enum class TraceLevel : uint8_t { NONE, STEPS, CALC };
 
 class Trace {
 public:
