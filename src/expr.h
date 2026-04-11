@@ -2,6 +2,7 @@
 #include <string>
 #include <cstdint>
 #include <memory>
+#include <cassert>
 #include <cmath>
 #include <sstream>
 #include <iomanip>
@@ -21,8 +22,8 @@ constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 //  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
 
-enum class ExprType : uint8_t { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL };
-enum class BinOp   : uint8_t { ADD, SUB, MUL, DIV, POW };
+enum class ExprType : uint8_t { NUM, VAR, BINOP, UNARY_NEG, FUNC_CALL, COUNT_ };
+enum class BinOp   : uint8_t { ADD, SUB, MUL, DIV, POW, COUNT_ };
 
 struct Expr;
 using ExprPtr = Expr*;
@@ -121,12 +122,14 @@ inline double eval_div(double l, double r) {
 
 inline const BinOpInfo& binop_info(BinOp op) {
     static const BinOpInfo table[] = {
-        {" + ", 1, [](double l, double r) { return l + r; }},
-        {" - ", 1, [](double l, double r) { return l - r; }},
-        {" * ", 2, [](double l, double r) { return l * r; }},
-        {" / ", 2, eval_div},
-        {"^",   4, [](double l, double r) { return std::pow(l, r); }},
+        {" + ", 1, [](double l, double r) { return l + r; }},   // ADD
+        {" - ", 1, [](double l, double r) { return l - r; }},   // SUB
+        {" * ", 2, [](double l, double r) { return l * r; }},   // MUL
+        {" / ", 2, eval_div},                                     // DIV
+        {"^",   4, [](double l, double r) { return std::pow(l, r); }}, // POW
     };
+    static_assert(sizeof(table) / sizeof(table[0]) == static_cast<size_t>(BinOp::COUNT_),
+        "BinOp table must have one entry per enum value");
     return table[static_cast<int>(op)];
 }
 
@@ -154,6 +157,7 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
         case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
         case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
         case ExprType::FUNC_CALL: for (auto& a : e.args) collect_vars(*a, out); break;
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
 }
 
@@ -166,6 +170,7 @@ inline bool contains_var(const Expr& e, const std::string& v) {
         case ExprType::UNARY_NEG: return contains_var(*e.child, v);
         case ExprType::FUNC_CALL: for (auto& a : e.args) if (contains_var(*a, v)) return true;
                                   return false;
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); return false;
     }
     return false;
 }
@@ -186,6 +191,7 @@ inline bool expr_equal(const Expr& a, const Expr& b) {
             for (size_t i = 0; i < a.args.size(); i++)
                 if (!expr_equal(*a.args[i], *b.args[i])) return false;
             return true;
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); return false;
     }
     return false;
 }
@@ -249,6 +255,7 @@ inline std::string expr_to_string(const Expr& e) {
                 s += (i ? ", " : "") + expr_to_string(*e.args[i]);
             return s + ")";
         }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     return "?";
 }
@@ -275,6 +282,7 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
             for (auto& arg : e->args) a.push_back(substitute(arg, var, val));
             return Expr::Call(e->name, a);
         }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     return e;
 }
@@ -301,6 +309,7 @@ inline double evaluate(const Expr& e) {
                 throw std::runtime_error("Unknown function: " + e.name);
             return it->second(evaluate(*e.args[0]));
         }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     throw std::runtime_error("Cannot evaluate: unknown expression type");
 }
@@ -572,8 +581,10 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                     if (is_zero(r)) return Expr::Num(1);
                     if (is_one(r)) return l;
                     return Expr::BinOpExpr(BinOp::POW, l, r);
+        case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }
         }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     return e;
 }
@@ -642,11 +653,13 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
                 case BinOp::POW:
                     if (contains_var(e->left, t) || contains_var(e->right, t)) return fail();
                     return ok(Expr::Num(0), e);
+        case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }
             break;
 
         case ExprType::FUNC_CALL:
             return contains_var(e, t) ? fail() : ok(Expr::Num(0), e);
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     return fail();
 }
