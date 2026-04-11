@@ -368,72 +368,72 @@ void test_decompose() {
     // y + 5: coeff=1, rest=5
     {
         auto lf = decompose_linear(parse("y + 5"), "y");
-        ASSERT(lf.ok, "y+5 is linear in y");
-        ASSERT_NUM(evaluate(lf.coeff), 1, "y+5 coeff=1");
-        ASSERT_NUM(evaluate(lf.rest), 5, "y+5 rest=5");
+        ASSERT(lf.has_value(), "y+5 is linear in y");
+        ASSERT_NUM(evaluate(lf->coeff), 1, "y+5 coeff=1");
+        ASSERT_NUM(evaluate(lf->rest), 5, "y+5 rest=5");
     }
 
     // y * 2 - 5: coeff=2, rest=-5
     {
         auto lf = decompose_linear(parse("y * 2 - 5"), "y");
-        ASSERT(lf.ok, "y*2-5 is linear in y");
-        ASSERT_NUM(evaluate(lf.coeff), 2, "y*2-5 coeff=2");
-        ASSERT_NUM(evaluate(lf.rest), -5, "y*2-5 rest=-5");
+        ASSERT(lf.has_value(), "y*2-5 is linear in y");
+        ASSERT_NUM(evaluate(lf->coeff), 2, "y*2-5 coeff=2");
+        ASSERT_NUM(evaluate(lf->rest), -5, "y*2-5 rest=-5");
     }
 
     // y + 3 * y: coeff=4, rest=0
     {
         auto lf = decompose_linear(parse("y + 3 * y"), "y");
-        ASSERT(lf.ok, "y+3*y is linear in y");
-        ASSERT_NUM(evaluate(lf.coeff), 4, "y+3*y coeff=4");
-        ASSERT_NUM(evaluate(lf.rest), 0, "y+3*y rest=0");
+        ASSERT(lf.has_value(), "y+3*y is linear in y");
+        ASSERT_NUM(evaluate(lf->coeff), 4, "y+3*y coeff=4");
+        ASSERT_NUM(evaluate(lf->rest), 0, "y+3*y rest=0");
     }
 
     // speed * time: linear in time (coeff=speed), but speed is a var
     {
         auto lf = decompose_linear(parse("speed * time"), "time");
-        ASSERT(lf.ok, "speed*time is linear in time");
-        ASSERT_EQ(expr_to_string(lf.coeff), "speed", "coeff=speed");
-        ASSERT_NUM(evaluate(lf.rest), 0, "rest=0");
+        ASSERT(lf.has_value(), "speed*time is linear in time");
+        ASSERT_EQ(expr_to_string(lf->coeff), "speed", "coeff=speed");
+        ASSERT_NUM(evaluate(lf->rest), 0, "rest=0");
     }
 
     // y * y is nonlinear
     {
         auto lf = decompose_linear(parse("y * y"), "y");
-        ASSERT(!lf.ok, "y*y is nonlinear");
+        ASSERT(!lf.has_value(), "y*y is nonlinear");
     }
 
     // sqrt(y) is nonlinear
     {
         auto lf = decompose_linear(parse("sqrt(y)"), "y");
-        ASSERT(!lf.ok, "sqrt(y) is nonlinear");
+        ASSERT(!lf.has_value(), "sqrt(y) is nonlinear");
     }
 
     // Expression with no target var: coeff=0
     {
         auto lf = decompose_linear(parse("a + b"), "z");
-        ASSERT(lf.ok, "a+b linear in z (trivially)");
-        ASSERT_NUM(evaluate(lf.coeff), 0, "coeff=0");
+        ASSERT(lf.has_value(), "a+b linear in z (trivially)");
+        ASSERT_NUM(evaluate(lf->coeff), 0, "coeff=0");
     }
 
     // Negated variable: -y => coeff=-1
     {
         auto lf = decompose_linear(parse("-y"), "y");
-        ASSERT(lf.ok, "-y is linear");
-        ASSERT_NUM(evaluate(lf.coeff), -1, "-y coeff=-1");
+        ASSERT(lf.has_value(), "-y is linear");
+        ASSERT_NUM(evaluate(lf->coeff), -1, "-y coeff=-1");
     }
 
     // Division: y / 3 => coeff=1/3
     {
         auto lf = decompose_linear(parse("y / 3"), "y");
-        ASSERT(lf.ok, "y/3 is linear");
-        ASSERT_NUM(evaluate(lf.coeff), 1.0/3.0, "y/3 coeff=1/3");
+        ASSERT(lf.has_value(), "y/3 is linear");
+        ASSERT_NUM(evaluate(lf->coeff), 1.0/3.0, "y/3 coeff=1/3");
     }
 
     // Target in denominator is nonlinear
     {
         auto lf = decompose_linear(parse("1 / y"), "y");
-        ASSERT(!lf.ok, "1/y is nonlinear");
+        ASSERT(!lf.has_value(), "1/y is nonlinear");
     }
 }
 
@@ -1006,72 +1006,72 @@ void test_decompose_edge() {
     // Variable not present at all => coeff=0
     {
         auto lf = decompose_linear(parse("a + b + 1"), "z");
-        ASSERT(lf.ok, "no z present: ok");
-        ASSERT_NUM(evaluate(lf.coeff), 0, "no z: coeff=0");
+        ASSERT(lf.has_value(), "no z present: ok");
+        ASSERT_NUM(evaluate(lf->coeff), 0, "no z: coeff=0");
     }
 
     // 0 * y => coeff=0 (zero coefficient)
     {
         auto lf = decompose_linear(parse("0 * y"), "y");
-        ASSERT(lf.ok, "0*y is linear");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 0, "0*y coeff=0");
+        ASSERT(lf.has_value(), "0*y is linear");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 0, "0*y coeff=0");
     }
 
     // Subtraction of same var: y - y => coeff=0
     {
         auto lf = decompose_linear(parse("y - y"), "y");
-        ASSERT(lf.ok, "y-y is linear");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 0, "y-y coeff=0");
+        ASSERT(lf.has_value(), "y-y is linear");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 0, "y-y coeff=0");
     }
 
     // Complex coefficient: (a + b) * y
     {
         auto lf = decompose_linear(parse("(a + b) * y"), "y");
-        ASSERT(lf.ok, "(a+b)*y is linear in y");
-        ASSERT_EQ(expr_to_string(lf.coeff), "a + b", "(a+b)*y coeff=a+b");
+        ASSERT(lf.has_value(), "(a+b)*y is linear in y");
+        ASSERT_EQ(expr_to_string(lf->coeff), "a + b", "(a+b)*y coeff=a+b");
     }
 
     // y appears in add and mul: 2*y + 3*y + y => coeff=6
     {
         auto lf = decompose_linear(parse("2*y + 3*y + y"), "y");
-        ASSERT(lf.ok, "2y+3y+y is linear");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 6, "2y+3y+y coeff=6");
+        ASSERT(lf.has_value(), "2y+3y+y is linear");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 6, "2y+3y+y coeff=6");
     }
 
     // y in nested linear: (y + 1) * 2 - y => coeff=1, rest=2
     {
         auto lf = decompose_linear(parse("(y + 1) * 2 - y"), "y");
-        ASSERT(lf.ok, "(y+1)*2-y is linear");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 1, "(y+1)*2-y coeff=1");
-        ASSERT_NUM(evaluate(simplify(lf.rest)), 2, "(y+1)*2-y rest=2");
+        ASSERT(lf.has_value(), "(y+1)*2-y is linear");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "(y+1)*2-y coeff=1");
+        ASSERT_NUM(evaluate(simplify(lf->rest)), 2, "(y+1)*2-y rest=2");
     }
 
     // Negative coefficient: 5 - 3*y => coeff=-3, rest=5
     {
         auto lf = decompose_linear(parse("5 - 3*y"), "y");
-        ASSERT(lf.ok, "5-3y is linear");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), -3, "5-3y coeff=-3");
-        ASSERT_NUM(evaluate(simplify(lf.rest)), 5, "5-3y rest=5");
+        ASSERT(lf.has_value(), "5-3y is linear");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), -3, "5-3y coeff=-3");
+        ASSERT_NUM(evaluate(simplify(lf->rest)), 5, "5-3y rest=5");
     }
 
     // y in exponent is nonlinear
     {
         auto lf = decompose_linear(parse("2^y"), "y");
-        ASSERT(!lf.ok, "2^y is nonlinear");
+        ASSERT(!lf.has_value(), "2^y is nonlinear");
     }
 
     // y in function arg is nonlinear
     {
         auto lf = decompose_linear(parse("sin(y) + 1"), "y");
-        ASSERT(!lf.ok, "sin(y)+1 is nonlinear");
+        ASSERT(!lf.has_value(), "sin(y)+1 is nonlinear");
     }
 
     // Pure constant expression
     {
         auto lf = decompose_linear(Expr::Num(42), "y");
-        ASSERT(lf.ok, "constant is linear (trivially)");
-        ASSERT_NUM(evaluate(lf.coeff), 0, "constant coeff=0");
-        ASSERT_NUM(evaluate(lf.rest), 42, "constant rest=42");
+        ASSERT(lf.has_value(), "constant is linear (trivially)");
+        ASSERT_NUM(evaluate(lf->coeff), 0, "constant coeff=0");
+        ASSERT_NUM(evaluate(lf->rest), 42, "constant rest=42");
     }
 }
 
@@ -2224,15 +2224,15 @@ void test_depth_decompose() {
     {
         auto e = build_deep_add(1000);
         auto lf = decompose_linear(e, "x");
-        ASSERT(lf.ok, "depth 1000: linear in x");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 1, "depth 1000: coeff=1");
-        ASSERT_NUM(evaluate(simplify(lf.rest)), 1000, "depth 1000: rest=1000");
+        ASSERT(lf.has_value(), "depth 1000: linear in x");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "depth 1000: coeff=1");
+        ASSERT_NUM(evaluate(simplify(lf->rest)), 1000, "depth 1000: rest=1000");
     }
     {
         auto e = build_deep_add(DEPTH_MED);
         auto lf = decompose_linear(e, "x");
-        ASSERT(lf.ok, "depth MED: linear in x");
-        ASSERT_NUM(evaluate(simplify(lf.coeff)), 1, "depth MED: coeff=1");
+        ASSERT(lf.has_value(), "depth MED: linear in x");
+        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "depth MED: coeff=1");
     }
 }
 

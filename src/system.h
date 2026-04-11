@@ -115,7 +115,7 @@ public:
     static bool approx_equal(double a, double b) {
         if (std::isnan(a) || std::isnan(b)) return false;
         if (std::isinf(a) || std::isinf(b)) return a == b;
-        double eps = std::max(1e-9, 1e-9 * std::max(std::abs(a), std::abs(b)));
+        double eps = std::max(EPSILON_REL, EPSILON_REL * std::max(std::abs(a), std::abs(b)));
         return std::abs(a - b) < eps;
     }
 
@@ -154,7 +154,7 @@ public:
         auto try_verify_formula = [&](const FormulaCall& call, const std::string& resolve_var,
                                       const std::string& desc) {
             try {
-                auto sub_binds = prepare_sub_bindings_for_verify(call, bindings, target);
+                auto sub_binds = prepare_sub_bindings(call, bindings, {}, 0, target, false);
                 auto& sub_sys = load_sub_system(call.file_stem);
                 double computed = sub_sys.resolve(resolve_var, sub_binds);
                 if (!std::isnan(computed) && !std::isinf(computed))
@@ -396,36 +396,33 @@ private:
     std::map<std::string, double> prepare_sub_bindings(
         const FormulaCall& call,
         std::map<std::string, double>& parent_bindings,
-        std::set<std::string> visited, int depth,
-        const std::string& skip_parent_var = "") const
+        std::set<std::string> visited = {}, int depth = 0,
+        const std::string& skip_parent_var = "",
+        bool resolve_unknowns = true) const
     {
         std::map<std::string, double> sub;
 
+        auto try_get = [&](const std::string& parent_var) -> bool {
+            if (parent_bindings.count(parent_var)) {
+                return true;
+            } else if (resolve_unknowns) {
+                try {
+                    solve_recursive(parent_var, parent_bindings, visited, depth + 1);
+                    return true;
+                } catch (...) {}
+            }
+            return false;
+        };
+
         for (auto& [sub_var, parent_var] : call.bindings) {
             if (parent_var == skip_parent_var) continue;
-            if (parent_bindings.count(parent_var)) {
+            if (try_get(parent_var))
                 sub[sub_var] = parent_bindings.at(parent_var);
-            } else {
-                try {
-                    double val = solve_recursive(parent_var, parent_bindings, visited, depth + 1);
-                    sub[sub_var] = val;
-                } catch (...) {
-                    // Leave unmapped — let the sub-system report the error if needed
-                }
-            }
         }
 
         // Bridge: output_var -> query_var
-        if (parent_bindings.count(call.output_var)) {
+        if (call.output_var != skip_parent_var && try_get(call.output_var))
             sub[call.query_var] = parent_bindings.at(call.output_var);
-        } else if (call.output_var != skip_parent_var) {
-            try {
-                double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1);
-                sub[call.query_var] = val;
-            } catch (...) {
-                // Leave unmapped
-            }
-        }
 
         return sub;
     }
@@ -508,22 +505,6 @@ private:
                         target + " via " + call.file_stem + "(" + sub_var + ")",
                         &call, sub_var}))
                         return;
-    }
-
-    std::map<std::string, double> prepare_sub_bindings_for_verify(
-        const FormulaCall& call,
-        const std::map<std::string, double>& parent_bindings,
-        const std::string& skip_var) const
-    {
-        std::map<std::string, double> sub;
-        for (auto& [sub_var, parent_var] : call.bindings) {
-            if (parent_var == skip_var) continue;
-            if (parent_bindings.count(parent_var))
-                sub[sub_var] = parent_bindings.at(parent_var);
-        }
-        if (parent_bindings.count(call.output_var) && call.output_var != skip_var)
-            sub[call.query_var] = parent_bindings.at(call.output_var);
-        return sub;
     }
 
     // --- Derive (symbolic solver) ---
