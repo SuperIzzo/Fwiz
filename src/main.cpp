@@ -16,7 +16,7 @@ int main(int argc, char* argv[]) {
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
                   << "  --no-numeric   disable numeric solving (algebraic only)\n"
-                  << "  --fit          fit a curve to the function (polynomial approximation)\n"
+                  << "  --fit [N]      fit a curve (depth N, default 2: compose templates)\n"
                   << "  --output FILE  write fitted equation to a .fw file\n"
                   << "  --precision N  set sample density (default 200)\n"
                   << "\n"
@@ -33,6 +33,7 @@ int main(int argc, char* argv[]) {
         bool explore_full = false;
         bool derive_mode = false;
         bool fit_mode = false;
+        int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
         int sys_samples = NUMERIC_DEFAULT_SAMPLES;
         std::string verify_arg;
@@ -46,7 +47,14 @@ int main(int argc, char* argv[]) {
             else if (arg == "--explore")      explore = true;
             else if (arg == "--explore-full") { explore = true; explore_full = true; }
             else if (arg == "--derive")       derive_mode = true;
-            else if (arg == "--fit")          fit_mode = true;
+            else if (arg == "--fit") {
+                fit_mode = true;
+                // Optional depth argument: --fit 3
+                if (i + 1 < argc) {
+                    try { fit_depth = std::stoi(argv[i + 1]); i++; }
+                    catch (...) {} // not a number — leave for query string
+                }
+            }
             else if (arg == "--no-numeric")   numeric_mode = false;
             else if (arg == "--output") {
                 if (i + 1 < argc) output_file = argv[++i];
@@ -78,6 +86,7 @@ int main(int argc, char* argv[]) {
         sys.trace.level = level;
         sys.numeric_mode = numeric_mode;
         sys.numeric_samples = sys_samples;
+        sys.fit_depth = fit_depth;
         sys.load_file(query.filename);
 
         // --- Derive mode ---

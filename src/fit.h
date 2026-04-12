@@ -530,11 +530,29 @@ inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
     return result;
 }
 
-// Try all template forms + polynomial, return all fits sorted by R² (best first).
-inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
-        const std::string& var = "x",
-        const std::map<std::string, double>& extra_constants = {},
-        double min_r2 = 0.9) {
+constexpr int FIT_DEFAULT_DEPTH = 5;
+
+// Sort and deduplicate fit results
+inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
+    std::sort(fits.begin(), fits.end(), [](const FitResult& a, const FitResult& b) {
+        if (std::abs(a.r_squared - b.r_squared) > 1e-6)
+            return a.r_squared > b.r_squared;
+        return a.coefficients.size() < b.coefficients.size();
+    });
+    std::vector<FitResult> unique;
+    std::set<std::string> seen;
+    for (auto& f : fits) {
+        std::string s = f.expr ? expr_to_string(f.expr) : "";
+        if (seen.insert(s).second) unique.push_back(f);
+    }
+    return unique;
+}
+
+// Try all base template forms + polynomial at depth 1.
+inline std::vector<FitResult> fit_base(const std::vector<FitSample>& samples,
+        const std::string& var,
+        const std::map<std::string, double>& extra_constants,
+        double min_r2) {
     std::vector<FitResult> fits;
 
     auto poly = fit_polynomial_auto(samples);
@@ -555,19 +573,123 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
     auto sn = fit_sinusoidal(samples, var, extra_constants);
     if (sn.r_squared > min_r2) fits.push_back(sn);
 
-    // Sort by R² descending, then simplicity
-    std::sort(fits.begin(), fits.end(), [](const FitResult& a, const FitResult& b) {
-        if (std::abs(a.r_squared - b.r_squared) > 1e-6)
-            return a.r_squared > b.r_squared;
-        return a.coefficients.size() < b.coefficients.size();
-    });
+    return fits;
+}
 
-    // Deduplicate by expression string
-    std::vector<FitResult> unique;
-    std::set<std::string> seen;
-    for (auto& f : fits) {
-        std::string s = f.expr ? expr_to_string(f.expr) : "";
-        if (seen.insert(s).second) unique.push_back(f);
+// Recursive composition: at each depth, take inner fits and wrap them
+// in outer templates. E.g., if inner = sin(x), try a*sin(x)^b, e^(sin(x)), etc.
+inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {},
+        double min_r2 = 0.9,
+        int depth = FIT_DEFAULT_DEPTH) {
+    // Level 1: base templates on raw data
+    auto fits = fit_base(samples, var, extra_constants, min_r2);
+
+    if (depth <= 1) return sort_and_dedup(fits);
+
+    // Level 2+: compose templates
+    // For each inner fit, transform samples through it, then fit outer templates
+    double best_base_r2 = fits.empty() ? 0 : fits[0].r_squared;
+
+    // Only use inner fits that are reasonable (R² > 0.5) to avoid noise
+    std::vector<FitResult> inners;
+    for (auto& f : fits)
+        if (f.r_squared > 0.5 && f.expr) inners.push_back(f);
+
+    // Also try raw builtin functions as inners (sin(x), log(x), sqrt(x))
+    struct BuiltinInner { std::string name; std::function<double(double)> fn; };
+    std::vector<BuiltinInner> builtin_inners = {
+        {"sin",  [](double x) { return std::sin(x); }},
+        {"cos",  [](double x) { return std::cos(x); }},
+        {"sqrt", [](double x) { return x > 0 ? std::sqrt(x) : std::numeric_limits<double>::quiet_NaN(); }},
+        {"log",  [](double x) { return x > 0 ? std::log(x) : std::numeric_limits<double>::quiet_NaN(); }},
+        {"abs",  [](double x) { return std::fabs(x); }},
+    };
+
+    for (auto& bi : builtin_inners) {
+        auto& bname = bi.name;
+        auto& bfn = bi.fn;
+        // Transform samples: (x, y) → (f(x), y) where f is the builtin
+        std::vector<FitSample> transformed;
+        for (auto& s : samples) {
+            double tx = bfn(s.x);
+            if (std::isfinite(tx)) transformed.push_back({tx, s.y});
+        }
+        if (transformed.size() < 5) continue;
+
+        // Fit outer templates on transformed data
+        auto outer_fits = fit_base(transformed, "__inner__", extra_constants, min_r2);
+        for (auto& of : outer_fits) {
+            if (of.r_squared <= best_base_r2 + 1e-6) continue; // must improve
+            // Recompute stats on original samples
+            ExprPtr inner_expr = Expr::Call(bname, {Expr::Var(var)});
+            if (of.expr) {
+                // Replace __inner__ with f(var) in the outer expression
+                ExprPtr composed = substitute(of.expr, "__inner__", inner_expr);
+                composed = simplify(composed);
+
+                FitResult composed_result;
+                composed_result.degree = -1;
+                composed_result.expr = composed;
+                compute_template_stats(composed_result, samples, [&bfn, &of](double x) {
+                    double tx = bfn(x);
+                    if (!std::isfinite(tx)) return std::numeric_limits<double>::quiet_NaN();
+                    return evaluate(*substitute(of.expr, "__inner__", Expr::Num(tx)));
+                });
+                if (composed_result.r_squared > min_r2)
+                    fits.push_back(composed_result);
+            }
+        }
     }
-    return unique;
+
+    // Also compose fitted inners: for each inner fit, transform y through
+    // its inverse and fit on (x, inner_value) pairs
+    for (auto& inner : inners) {
+        if (!inner.expr) continue;
+        // Build evaluation function from inner expression
+        auto eval_inner = [&inner, &var](double x) -> double {
+            try {
+                return evaluate(*substitute(inner.expr, var, Expr::Num(x)));
+            } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+        };
+
+        // Transform: (x, y) → (inner(x), y)
+        std::vector<FitSample> transformed;
+        for (auto& s : samples) {
+            double ix = eval_inner(s.x);
+            if (std::isfinite(ix)) transformed.push_back({ix, s.y});
+        }
+        if (transformed.size() < 5) continue;
+
+        auto outer_fits = fit_base(transformed, "__inner__", extra_constants, min_r2);
+        for (auto& of : outer_fits) {
+            if (of.r_squared <= best_base_r2 + 1e-6) continue;
+            if (!of.expr) continue;
+            ExprPtr composed = substitute(of.expr, "__inner__", inner.expr);
+            composed = simplify(composed);
+
+            // Check it's not the same as a simpler existing fit
+            std::string cstr = expr_to_string(composed);
+            bool already_have = false;
+            for (auto& f : fits)
+                if (f.expr && expr_to_string(f.expr) == cstr) { already_have = true; break; }
+            if (already_have) continue;
+
+            FitResult composed_result;
+            composed_result.degree = -1;
+            composed_result.expr = composed;
+            compute_template_stats(composed_result, samples, [&eval_inner, &of, &var](double x) {
+                try {
+                    double ix = eval_inner(x);
+                    if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
+                    return evaluate(*substitute(of.expr, "__inner__", Expr::Num(ix)));
+                } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+            });
+            if (composed_result.r_squared > min_r2)
+                fits.push_back(composed_result);
+        }
+    }
+
+    return sort_and_dedup(fits);
 }
