@@ -439,20 +439,71 @@ public:
         // Collect ALL results from enumerate_candidates
         std::vector<std::string> results;
         std::set<std::string> seen;
+
+        auto add_result = [&](const ExprPtr& result) {
+            if (!result) return;
+            auto s = format_derived(result);
+            if (seen.insert(s).second) results.push_back(s);
+        };
+
+        std::map<std::string, double> numeric;
+        for (auto& [k, v] : bindings) {
+            try { numeric[k] = evaluate(*v); } catch (...) {}
+        }
+
         enumerate_candidates(target, [&](const Candidate& c) {
-            if (c.type != CandidateType::EXPR) return false;
-            // Check condition
-            std::map<std::string, double> numeric;
-            for (auto& [k, v] : bindings) {
-                try { numeric[k] = evaluate(*v); } catch (...) {}
-            }
             if (c.condition && !check_condition(*c.condition, numeric)) return false;
 
-            auto b = bindings; // fresh copy per candidate
-            auto result = try_derive(c.expr, target, b, {}, 0);
-            if (result) {
-                auto s = format_derived(result);
-                if (seen.insert(s).second) results.push_back(s);
+            if (c.type == CandidateType::EXPR) {
+                auto b = bindings;
+                add_result(try_derive(c.expr, target, b, {}, 0));
+            } else if (c.type == CandidateType::FORMULA_REV) {
+                // Unfold sub-system equations and collect all solutions
+                try {
+                    auto& sub_sys = load_sub_system(c.call->file_stem);
+                    std::map<std::string, ExprPtr> parent_map;
+                    for (auto& [sv, expr] : c.call->bindings)
+                        parent_map[sv] = expr;
+                    std::string sub_target = c.sub_var;
+                    ExprPtr binding_expr = parent_map[sub_target];
+
+                    for (auto& eq : sub_sys.equations) {
+                        if (eq.lhs_var != c.call->query_var) continue;
+                        if (eq.condition && !sub_sys.check_condition(*eq.condition, numeric))
+                            continue;
+                        ExprPtr unfolded = eq.rhs;
+                        for (auto& [sv, pe] : parent_map) {
+                            if (sv == sub_target) continue;
+                            unfolded = substitute(unfolded, sv, pe);
+                        }
+                        for (auto& [k, v] : sub_sys.defaults) {
+                            if (parent_map.count(k) || k == c.call->query_var || k == sub_target) continue;
+                            unfolded = substitute(unfolded, k, Expr::Num(v));
+                        }
+                        unfolded = simplify(unfolded);
+                        auto sols = solve_for_all(Expr::Var(c.call->output_var), unfolded, sub_target);
+                        for (auto& sol : sols) {
+                            if (!sol.expr) continue;
+                            if (is_var(binding_expr) && binding_expr->name == target) {
+                                auto b = bindings;
+                                add_result(try_derive(sol.expr, target, b, {}, 0));
+                            } else {
+                                auto final_sols = solve_for_all(sol.expr, binding_expr, target);
+                                for (auto& fs : final_sols) {
+                                    if (!fs.expr) continue;
+                                    auto b = bindings;
+                                    add_result(try_derive(fs.expr, target, b, {}, 0));
+                                }
+                            }
+                        }
+                    }
+                } catch (...) {}
+            } else if (c.type == CandidateType::FORMULA_FWD) {
+                // Forward formula call — derive into sub-system
+                auto b = bindings;
+                auto result = derive_recursive(target, b, {}, 0);
+                add_result(result);
+                return result != nullptr; // stop if found (forward is single-valued)
             }
             return false; // don't stop — collect all
         });
@@ -1406,8 +1457,6 @@ private:
                 // then solve for target (which appears in a binding expression)
                 try {
                     auto& sub_sys = load_sub_system(c.call->file_stem);
-                    // Build parent_map WITHOUT substituting bindings —
-                    // keep parent variable names so try_derive can resolve them
                     std::map<std::string, ExprPtr> parent_map;
                     for (auto& [sv, expr] : c.call->bindings)
                         parent_map[sv] = expr;
@@ -1415,9 +1464,21 @@ private:
                     ExprPtr binding_expr = parent_map[sub_target];
                     for (auto& eq : sub_sys.equations) {
                         if (eq.lhs_var != c.call->query_var) continue;
+                        // Check sub-system equation condition if possible
+                        if (eq.condition) {
+                            std::map<std::string, double> cond_binds;
+                            for (auto& [sv, pe] : parent_map) {
+                                try { cond_binds[sv] = evaluate(*pe); } catch (...) {}
+                            }
+                            for (auto& [k, v] : bindings) {
+                                try { cond_binds[k] = evaluate(*v); } catch (...) {}
+                            }
+                            if (!sub_sys.check_condition(*eq.condition, cond_binds))
+                                continue;
+                        }
                         ExprPtr unfolded = eq.rhs;
                         for (auto& [sv, pe] : parent_map) {
-                            if (sv == sub_target) continue; // keep solve target
+                            if (sv == sub_target) continue;
                             unfolded = substitute(unfolded, sv, pe);
                         }
                         for (auto& [k, v] : sub_sys.defaults) {
@@ -1426,21 +1487,28 @@ private:
                             unfolded = substitute(unfolded, k, Expr::Num(v));
                         }
                         unfolded = simplify(unfolded);
-                        // Solve: output_var = unfolded → sub_target = ...
-                        auto sol = solve_for(Expr::Var(c.call->output_var), unfolded, sub_target);
-                        if (!sol) continue;
-                        // sub_target = sol, and binding says sub_target = binding_expr(target)
-                        // So: binding_expr(target) = sol → solve for target
-                        if (is_var(binding_expr) && binding_expr->name == target) {
-                            // Simple case: sub_target maps directly to target
-                            auto result = try_derive(sol, target, bindings, visited, depth);
-                            if (result) { bindings[target] = result; found = result; return true; }
-                        } else {
-                            // Expression binding: solve binding_expr = sol for target
-                            auto final_sol = solve_for(sol, binding_expr, target);
-                            if (!final_sol) continue;
-                            auto result = try_derive(final_sol, target, bindings, visited, depth);
-                            if (result) { bindings[target] = result; found = result; return true; }
+                        // Use solve_for_all to get all solutions (e.g., abs → two)
+                        auto sols = solve_for_all(Expr::Var(c.call->output_var), unfolded, sub_target);
+                        for (auto& sol : sols) {
+                            if (!sol.expr) continue;
+                            ExprPtr final_expr = nullptr;
+                            if (is_var(binding_expr) && binding_expr->name == target) {
+                                auto b = bindings; // fresh copy per branch
+                                final_expr = try_derive(sol.expr, target, b, visited, depth);
+                            } else {
+                                auto final_sols = solve_for_all(sol.expr, binding_expr, target);
+                                for (auto& fs : final_sols) {
+                                    if (!fs.expr) continue;
+                                    auto b = bindings;
+                                    final_expr = try_derive(fs.expr, target, b, visited, depth);
+                                    if (final_expr) break;
+                                }
+                            }
+                            if (final_expr) {
+                                bindings[target] = final_expr;
+                                found = final_expr;
+                                return true; // derive_recursive returns first; derive_all iterates
+                            }
                         }
                     }
                 } catch (...) {}
