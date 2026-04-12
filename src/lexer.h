@@ -79,6 +79,14 @@ private:
         size_t start = pos_;
         while (pos_ < src_.size() && (is_alnum(src_[pos_]) || src_[pos_] == '_'))
             pos_++;
+        // Include dots for dotted names (e.g., geometry.rectangle in formula calls)
+        // Only if dot is followed by an alpha character (not a digit or end)
+        while (pos_ < src_.size() && src_[pos_] == '.'
+               && pos_ + 1 < src_.size() && (is_alpha(src_[pos_ + 1]) || src_[pos_ + 1] == '_')) {
+            pos_++; // skip the dot
+            while (pos_ < src_.size() && (is_alnum(src_[pos_]) || src_[pos_] == '_'))
+                pos_++;
+        }
         return {TokenType::IDENT, src_.substr(start, pos_ - start)};
     }
 };

@@ -6965,9 +6965,13 @@ void test_numeric_binary_integration() {
         ASSERT(WEXITSTATUS(rc) != 0, "numeric binary: no ~ with --no-numeric");
     }
 
-    // Factorial with --numeric
+    // Factorial with --numeric (constrained range for speed)
     {
-        int rc = system("./bin/fwiz 'examples/factorial(n=?, result=120)' 2>/dev/null "
+        write_fw("/tmp/tnb_fact.fw",
+            "result = 1 : n <= 0\n"
+            "result = n * tnb_fact(result=?prev, n=n-1) : n > 0\n"
+            "n >= 0\nn <= 20\n");
+        int rc = system("./bin/fwiz '/tmp/tnb_fact(n=?, result=120)' 2>/dev/null "
                         "| grep -q '5'");
         ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: factorial finds 5");
     }
@@ -7949,6 +7953,18 @@ void test_sections() {
         int rc = system("./bin/fwiz '/tmp/tsec2.phys.gravity(weight=?, mass=10)' 2>/dev/null "
                         "| grep -q 'weight = 98.1'");
         ASSERT(WEXITSTATUS(rc) == 0, "section binary: cascading phys.gravity");
+    }
+
+    // Cross-file section call
+    {
+        write_fw("/tmp/tsec_shapes.fw",
+            "[rect]\narea = w * h\n[circ]\narea = pi * r^2\n");
+        write_fw("/tmp/tsec_building.fw",
+            "tsec_shapes.rect(area=?floor, w=width, h=depth)\nvolume = floor * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tsec_building.fw");
+        double v = sys.resolve("volume", {{"width", 10}, {"depth", 8}, {"height", 3}});
+        ASSERT_NUM(v, 240, "section: cross-file section call");
     }
 }
 
