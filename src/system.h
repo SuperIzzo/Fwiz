@@ -1084,16 +1084,18 @@ private:
                     eq.condition ? &*eq.condition : nullptr}))
                     return;
 
-        // Strategy 2: target in RHS — algebraic inversion
+        // Strategy 2: target in RHS — algebraic inversion (may produce multiple solutions)
         for (auto& eq : equations) {
             if (!contains_var(eq.rhs, target)) continue;
-            auto sol = solve_for(Expr::Var(eq.lhs_var), eq.rhs, target);
-            if (sol)
-                if (handler(Candidate{CandidateType::EXPR, sol,
-                    target + " = " + expr_to_string(sol)
-                    + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")",
-                    nullptr, "", eq.condition ? &*eq.condition : nullptr}))
-                    return;
+            auto sols = solve_for_all(Expr::Var(eq.lhs_var), eq.rhs, target);
+            for (auto& sol : sols)
+                if (sol.expr)
+                    if (handler(Candidate{CandidateType::EXPR, sol.expr,
+                        target + " = " + expr_to_string(sol.expr)
+                        + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")"
+                        + (sol.cond_desc.empty() ? "" : "  [" + sol.cond_desc + "]"),
+                        nullptr, "", eq.condition ? &*eq.condition : nullptr}))
+                        return;
         }
 
         // Strategy 3: forward formula call
