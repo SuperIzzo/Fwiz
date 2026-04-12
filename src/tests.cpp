@@ -7983,6 +7983,83 @@ void test_sections() {
     }
 }
 
+void test_simplify_assumptions() {
+    SECTION("Simplify Assumptions");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // x/x → 1, assumes x != 0
+    {
+        simplify_clear_assumptions();
+        auto expr = simplify(parse("x / x"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT_EQ(expr_to_string(expr), "1", "assumption: x/x → 1");
+        ASSERT(assumptions.size() == 1, "assumption: one assumption for x/x");
+        if (!assumptions.empty())
+            ASSERT(assumptions[0].desc.find("x") != std::string::npos,
+                "assumption: mentions x");
+    }
+
+    // a*b/a → b, assumes a != 0
+    {
+        simplify_clear_assumptions();
+        auto expr = simplify(parse("a * b / a"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT_EQ(expr_to_string(expr), "b", "assumption: a*b/a → b");
+        ASSERT(assumptions.size() == 1, "assumption: one assumption for a*b/a");
+        if (!assumptions.empty())
+            ASSERT(assumptions[0].desc.find("a") != std::string::npos,
+                "assumption: mentions a");
+    }
+
+    // No cancellation → no assumptions
+    {
+        simplify_clear_assumptions();
+        simplify(parse("x + 1"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(assumptions.empty(), "assumption: none for x + 1");
+    }
+
+    // Numeric division → no assumption (3/3 is just arithmetic)
+    {
+        simplify_clear_assumptions();
+        simplify(parse("6 / 3"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(assumptions.empty(), "assumption: none for 6/3");
+    }
+
+    // Complex: (x-3)*z/(x-3) → z, assumes x-3 != 0
+    {
+        simplify_clear_assumptions();
+        auto expr = simplify(parse("(x - 3) * z / (x - 3)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT_EQ(expr_to_string(expr), "z", "assumption: (x-3)*z/(x-3) → z");
+        ASSERT(!assumptions.empty(), "assumption: has assumption for (x-3)*z/(x-3)");
+        if (!assumptions.empty())
+            ASSERT(assumptions[0].desc.find("x - 3") != std::string::npos,
+                "assumption: mentions x - 3 (got '" + assumptions[0].desc + "')");
+    }
+
+    // sin(x)/sin(x) → 1, assumes sin(x) != 0
+    {
+        simplify_clear_assumptions();
+        auto expr = simplify(parse("sin(x) / sin(x)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT_EQ(expr_to_string(expr), "1", "assumption: sin(x)/sin(x) → 1");
+        ASSERT(!assumptions.empty(), "assumption: has assumption for sin(x)/sin(x)");
+    }
+
+    // Dedup: x*x/x → x with only one assumption (not two)
+    {
+        simplify_clear_assumptions();
+        auto expr = simplify(parse("x * x / x"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT_EQ(expr_to_string(expr), "x", "assumption: x*x/x → x");
+        ASSERT(assumptions.size() == 1, "assumption: dedup — one assumption for x*x/x");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8193,6 +8270,7 @@ int main() {
     test_numeric_precision_edge();
     test_inline_and_stdin();
     test_sections();
+    test_simplify_assumptions();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

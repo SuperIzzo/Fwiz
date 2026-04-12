@@ -1211,7 +1211,10 @@ private:
             }
         }
 
+        simplify_clear_assumptions();
         auto result = simplify(resolved);
+        for (auto& a : simplify_get_assumptions())
+            trace.step("  assuming: " + a.desc, depth + 1);
 
         // If the target appears in the resolved expression, we have:
         //   target = f(target, ...) — try to solve algebraically
@@ -1698,7 +1701,12 @@ private:
 
         try {
             trace.calc("evaluate: " + expr_to_string(resolved), depth + 2);
-            double result = evaluate(simplify(resolved));
+            simplify_clear_assumptions();
+            auto simplified = simplify(resolved);
+            auto assumptions = simplify_get_assumptions();
+            for (auto& a : assumptions)
+                trace.step("  assuming: " + a.desc, depth + 2);
+            double result = evaluate(simplified);
             if (std::isnan(result) || std::isinf(result)) {
                 trace.step("result is " + std::string(std::isnan(result) ? "NaN" : "inf")
                     + ", trying alternatives", depth + 1);
