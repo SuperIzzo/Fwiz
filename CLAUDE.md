@@ -39,13 +39,17 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 ## Language features
 
-### Conditions
+### Conditions (if / iff)
 ```
-y = sqrt(x) : x >= 0           # equation with condition
-y = 0 : x < 0                  # piecewise branching
-tax = income * 0.1 : income > 0 && income <= 50000  # compound
+y = sqrt(x) if x >= 0                          # one-directional condition
+y = 0 if x < 0                                 # piecewise branching
+tax = income * 0.1 if income > 0 && income <= 50000  # compound
+result = 1 iff x > 0                           # bidirectional (enables inverse reasoning)
+y = x, if x > 0                                # optional comma
 ```
-Operators: `>`, `>=`, `<`, `<=`, `=`, `==`, `!=`. Compound: `&&`, `||`.
+- `if` — one-directional: condition checked forward only
+- `iff` — bidirectional: condition can be inverted (used in stdlib.fw piecewise functions)
+- Operators: `>`, `>=`, `<`, `<=`, `=`, `==`, `!=`. Compound: `&&`, `||`.
 
 ### Global conditions
 ```
@@ -73,8 +77,8 @@ Expression bindings: `factorial(result=?prev, n=n-1)` — `n-1` evaluated in par
 
 ### Recursion
 ```
-result = 1 : n <= 0
-result = n * factorial(result=?prev, n=n-1) : n > 0
+result = 1 if n <= 0
+result = n * factorial(result=?prev, n=n-1) if n > 0
 ```
 Depth guard: `max_formula_depth` (default 1000).
 
