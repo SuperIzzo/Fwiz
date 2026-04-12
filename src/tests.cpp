@@ -7148,14 +7148,14 @@ void test_fit_integration() {
         ASSERT(result.exact, "fit integration: quadratic is exact");
     }
 
-    // Transcendental (approximate)
+    // Transcendental — composition finds sin(x) exactly
     {
         write_fw("/tmp/tf_sin.fw", "y = sin(x)\nx >= 0\nx <= 6.28\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tf_sin.fw");
         auto result = sys.fit("y", {}, {{"x", "x"}});
-        ASSERT(!result.exact, "fit integration: sin is approximate");
         ASSERT(result.r_squared > 0.99, "fit integration: sin R² > 0.99");
+        ASSERT_EQ(result.equation, "sin(x)", "fit integration: sin recognized exactly");
     }
 
     // Error: no symbolic variable

@@ -132,6 +132,7 @@ public:
     mutable int max_formula_depth = 1000;
     mutable bool numeric_mode = false;
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
+    int fit_depth = FIT_DEFAULT_DEPTH;
     static inline thread_local int formula_depth_ = 0;
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
     mutable std::unordered_map<std::string, double> numeric_memo_;
@@ -348,7 +349,7 @@ public:
             throw std::runtime_error("Not enough valid samples for fitting (got "
                 + std::to_string(samples.size()) + ")");
 
-        auto fits = fit_all(samples, free_var, defaults);
+        auto fits = fit_all(samples, free_var, defaults, 0.9, fit_depth);
         if (fits.empty())
             throw std::runtime_error("No fit found with R² > 0.9");
 
