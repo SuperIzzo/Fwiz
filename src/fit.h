@@ -140,22 +140,22 @@ inline double poly_eval(const std::vector<double>& c, double x) {
     return result;
 }
 
-// Compute R² and max error for a polynomial fit
-inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& samples) {
+// Compute R² and max error for any prediction function
+inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& samples,
+        const std::function<double(double)>& predict) {
     double y_mean = 0;
     for (auto& s : samples) y_mean += s.y;
     y_mean /= static_cast<double>(samples.size());
-
     double ss_res = 0, ss_tot = 0;
     result.max_error = 0;
     for (auto& s : samples) {
-        double predicted = poly_eval(result.coefficients, s.x);
+        double predicted = predict(s.x);
+        if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
         double residual = s.y - predicted;
         ss_res += residual * residual;
         ss_tot += (s.y - y_mean) * (s.y - y_mean);
         result.max_error = std::max(result.max_error, std::abs(residual));
     }
-
     result.r_squared = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
     result.exact = result.max_error < FIT_PERFECT_THRESHOLD;
 }
@@ -186,7 +186,9 @@ inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degre
     // Snap coefficients to integers
     for (auto& c : result.coefficients) c = snap_coeff(c);
 
-    compute_fit_stats(result, samples);
+    compute_fit_stats(result, samples, [&result](double x) {
+        return poly_eval(result.coefficients, x);
+    });
     return result;
 }
 
@@ -369,25 +371,6 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
 //  Template fitting (power law, exponential, logarithmic, sinusoidal)
 // ============================================================================
 
-// Helper: compute R² and max_error for a prediction function
-inline void compute_template_stats(FitResult& result, const std::vector<FitSample>& samples,
-        const std::function<double(double)>& predict) {
-    double y_mean = 0;
-    for (auto& s : samples) y_mean += s.y;
-    y_mean /= static_cast<double>(samples.size());
-    double ss_res = 0, ss_tot = 0;
-    result.max_error = 0;
-    for (auto& s : samples) {
-        double predicted = predict(s.x);
-        if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
-        double residual = s.y - predicted;
-        ss_res += residual * residual;
-        ss_tot += (s.y - y_mean) * (s.y - y_mean);
-        result.max_error = std::max(result.max_error, std::abs(residual));
-    }
-    result.r_squared = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
-    result.exact = result.max_error < FIT_PERFECT_THRESHOLD;
-}
 
 // Power law: y = a * x^b  →  log(y) = log(a) + b*log(x)
 inline FitResult fit_power_law(const std::vector<FitSample>& samples,
@@ -409,7 +392,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
     double a = std::exp(coeffs[0]), power = coeffs[1];
 
     result.coefficients = {a, power};
-    compute_template_stats(result, samples, [a, power](double x) {
+    compute_fit_stats(result, samples, [a, power](double x) {
         return a * std::pow(x, power);
     });
 
@@ -445,7 +428,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         FitResult result;
         result.degree = -1;
         result.coefficients = {a, rate};
-        compute_template_stats(result, samples, [a, rate](double x) {
+        compute_fit_stats(result, samples, [a, rate](double x) {
             return a * std::exp(rate * x);
         });
 
@@ -471,7 +454,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         FitResult result;
         result.degree = -1;
         result.coefficients = {a, c2, c1};
-        compute_template_stats(result, samples, [a, c1, c2](double x) {
+        compute_fit_stats(result, samples, [a, c1, c2](double x) {
             return a * std::exp(c2 * x * x + c1 * x);
         });
 
@@ -519,7 +502,7 @@ inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
     double intercept = coeffs[0], slope = coeffs[1];
 
     result.coefficients = {intercept, slope};
-    compute_template_stats(result, samples, [intercept, slope](double x) {
+    compute_fit_stats(result, samples, [intercept, slope](double x) {
         return (x > 0) ? slope * std::log(x) + intercept : std::numeric_limits<double>::quiet_NaN();
     });
 
@@ -572,7 +555,7 @@ inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
     double offset = coeffs[2];
 
     result.coefficients = {amplitude, freq, phase, offset};
-    compute_template_stats(result, samples, [amplitude, freq, phase, offset](double x) {
+    compute_fit_stats(result, samples, [amplitude, freq, phase, offset](double x) {
         return amplitude * std::sin(freq * x + phase) + offset;
     });
 
@@ -775,7 +758,7 @@ inline std::vector<FitResult> compose_level(
             FitResult cr;
             cr.degree = -1;
             cr.expr = composed;
-            compute_template_stats(cr, samples, [&eval_inner, &of](double x) {
+            compute_fit_stats(cr, samples, [&eval_inner, &of](double x) {
                 try {
                     double ix = eval_inner(x);
                     if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
@@ -806,7 +789,7 @@ inline std::vector<FitResult> compose_level(
             FitResult cr;
             cr.degree = -1;
             cr.expr = composed;
-            compute_template_stats(cr, samples, [&eval_inner, &ob](double x) {
+            compute_fit_stats(cr, samples, [&eval_inner, &ob](double x) {
                 double ix = eval_inner(x);
                 if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
                 return ob.fn(ix);
@@ -844,7 +827,7 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         FitResult br;
         br.degree = -1;
         br.expr = Expr::Call(bi.name, {Expr::Var(var)});
-        compute_template_stats(br, samples, bi.fn);
+        compute_fit_stats(br, samples, bi.fn);
         level_inners.push_back(br);
 
         // product: x * f(x)
@@ -852,7 +835,7 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         pr.degree = -1;
         pr.expr = Expr::BinOpExpr(BinOp::MUL, Expr::Var(var),
             Expr::Call(bi.name, {Expr::Var(var)}));
-        compute_template_stats(pr, samples, [&bi](double x) {
+        compute_fit_stats(pr, samples, [&bi](double x) {
             return x * bi.fn(x);
         });
         level_inners.push_back(pr);
