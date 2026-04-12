@@ -1065,13 +1065,6 @@ private:
                 if (ch == ')') { pd--; continue; }
                 if (pd != 0) continue;
 
-                // Legacy: ":"
-                if (ch == ':') {
-                    eq_part = line.substr(0, i);
-                    cond_part = line.substr(i + 1);
-                    break;
-                }
-
                 // "iff " keyword (must be preceded by space or comma)
                 if (ch == 'i' && i + 3 < line.size()
                     && line[i+1] == 'f' && line[i+2] == 'f' && line[i+3] == ' '
