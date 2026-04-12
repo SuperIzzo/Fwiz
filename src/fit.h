@@ -421,34 +421,83 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
 }
 
 // Exponential: y = a * e^(b*x)  →  log(y) = log(a) + b*x
+// Also tries quadratic exponent (Gaussian): y = a * e^(b*x² + c*x)
 inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
-    FitResult result;
-    result.degree = -1;
-
     std::vector<FitSample> log_samples;
     for (auto& s : samples)
         if (s.y > 0) log_samples.push_back({s.x, std::log(s.y)});
-    if (log_samples.size() < 3) return result;
+    if (log_samples.size() < 3) { FitResult r; r.degree = -1; return r; }
 
-    auto A = vandermonde(log_samples, 1);
-    std::vector<double> b;
-    for (auto& s : log_samples) b.push_back(s.y);
-    auto coeffs = least_squares_solve(A, b);
-    double a = std::exp(coeffs[0]), rate = coeffs[1];
+    FitResult best;
+    best.degree = -1;
+    best.r_squared = -1;
 
-    result.coefficients = {a, rate};
-    compute_template_stats(result, samples, [a, rate](double x) {
-        return a * std::exp(rate * x);
-    });
+    // Try linear exponent: y = a * e^(b*x)
+    {
+        auto A = vandermonde(log_samples, 1);
+        std::vector<double> b;
+        for (auto& s : log_samples) b.push_back(s.y);
+        auto coeffs = least_squares_solve(A, b);
+        double a = std::exp(coeffs[0]), rate = coeffs[1];
 
-    ExprPtr a_expr = coeff_to_expr(snap_coeff(a), extra_constants);
-    ExprPtr bx = simplify(Expr::BinOpExpr(BinOp::MUL,
-        coeff_to_expr(snap_coeff(rate), extra_constants), Expr::Var(var)));
-    ExprPtr exp_part = Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), bx);
-    result.expr = simplify(Expr::BinOpExpr(BinOp::MUL, a_expr, exp_part));
-    return result;
+        FitResult result;
+        result.degree = -1;
+        result.coefficients = {a, rate};
+        compute_template_stats(result, samples, [a, rate](double x) {
+            return a * std::exp(rate * x);
+        });
+
+        if (result.r_squared > best.r_squared) {
+            ExprPtr a_expr = coeff_to_expr(snap_coeff(a), extra_constants);
+            ExprPtr bx = Expr::BinOpExpr(BinOp::MUL,
+                coeff_to_expr(snap_coeff(rate), extra_constants), Expr::Var(var));
+            result.expr = Expr::BinOpExpr(BinOp::MUL, a_expr,
+                Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), bx));
+            best = result;
+        }
+    }
+
+    // Try quadratic exponent (Gaussian): y = a * e^(b*x² + c*x)
+    if (log_samples.size() >= 4) {
+        auto A = vandermonde(log_samples, 2);
+        std::vector<double> b;
+        for (auto& s : log_samples) b.push_back(s.y);
+        auto coeffs = least_squares_solve(A, b);
+        double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2];
+        double a = std::exp(c0);
+
+        FitResult result;
+        result.degree = -1;
+        result.coefficients = {a, c2, c1};
+        compute_template_stats(result, samples, [a, c1, c2](double x) {
+            return a * std::exp(c2 * x * x + c1 * x);
+        });
+
+        if (result.r_squared > best.r_squared) {
+            ExprPtr a_expr = coeff_to_expr(snap_coeff(a), extra_constants);
+            // Build exponent: c2*x² + c1*x
+            ExprPtr exponent = nullptr;
+            if (std::abs(c2) > EPSILON_ZERO) {
+                ExprPtr x2 = Expr::BinOpExpr(BinOp::POW, Expr::Var(var), Expr::Num(2));
+                exponent = Expr::BinOpExpr(BinOp::MUL,
+                    coeff_to_expr(snap_coeff(c2), extra_constants), x2);
+            }
+            if (std::abs(c1) > EPSILON_ZERO) {
+                ExprPtr cx = Expr::BinOpExpr(BinOp::MUL,
+                    coeff_to_expr(snap_coeff(c1), extra_constants), Expr::Var(var));
+                exponent = exponent
+                    ? Expr::BinOpExpr(BinOp::ADD, exponent, cx) : cx;
+            }
+            if (!exponent) exponent = Expr::Num(0);
+            result.expr = Expr::BinOpExpr(BinOp::MUL, a_expr,
+                Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), exponent));
+            best = result;
+        }
+    }
+
+    return best;
 }
 
 // Logarithmic: y = a * log(x) + b
@@ -544,6 +593,88 @@ inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
     return result;
 }
 
+// Reciprocal: y = a / (x + b) + c  →  1/(y-c) = (x+b)/a  →  linear in x
+// Requires y values that aren't all the same sign
+inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {}) {
+    FitResult result;
+    result.degree = -1;
+    if (samples.size() < 5) return result;
+
+    // Try different offsets c by estimating from the asymptotic value
+    // As x → ∞, y → c. Use the last few samples to estimate c.
+    double c_est = 0;
+    int tail = std::min(5, static_cast<int>(samples.size()));
+    for (int i = static_cast<int>(samples.size()) - tail; i < static_cast<int>(samples.size()); i++)
+        c_est += samples[i].y;
+    c_est /= tail;
+
+    // Transform: 1/(y - c) should be linear in x
+    // Try c = c_est and c = 0
+    double best_r2 = -1;
+    double best_a = 0, best_b = 0, best_c = 0;
+
+    for (double c_try : {c_est, 0.0}) {
+        std::vector<FitSample> inv_samples;
+        for (auto& s : samples) {
+            double ym = s.y - c_try;
+            if (std::abs(ym) < 1e-15) continue;
+            inv_samples.push_back({s.x, 1.0 / ym});
+        }
+        if (inv_samples.size() < 3) continue;
+
+        auto A = vandermonde(inv_samples, 1);
+        std::vector<double> bv;
+        for (auto& s : inv_samples) bv.push_back(s.y);
+        auto coeffs = least_squares_solve(A, bv);
+        // 1/(y-c) = coeffs[0] + coeffs[1]*x = (x + coeffs[0]/coeffs[1]) / (1/coeffs[1])
+        // So a = 1/coeffs[1], b = coeffs[0]/coeffs[1]
+        if (std::abs(coeffs[1]) < 1e-15) continue;
+        double a = 1.0 / coeffs[1];
+        double b = coeffs[0] / coeffs[1];
+
+        // Compute R²
+        double y_mean = 0;
+        for (auto& s : samples) y_mean += s.y;
+        y_mean /= static_cast<double>(samples.size());
+        double ss_res = 0, ss_tot = 0, max_err = 0;
+        for (auto& s : samples) {
+            double predicted = a / (s.x + b) + c_try;
+            if (!std::isfinite(predicted)) { ss_res = 1e30; break; }
+            double residual = s.y - predicted;
+            ss_res += residual * residual;
+            ss_tot += (s.y - y_mean) * (s.y - y_mean);
+            max_err = std::max(max_err, std::abs(residual));
+        }
+        double r2 = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
+        if (r2 > best_r2) {
+            best_r2 = r2;
+            best_a = a; best_b = b; best_c = c_try;
+            result.max_error = max_err;
+        }
+    }
+
+    if (best_r2 < 0) return result;
+    result.r_squared = best_r2;
+    result.exact = result.max_error < FIT_PERFECT_THRESHOLD;
+    result.coefficients = {best_a, best_b, best_c};
+
+    // Build expression: a / (x + b) + c
+    ExprPtr a_expr = coeff_to_expr(snap_coeff(best_a), extra_constants);
+    ExprPtr denom = (std::abs(best_b) > EPSILON_ZERO)
+        ? Expr::BinOpExpr(BinOp::ADD, Expr::Var(var),
+            coeff_to_expr(snap_coeff(best_b), extra_constants))
+        : static_cast<ExprPtr>(Expr::Var(var));
+    ExprPtr frac = Expr::BinOpExpr(BinOp::DIV, a_expr, denom);
+    if (std::abs(best_c) > EPSILON_ZERO)
+        result.expr = Expr::BinOpExpr(BinOp::ADD, frac,
+            coeff_to_expr(snap_coeff(best_c), extra_constants));
+    else
+        result.expr = frac;
+    return result;
+}
+
 constexpr int FIT_DEFAULT_DEPTH = 5;
 
 // Sort and deduplicate fit results
@@ -596,6 +727,9 @@ inline std::vector<FitResult> fit_base(const std::vector<FitSample>& samples,
 
     auto sn = fit_sinusoidal(samples, var, extra_constants);
     if (sn.r_squared > min_r2) fits.push_back(sn);
+
+    auto rc = fit_reciprocal(samples, var, extra_constants);
+    if (rc.r_squared > min_r2) fits.push_back(rc);
 
     return fits;
 }
@@ -658,10 +792,14 @@ inline std::vector<FitResult> compose_level(
             {"cos",  [](double v) { return std::cos(v); }},
             {"sqrt", [](double v) { return v > 0 ? std::sqrt(v) : std::numeric_limits<double>::quiet_NaN(); }},
             {"log",  [](double v) { return v > 0 ? std::log(v) : std::numeric_limits<double>::quiet_NaN(); }},
+            {"exp",  [](double v) { double r = std::exp(v); return std::isfinite(r) ? r : std::numeric_limits<double>::quiet_NaN(); }},
         };
         for (auto& ob : outer_builtins) {
-            ExprPtr composed = Expr::Call(ob.name, {inner.expr});
-            composed = simplify(composed);
+            ExprPtr composed;
+            if (ob.name == "exp")
+                composed = Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), inner.expr);
+            else
+                composed = Expr::Call(ob.name, {inner.expr});
             std::string cstr = expr_to_string(composed);
             if (!seen.insert(cstr).second) continue;
 
