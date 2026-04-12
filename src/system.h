@@ -527,9 +527,27 @@ public:
 
         // No exact solution — collect constraints from conditions
         ValueSet constraints = ValueSet::all();
-        for (auto& eq : equations)
+        for (auto& eq : equations) {
             if (eq.lhs_var == target && eq.condition)
                 constraints = constraints.intersect(eq.condition->to_valueset(target, prepared));
+
+            // If target only appears in the condition (not the equation body),
+            // and the equation body is satisfied by bindings, the condition constrains target.
+            // E.g., sign: result = 1 : x > 0, with result=1 → condition x > 0 applies.
+            if (eq.condition && eq.lhs_var != target && !contains_var(eq.rhs, target)) {
+                // Check if this equation's body is satisfied
+                if (auto it = prepared.find(eq.lhs_var); it != prepared.end()) {
+                    try {
+                        double rhs_val = evaluate(*substitute_bindings(eq.rhs, prepared, target));
+                        if (approx_equal(it->second, rhs_val)) {
+                            // Equation body matches — condition constrains target
+                            auto cond_vs = eq.condition->to_valueset(target, prepared);
+                            constraints = constraints.intersect(cond_vs);
+                        }
+                    } catch (...) {}
+                }
+            }
+        }
         for (auto& gc : global_conditions)
             constraints = constraints.intersect(gc.to_valueset(target, prepared));
 
