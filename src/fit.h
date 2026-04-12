@@ -699,15 +699,25 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         {"log",  [](double x) { return x > 0 ? std::log(x) : std::numeric_limits<double>::quiet_NaN(); }},
     };
 
-    // Build initial inners from builtins + level-1 fits
+    // Build initial inners from builtins + products + level-1 fits
     std::vector<FitResult> level_inners;
     for (auto& bi : builtins) {
+        // bare builtin: f(x)
         FitResult br;
         br.degree = -1;
         br.expr = Expr::Call(bi.name, {Expr::Var(var)});
-        // Compute R² for builtin as a direct fit (y ≈ f(x))
         compute_template_stats(br, samples, bi.fn);
         level_inners.push_back(br);
+
+        // product: x * f(x)
+        FitResult pr;
+        pr.degree = -1;
+        pr.expr = Expr::BinOpExpr(BinOp::MUL, Expr::Var(var),
+            Expr::Call(bi.name, {Expr::Var(var)}));
+        compute_template_stats(pr, samples, [&bi](double x) {
+            return x * bi.fn(x);
+        });
+        level_inners.push_back(pr);
     }
     for (auto& f : fits)
         if (f.r_squared > 0.5 && f.expr) level_inners.push_back(f);
