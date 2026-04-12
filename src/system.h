@@ -1110,6 +1110,9 @@ private:
         for (size_t i = 0; i < equations.size(); i++)
             for (size_t j = i + 1; j < equations.size(); j++) {
                 if (equations[i].lhs_var != equations[j].lhs_var) continue;
+                // Skip if both equations have different conditions — their domains
+                // may not overlap (e.g., x>=0 and x<0 in piecewise abs)
+                if (equations[i].condition && equations[j].condition) continue;
                 // Optionally substitute known bindings to detect tautological equations
                 auto maybe_sub = [&](const ExprPtr& e) -> ExprPtr {
                     if (!sub_bindings) return e;
@@ -1121,13 +1124,21 @@ private:
                 auto ei = maybe_sub(equations[i].rhs);
                 auto ej = maybe_sub(equations[j].rhs);
                 for (auto& [a, b] : {std::pair{ei, ej}, std::pair{ej, ei}}) {
-                    auto sol = solve_for(a, b, target);
-                    if (sol)
-                        if (handler(Candidate{CandidateType::EXPR, sol,
-                            target + " = " + expr_to_string(sol)
+                    auto sols = solve_for_all(a, b, target);
+                    for (auto& sol : sols) {
+                        if (!sol.expr) continue;
+                        // Verify: the solution must satisfy BOTH equations' conditions
+                        // Pass the more restrictive condition (from equation i)
+                        // The solver's condition checking will validate at solve time
+                        const Condition* cond = nullptr;
+                        if (equations[i].condition) cond = &*equations[i].condition;
+                        else if (equations[j].condition) cond = &*equations[j].condition;
+                        if (handler(Candidate{CandidateType::EXPR, sol.expr,
+                            target + " = " + expr_to_string(sol.expr)
                             + "  (via " + equations[i].lhs_var + ")",
-                            nullptr, "", nullptr}))
+                            nullptr, "", cond}))
                             return;
+                    }
                 }
             }
 
