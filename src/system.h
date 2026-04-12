@@ -153,19 +153,42 @@ public:
         return vars;
     }
 
-    void load_string(const std::string& source, const std::string& label = "<inline>") {
-        ExprArena::Scope scope(arena);
-        if (base_dir.empty()) base_dir = ".";
-        trace.step("loading " + label);
-        std::istringstream ss(source);
-        std::string line;
+    // Stored sections from multi-system files: [name] → lines
+    struct Section {
+        std::string name;
+        std::vector<std::string> lines;
+    };
+    std::vector<Section> sections_; // parsed sections (empty = single-system)
+
+    // Pre-parse: split raw lines into sections by [name] headers
+    // Returns the section list. Lines before the first [name] go into section ""
+    static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
+        std::vector<Section> result;
+        result.push_back({"", {}}); // top-level (unnamed)
+        for (auto& line : all_lines) {
+            // Check for section header: [name] alone on a line
+            auto trimmed = trim(line);
+            if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']'
+                && trimmed.find('=') == std::string::npos) {
+                std::string name = trim(trimmed.substr(1, trimmed.size() - 2));
+                if (!name.empty()) {
+                    result.push_back({name, {}});
+                    continue;
+                }
+            }
+            result.back().lines.push_back(line);
+        }
+        return result;
+    }
+
+    // Load parsed lines into this system (shared by load_file and load_string)
+    void load_lines(const std::vector<std::string>& lines) {
         int line_num = 0;
-        bool first = true;
-        while (std::getline(ss, line)) {
+        for (auto& raw : lines) {
             line_num++;
-            if (first) { first = false; strip_bom(line); }
-            line = trim(line);
+            std::string line = trim(raw);
             if (line.empty() || line[0] == '#') continue;
+            // Strip inline comments (# not inside parentheses)
             { int pd = 0;
               for (size_t ci = 0; ci < line.size(); ci++) {
                   if (line[ci] == '(') pd++;
@@ -179,17 +202,89 @@ public:
                 trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
             }
         }
-        if (trace.show_steps()) {
-            for (auto& eq : equations)
-                trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
-            for (auto& [k, v] : defaults)
-                trace.step("  default: " + k + " = " + fmt_num(v));
-            for (auto& fc : formula_calls)
-                trace.step("  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var + ")");
+    }
+
+    // Load a specific section with cascading inheritance.
+    // "triangle.right" loads: top-level → [triangle] → [triangle.right]
+    void load_section(const std::string& section) {
+        // Always load top-level (unnamed section)
+        for (auto& s : sections_)
+            if (s.name.empty()) { load_lines(s.lines); break; }
+
+        if (section.empty()) {
+            // No specific section requested but file has sections
+            // Load nothing extra (top-level only)
+            return;
+        }
+
+        // Build inheritance chain: "a.b.c" → ["a", "a.b", "a.b.c"]
+        std::vector<std::string> chain;
+        size_t pos = 0;
+        while (pos <= section.size()) {
+            size_t dot = section.find('.', pos);
+            if (dot == std::string::npos) dot = section.size();
+            chain.push_back(section.substr(0, dot));
+            pos = dot + 1;
+        }
+
+        // Load each ancestor section in order
+        for (auto& ancestor : chain) {
+            bool found = false;
+            for (auto& s : sections_) {
+                if (s.name == ancestor) {
+                    load_lines(s.lines);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && ancestor == section) {
+                throw std::runtime_error("Section not found: [" + section + "]");
+            }
         }
     }
 
-    void load_file(const std::string& path) {
+    void trace_loaded() const {
+        if (!trace.show_steps()) return;
+        for (auto& eq : equations)
+            trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
+        for (auto& [k, v] : defaults)
+            trace.step("  default: " + k + " = " + fmt_num(v));
+        for (auto& fc : formula_calls)
+            trace.step("  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var + ")");
+    }
+
+    // Read all lines from a stream, stripping BOM from first line
+    static std::vector<std::string> read_all_lines(std::istream& in) {
+        std::vector<std::string> lines;
+        std::string line;
+        bool first = true;
+        while (std::getline(in, line)) {
+            if (first) { first = false; strip_bom(line); }
+            lines.push_back(line);
+        }
+        return lines;
+    }
+
+    void load_string(const std::string& source, const std::string& label = "<inline>",
+                     const std::string& section = "") {
+        ExprArena::Scope scope(arena);
+        if (base_dir.empty()) base_dir = ".";
+        trace.step("loading " + label);
+        std::istringstream ss(source);
+        auto all_lines = read_all_lines(ss);
+        sections_ = split_sections(all_lines);
+
+        if (sections_.size() <= 1 && section.empty()) {
+            // Single-system: load all lines
+            load_lines(all_lines);
+        } else {
+            // Multi-system: select section with inheritance
+            load_section(section);
+        }
+        trace_loaded();
+    }
+
+    void load_file(const std::string& path, const std::string& section = "") {
         ExprArena::Scope scope(arena);
         if (path.empty())
             throw std::runtime_error("No file path provided");
@@ -205,28 +300,14 @@ public:
             throw std::runtime_error("Cannot open file: " + path);
 
         trace.step("loading " + path);
-        std::string line;
-        int line_num = 0;
-        bool first = true;
+        auto all_lines = read_all_lines(f);
+        sections_ = split_sections(all_lines);
 
-        while (std::getline(f, line)) {
-            line_num++;
-            if (first) { first = false; strip_bom(line); }
-            line = trim(line);
-            if (line.empty() || line[0] == '#') continue;
-            // Strip inline comments (# not inside parentheses)
-            { int pd = 0;
-              for (size_t ci = 0; ci < line.size(); ci++) {
-                  if (line[ci] == '(') pd++;
-                  else if (line[ci] == ')') pd--;
-                  else if (line[ci] == '#' && pd == 0) { line = trim(line.substr(0, ci)); break; }
-              }
-              if (line.empty()) continue;
-            }
-            try { parse_line(line); }
-            catch (const std::exception& e) {
-                trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
-            }
+        if (sections_.size() <= 1 && section.empty()) {
+            // Single-system file: load all lines (backwards compatible)
+            load_lines(all_lines);
+        } else {
+            load_section(section);
         }
 
         if (trace.show_steps()) {
@@ -1640,6 +1721,7 @@ struct CLIQueryVar {
 
 struct CLIQuery {
     std::string filename;
+    std::string section;        // section name (from file.section syntax)
     std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
     std::map<std::string, double> bindings;
@@ -1659,8 +1741,24 @@ inline CLIQuery parse_cli_query(const std::string& input,
     // Query-first format: "(args) inline equations..." — empty filename
     if (q.filename.empty()) {
         // filename stays empty — caller detects this and uses inline/stdin
-    } else if (q.filename.find('.') == std::string::npos) {
-        q.filename += ".fw";
+    } else {
+        // Split file.section: "geometry.triangle" → file="geometry.fw", section="triangle"
+        // If it ends with ".fw", it's a direct file path (no section)
+        // Otherwise, first dot separates file stem from section path
+        size_t dot = q.filename.find('.');
+        if (dot == std::string::npos) {
+            q.filename += ".fw";
+        } else {
+            std::string after_dot = q.filename.substr(dot + 1);
+            if (after_dot == "fw" || after_dot.find('/') != std::string::npos
+                || after_dot.find('\\') != std::string::npos) {
+                // It's a file extension or path — keep as-is
+            } else {
+                // file.section format
+                q.section = after_dot;
+                q.filename = q.filename.substr(0, dot) + ".fw";
+            }
+        }
     }
 
     // Find matching closing paren (respecting nesting)
