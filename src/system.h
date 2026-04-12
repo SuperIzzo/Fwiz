@@ -243,6 +243,16 @@ public:
         }
     }
 
+    // Check if a variable name is a builtin constant not overridden by this system
+    bool is_active_builtin(const std::string& name) const {
+        auto& consts = builtin_constants();
+        if (!consts.count(name)) return false;
+        if (defaults.count(name)) return false;
+        for (auto& eq : equations)
+            if (eq.lhs_var == name) return false;
+        return true;
+    }
+
     void trace_loaded() const {
         if (!trace.show_steps()) return;
         for (auto& eq : equations)
@@ -265,23 +275,23 @@ public:
         return lines;
     }
 
+    // Load lines with section selection (shared by load_file and load_string)
+    void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
+        sections_ = split_sections(all_lines);
+        if (sections_.size() <= 1 && section.empty())
+            load_lines(all_lines);
+        else
+            load_section(section);
+        trace_loaded();
+    }
+
     void load_string(const std::string& source, const std::string& label = "<inline>",
                      const std::string& section = "") {
         ExprArena::Scope scope(arena);
         if (base_dir.empty()) base_dir = ".";
         trace.step("loading " + label);
         std::istringstream ss(source);
-        auto all_lines = read_all_lines(ss);
-        sections_ = split_sections(all_lines);
-
-        if (sections_.size() <= 1 && section.empty()) {
-            // Single-system: load all lines
-            load_lines(all_lines);
-        } else {
-            // Multi-system: select section with inheritance
-            load_section(section);
-        }
-        trace_loaded();
+        load_with_sections(read_all_lines(ss), section);
     }
 
     void load_file(const std::string& path, const std::string& section = "") {
@@ -300,21 +310,10 @@ public:
             throw std::runtime_error("Cannot open file: " + path);
 
         trace.step("loading " + path);
-        auto all_lines = read_all_lines(f);
-        sections_ = split_sections(all_lines);
+        load_with_sections(read_all_lines(f), section);
 
-        if (sections_.size() <= 1 && section.empty()) {
-            // Single-system file: load all lines (backwards compatible)
-            load_lines(all_lines);
-        } else {
-            load_section(section);
-        }
-
+        // Extended trace for file loads
         if (trace.show_steps()) {
-            for (auto& eq : equations)
-                trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
-            for (auto& [k, v] : defaults)
-                trace.step("  default: " + k + " = " + fmt_num(v));
             for (auto& fc : formula_calls) {
                 std::string s = "  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var;
                 for (auto& [sv, expr] : fc.bindings) { s += ", "; s += sv; s += "="; s += expr_to_string(expr); }
@@ -1221,17 +1220,7 @@ private:
                              std::map<std::string, ExprPtr>& bindings,
                              std::set<std::string> visited, int depth) const {
         if (auto it = bindings.find(target); it != bindings.end()) return it->second;
-        // Builtin constants: keep as symbolic Var (not numeric) for derive
-        // Only skip if the file defines it as an equation LHS (real override)
-        {
-            auto& consts = builtin_constants();
-            if (consts.count(target)) {
-                bool in_equations = false;
-                for (auto& eq : equations)
-                    if (eq.lhs_var == target) { in_equations = true; break; }
-                if (!in_equations) return Expr::Var(target);
-            }
-        }
+        if (is_active_builtin(target)) return Expr::Var(target);
         if (visited.count(target)) return nullptr;
         visited.insert(target);
 
@@ -1548,19 +1537,10 @@ private:
             trace.calc("known: " + target + " = " + fmt_num(it->second), depth + 1);
             return it->second;
         }
-        // Check builtin constants (pi, e, phi) — only if not defined in this system
-        if (!defaults.count(target)) {
-            auto& consts = builtin_constants();
-            auto it = consts.find(target);
-            if (it != consts.end()) {
-                bool in_equations = false;
-                for (auto& eq : equations)
-                    if (eq.lhs_var == target) { in_equations = true; break; }
-                if (!in_equations) {
-                    bindings[target] = it->second;
-                    return it->second;
-                }
-            }
+        if (is_active_builtin(target)) {
+            double val = builtin_constants().at(target);
+            bindings[target] = val;
+            return val;
         }
         if (visited.count(target))
             throw std::runtime_error(

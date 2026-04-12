@@ -677,33 +677,35 @@ inline ExprPtr rebuild_multiplicative(double coeff,
 }
 
 // Group additive terms by base, combining coefficients
-inline void group_additive(std::vector<std::pair<double, ExprPtr>>& terms) {
-    for (size_t i = 0; i < terms.size(); i++) {
-        if (!terms[i].second) continue;
-        for (size_t j = i + 1; j < terms.size(); j++) {
-            if (!terms[j].second) continue;
-            if (expr_equal(terms[i].second, terms[j].second)) {
-                terms[i].first += terms[j].first;
-                terms[j].first = 0;
-                terms[j].second = nullptr;
+// Group like terms: merge entries with equal keys by summing their values.
+// GetKey returns the ExprPtr key, GetVal/SetVal access the numeric value,
+// Nullify marks an entry as consumed.
+template<typename Vec, typename GetKey, typename GetVal, typename Nullify>
+inline void group_like(Vec& items, GetKey key, GetVal val, Nullify nullify) {
+    for (size_t i = 0; i < items.size(); i++) {
+        if (!key(items[i])) continue;
+        for (size_t j = i + 1; j < items.size(); j++) {
+            if (!key(items[j])) continue;
+            if (expr_equal(key(items[i]), key(items[j]))) {
+                val(items[i]) += val(items[j]);
+                nullify(items[j]);
             }
         }
     }
 }
 
-// Group multiplicative factors by base, combining exponents
+inline void group_additive(std::vector<std::pair<double, ExprPtr>>& terms) {
+    group_like(terms,
+        [](auto& t) { return t.second; },
+        [](auto& t) -> double& { return t.first; },
+        [](auto& t) { t.first = 0; t.second = nullptr; });
+}
+
 inline void group_multiplicative(std::vector<std::pair<ExprPtr, double>>& factors) {
-    for (size_t i = 0; i < factors.size(); i++) {
-        if (!factors[i].first) continue;
-        for (size_t j = i + 1; j < factors.size(); j++) {
-            if (!factors[j].first) continue;
-            if (expr_equal(factors[i].first, factors[j].first)) {
-                factors[i].second += factors[j].second;
-                factors[j].second = 0;
-                factors[j].first = nullptr;
-            }
-        }
-    }
+    group_like(factors,
+        [](auto& f) { return f.first; },
+        [](auto& f) -> double& { return f.second; },
+        [](auto& f) { f.second = 0; f.first = nullptr; });
 }
 
 // ---- Simplify: per-operator helpers ----
