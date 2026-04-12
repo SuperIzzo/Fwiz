@@ -40,7 +40,7 @@ The `.fw` extension is added automatically if omitted. Use `=?` to query a varia
 ### Run tests
 
 ```bash
-make test       # functional tests (1300+ tests)
+make test       # functional tests (1400+ tests)
 make sanitize   # memory safety checks (ASan + UBSan)
 make analyze    # static analysis (clang-tidy, zero warnings)
 ```
@@ -301,6 +301,67 @@ x = 3
 Flags:
 - `--no-numeric` — disable numeric solving (algebraic only)
 - `--precision N` — set scan density (default 200, higher finds more roots)
+
+---
+
+## Curve Fitting with `--fit`
+
+Use `--fit` to find a closed-form approximation of a function:
+
+```bash
+$ fwiz --fit formula(y=?, x=x)              # y = x^2
+y = x^2
+  R² = 1, max error = 0
+
+$ fwiz --fit formula(y=?, x=x)              # y = sin(x), x in [0, 2π]
+y = sin(x)
+  R² = 1, max error = 0
+```
+
+The fitter tries multiple template forms and reports all good fits (R² > 0.9), sorted by quality:
+
+- **Polynomial** — degree 1-10, auto-selected
+- **Power law** — `a * x^b`
+- **Exponential** — `a * e^(bx)`, including Gaussian `a * e^(bx² + cx)`
+- **Logarithmic** — `a * log(x) + b`
+- **Sinusoidal** — `a * sin(bx + c) + d`
+- **Reciprocal** — `a / (x + b) + c`
+
+Templates are composed recursively (default depth 5): inner functions (sin, cos, sqrt, log, and their products with x) are wrapped in outer templates, discovering expressions like `sin(sin(x))`, `e * sin(x)^pi`, `e^(x * log(x))` = `x^x`.
+
+Coefficients are matched against known constants (pi, e, phi, sqrt(2), sqrt(3), sqrt(5)):
+
+```bash
+$ fwiz --fit formula(y=?, x=x)              # y = pi * x
+y = pi * x
+
+$ fwiz --fit formula(y=?, x=x)              # y = 5 * sqrt(3) * x
+y = 5 * sqrt(3) * x
+```
+
+Flags:
+- `--fit [N]` — fit with composition depth N (default 5, depth 1 = base templates only)
+- `--output file.fw` — write the best fit as a reusable `.fw` file
+- `--derive --fit` — derive symbolically first, then show fit alternatives if different
+
+---
+
+## Built-in Constants
+
+The following constants are available in any equation without declaring them:
+
+| Name | Value | Description |
+|------|-------|-------------|
+| `pi` | 3.14159... | Circle constant |
+| `e`  | 2.71828... | Euler's number |
+| `phi` | 1.61803... | Golden ratio |
+
+```bash
+$ fwiz --derive physics(circumference=?, radius=r)
+circumference = 2 * pi * r
+```
+
+File defaults override builtins — if a file defines `e = 5`, that value is used instead of Euler's number.
 
 ---
 
