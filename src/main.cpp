@@ -5,6 +5,8 @@
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: fwiz [flags] <formula>(var=?, var=?alias, var=value, ...)\n"
+                  << "       fwiz [flags] (var=?, var=value, ...) \"equations\"\n"
+                  << "       echo \"equations\" | fwiz [flags] (var=?, var=value, ...)\n"
                   << "\n"
                   << "  var=?          solve for var\n"
                   << "  var=?alias     solve for var, output as alias\n"
@@ -87,7 +89,28 @@ int main(int argc, char* argv[]) {
         sys.numeric_mode = numeric_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
-        sys.load_file(query.filename);
+
+        if (query.filename.empty()) {
+            // Query-first format: inline source or stdin
+            if (!query.inline_source.empty()) {
+                // Replace semicolons with newlines for compact inline format
+                std::string source = query.inline_source;
+                for (auto& c : source) if (c == ';') c = '\n';
+                sys.load_string(source);
+            } else {
+                // Read from stdin
+                std::string source, line;
+                while (std::getline(std::cin, line))
+                    source += line + "\n";
+                if (source.empty()) {
+                    std::cerr << "Error: no equations provided (use inline or pipe from stdin)\n";
+                    return 1;
+                }
+                sys.load_string(source, "<stdin>");
+            }
+        } else {
+            sys.load_file(query.filename);
+        }
 
         // --- Derive mode ---
         if (derive_mode) {

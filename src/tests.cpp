@@ -7758,6 +7758,89 @@ void test_numeric_precision_edge() {
     }
 }
 
+void test_inline_and_stdin() {
+    SECTION("Inline and Stdin Input");
+
+    // load_string basic
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2 * x + 1\n");
+        double y = sys.resolve("y", {{"x", 3}});
+        ASSERT_NUM(y, 7, "load_string: y = 2*3 + 1 = 7");
+    }
+
+    // load_string with semicolons (replaced by newlines in CLI)
+    {
+        FormulaSystem sys;
+        std::string source = "y = a * x\na = 5\n";
+        sys.load_string(source);
+        double y = sys.resolve("y", {{"x", 3}});
+        ASSERT_NUM(y, 15, "load_string: multi-equation y = 5*3 = 15");
+    }
+
+    // load_string with conditions
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x : x > 0\ny = 0 : x <= 0\n");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 5, "load_string: condition x>0");
+        ASSERT_NUM(sys.resolve("y", {{"x", -3}}), 0, "load_string: condition x<=0");
+    }
+
+    // load_string with builtin constants
+    {
+        FormulaSystem sys;
+        sys.load_string("y = pi * x\n");
+        double y = sys.resolve("y", {{"x", 2}});
+        ASSERT_NUM(y, 2 * M_PI, "load_string: pi constant works");
+    }
+
+    // parse_cli_query: query-first format
+    {
+        auto q = parse_cli_query("(y=?, x=3) y = x^2");
+        ASSERT(q.filename.empty(), "query-first: no filename");
+        ASSERT_EQ(q.inline_source, "y = x^2", "query-first: inline source captured");
+        ASSERT(q.queries.size() == 1, "query-first: one query");
+        ASSERT_EQ(q.queries[0].variable, "y", "query-first: query var = y");
+    }
+
+    // parse_cli_query: file format still works
+    {
+        auto q = parse_cli_query("myfile(y=?, x=3)");
+        ASSERT_EQ(q.filename, "myfile.fw", "file format: filename = myfile.fw");
+        ASSERT(q.inline_source.empty(), "file format: no inline source");
+    }
+
+    // Binary: inline
+    {
+        int rc = system("./bin/fwiz '(y=?, x=5) y = x * 2' 2>/dev/null | grep -q 'y = 10'");
+        ASSERT(WEXITSTATUS(rc) == 0, "binary: inline y = x*2 with x=5 → 10");
+    }
+
+    // Binary: inline with semicolons
+    {
+        int rc = system("./bin/fwiz '(y=?, x=3) y = a * x; a = 4' 2>/dev/null | grep -q 'y = 12'");
+        ASSERT(WEXITSTATUS(rc) == 0, "binary: inline semicolons y = 4*3 = 12");
+    }
+
+    // Binary: stdin
+    {
+        int rc = system("echo 'y = x + 10' | ./bin/fwiz '(y=?, x=5)' 2>/dev/null | grep -q 'y = 15'");
+        ASSERT(WEXITSTATUS(rc) == 0, "binary: stdin y = 5+10 = 15");
+    }
+
+    // Binary: --derive with inline
+    {
+        int rc = system("./bin/fwiz --derive '(y=?, x=x) y = 2 * x + 1' 2>/dev/null | grep -q 'y = 2 \\* x + 1'");
+        ASSERT(WEXITSTATUS(rc) == 0, "binary: --derive inline");
+    }
+
+    // Binary: --fit with inline
+    {
+        int rc = system("./bin/fwiz --fit '(y=?, x=x) y = x^2' 2>/dev/null | grep -q 'x\\^2'");
+        ASSERT(WEXITSTATUS(rc) == 0, "binary: --fit inline");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7966,6 +8049,7 @@ int main() {
     test_fit_edge_cases();
     test_fit_templates_edge();
     test_numeric_precision_edge();
+    test_inline_and_stdin();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
