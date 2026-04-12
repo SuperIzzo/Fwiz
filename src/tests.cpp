@@ -7352,6 +7352,77 @@ void test_builtin_constants() {
     }
 }
 
+void test_template_fitting() {
+    SECTION("Template Fitting");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Power law: y = 3*x^2, x in [1,20]
+    {
+        auto f = [](double x) { return 3 * x * x; };
+        auto samples = sample_function(f, 1, 20, 100);
+        auto result = fit_power_law(samples, "x");
+        ASSERT(result.r_squared > 0.999, "template: power law R² > 0.999");
+        ASSERT(result.expr != nullptr, "template: power law has expr");
+    }
+
+    // Exponential: y = 2*e^(0.5*x), x in [0,10]
+    {
+        auto f = [](double x) { return 2 * std::exp(0.5 * x); };
+        auto samples = sample_function(f, 0, 10, 100);
+        auto result = fit_exponential(samples, "x");
+        ASSERT(result.r_squared > 0.999, "template: exponential R² > 0.999");
+    }
+
+    // Logarithmic: y = 5*log(x) + 2, x in [1,100]
+    {
+        auto f = [](double x) { return 5 * std::log(x) + 2; };
+        auto samples = sample_function(f, 1, 100, 100);
+        auto result = fit_logarithmic(samples, "x");
+        ASSERT(result.r_squared > 0.999, "template: logarithmic R² > 0.999");
+    }
+
+    // Sinusoidal: y = 3*sin(2*x), x in [0,20]
+    {
+        auto f = [](double x) { return 3 * std::sin(2 * x); };
+        auto samples = sample_function(f, 0, 20, 200);
+        auto result = fit_sinusoidal(samples, "x");
+        ASSERT(result.r_squared > 0.9, "template: sinusoidal R² > 0.9");
+    }
+
+    // fit_all returns multiple results for exponential data
+    {
+        auto f = [](double x) { return 2 * std::exp(0.5 * x); };
+        auto samples = sample_function(f, 0, 10, 100);
+        auto results = fit_all(samples, "x");
+        ASSERT(results.size() >= 2, "template: fit_all finds multiple fits (got "
+            + std::to_string(results.size()) + ")");
+        // Best should be exponential or polynomial with high R²
+        ASSERT(results[0].r_squared > 0.999, "template: best fit R² > 0.999");
+    }
+
+    // fit_all sorted by R² descending
+    {
+        auto f = [](double x) { return 5 * std::log(x) + 2; };
+        auto samples = sample_function(f, 1, 100, 100);
+        auto results = fit_all(samples, "x");
+        for (size_t i = 1; i < results.size(); i++)
+            ASSERT(results[i-1].r_squared >= results[i].r_squared - 1e-6,
+                "template: fit_all sorted by R²");
+    }
+
+    // Integration: --fit shows alternatives
+    {
+        write_fw("/tmp/tt_exp.fw", "y = 2 * e^(0.5*x)\nx >= 0\nx <= 10\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tt_exp.fw");
+        auto result = sys.fit("y", {}, {{"x", "x"}});
+        ASSERT(!result.alternatives.empty(),
+            "template: integration shows alternatives");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7551,6 +7622,7 @@ int main() {
 
     // Builtin constants
     test_builtin_constants();
+    test_template_fitting();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

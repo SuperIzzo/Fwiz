@@ -350,3 +350,224 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
     if (!result) result = Expr::Num(0);
     return simplify(result);
 }
+
+// ============================================================================
+//  Template fitting (power law, exponential, logarithmic, sinusoidal)
+// ============================================================================
+
+// Helper: compute R² and max_error for a prediction function
+inline void compute_template_stats(FitResult& result, const std::vector<FitSample>& samples,
+        const std::function<double(double)>& predict) {
+    double y_mean = 0;
+    for (auto& s : samples) y_mean += s.y;
+    y_mean /= static_cast<double>(samples.size());
+    double ss_res = 0, ss_tot = 0;
+    result.max_error = 0;
+    for (auto& s : samples) {
+        double predicted = predict(s.x);
+        if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
+        double residual = s.y - predicted;
+        ss_res += residual * residual;
+        ss_tot += (s.y - y_mean) * (s.y - y_mean);
+        result.max_error = std::max(result.max_error, std::abs(residual));
+    }
+    result.r_squared = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
+    result.exact = result.max_error < FIT_PERFECT_THRESHOLD;
+}
+
+// Power law: y = a * x^b  →  log(y) = log(a) + b*log(x)
+inline FitResult fit_power_law(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {}) {
+    FitResult result;
+    result.degree = -1;
+
+    std::vector<FitSample> log_samples;
+    for (auto& s : samples)
+        if (s.x > 0 && s.y > 0)
+            log_samples.push_back({std::log(s.x), std::log(s.y)});
+    if (log_samples.size() < 3) return result;
+
+    auto A = vandermonde(log_samples, 1);
+    std::vector<double> b;
+    for (auto& s : log_samples) b.push_back(s.y);
+    auto coeffs = least_squares_solve(A, b);
+    double a = std::exp(coeffs[0]), power = coeffs[1];
+
+    result.coefficients = {a, power};
+    compute_template_stats(result, samples, [a, power](double x) {
+        return a * std::pow(x, power);
+    });
+
+    ExprPtr a_expr = coeff_to_expr(snap_coeff(a), extra_constants);
+    ExprPtr pow_expr = Expr::BinOpExpr(BinOp::POW, Expr::Var(var),
+        coeff_to_expr(snap_coeff(power), extra_constants));
+    result.expr = simplify(Expr::BinOpExpr(BinOp::MUL, a_expr, pow_expr));
+    return result;
+}
+
+// Exponential: y = a * e^(b*x)  →  log(y) = log(a) + b*x
+inline FitResult fit_exponential(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {}) {
+    FitResult result;
+    result.degree = -1;
+
+    std::vector<FitSample> log_samples;
+    for (auto& s : samples)
+        if (s.y > 0) log_samples.push_back({s.x, std::log(s.y)});
+    if (log_samples.size() < 3) return result;
+
+    auto A = vandermonde(log_samples, 1);
+    std::vector<double> b;
+    for (auto& s : log_samples) b.push_back(s.y);
+    auto coeffs = least_squares_solve(A, b);
+    double a = std::exp(coeffs[0]), rate = coeffs[1];
+
+    result.coefficients = {a, rate};
+    compute_template_stats(result, samples, [a, rate](double x) {
+        return a * std::exp(rate * x);
+    });
+
+    ExprPtr a_expr = coeff_to_expr(snap_coeff(a), extra_constants);
+    ExprPtr bx = simplify(Expr::BinOpExpr(BinOp::MUL,
+        coeff_to_expr(snap_coeff(rate), extra_constants), Expr::Var(var)));
+    ExprPtr exp_part = Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), bx);
+    result.expr = simplify(Expr::BinOpExpr(BinOp::MUL, a_expr, exp_part));
+    return result;
+}
+
+// Logarithmic: y = a * log(x) + b
+inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {}) {
+    FitResult result;
+    result.degree = -1;
+
+    std::vector<FitSample> log_samples;
+    for (auto& s : samples)
+        if (s.x > 0) log_samples.push_back({std::log(s.x), s.y});
+    if (log_samples.size() < 3) return result;
+
+    auto A = vandermonde(log_samples, 1);
+    std::vector<double> b;
+    for (auto& s : log_samples) b.push_back(s.y);
+    auto coeffs = least_squares_solve(A, b);
+    double intercept = coeffs[0], slope = coeffs[1];
+
+    result.coefficients = {intercept, slope};
+    compute_template_stats(result, samples, [intercept, slope](double x) {
+        return (x > 0) ? slope * std::log(x) + intercept : std::numeric_limits<double>::quiet_NaN();
+    });
+
+    ExprPtr log_part = Expr::Call("log", {Expr::Var(var)});
+    ExprPtr a_expr = coeff_to_expr(snap_coeff(slope), extra_constants);
+    ExprPtr term = simplify(Expr::BinOpExpr(BinOp::MUL, a_expr, log_part));
+    if (std::abs(intercept) > EPSILON_ZERO) {
+        ExprPtr b_expr = coeff_to_expr(snap_coeff(intercept), extra_constants);
+        result.expr = simplify(Expr::BinOpExpr(BinOp::ADD, term, b_expr));
+    } else {
+        result.expr = term;
+    }
+    return result;
+}
+
+// Sinusoidal: y = a * sin(b*x + c) + d
+inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {}) {
+    FitResult result;
+    result.degree = -1;
+    if (samples.size() < 10) return result;
+
+    // Estimate frequency via zero-crossing count
+    double y_mean = 0;
+    for (auto& s : samples) y_mean += s.y;
+    y_mean /= static_cast<double>(samples.size());
+    int zero_crossings = 0;
+    for (size_t i = 1; i < samples.size(); i++)
+        if ((samples[i-1].y - y_mean) * (samples[i].y - y_mean) < 0)
+            zero_crossings++;
+
+    double x_range = samples.back().x - samples[0].x;
+    if (x_range < 1e-15 || zero_crossings < 2) return result;
+    double freq = M_PI * zero_crossings / x_range;
+
+    // Linear regression: y = A*sin(freq*x) + B*cos(freq*x) + D
+    FitMatrix A(samples.size(), std::vector<double>(3));
+    std::vector<double> b;
+    for (size_t i = 0; i < samples.size(); i++) {
+        double wx = freq * samples[i].x;
+        A[i][0] = std::sin(wx);
+        A[i][1] = std::cos(wx);
+        A[i][2] = 1.0;
+        b.push_back(samples[i].y);
+    }
+    auto coeffs = least_squares_solve(A, b);
+    double amplitude = std::sqrt(coeffs[0]*coeffs[0] + coeffs[1]*coeffs[1]);
+    double phase = std::atan2(coeffs[1], coeffs[0]);
+    double offset = coeffs[2];
+
+    result.coefficients = {amplitude, freq, phase, offset};
+    compute_template_stats(result, samples, [amplitude, freq, phase, offset](double x) {
+        return amplitude * std::sin(freq * x + phase) + offset;
+    });
+
+    // Build expression
+    ExprPtr freq_expr = coeff_to_expr(snap_coeff(freq), extra_constants);
+    ExprPtr inner = simplify(Expr::BinOpExpr(BinOp::MUL, freq_expr, Expr::Var(var)));
+    if (std::abs(phase) > EPSILON_ZERO)
+        inner = simplify(Expr::BinOpExpr(BinOp::ADD, inner,
+            coeff_to_expr(snap_coeff(phase), extra_constants)));
+    ExprPtr sin_part = Expr::Call("sin", {inner});
+    ExprPtr amp_expr = coeff_to_expr(snap_coeff(amplitude), extra_constants);
+    ExprPtr term = simplify(Expr::BinOpExpr(BinOp::MUL, amp_expr, sin_part));
+    if (std::abs(offset) > EPSILON_ZERO)
+        result.expr = simplify(Expr::BinOpExpr(BinOp::ADD, term,
+            coeff_to_expr(snap_coeff(offset), extra_constants)));
+    else
+        result.expr = term;
+    return result;
+}
+
+// Try all template forms + polynomial, return all fits sorted by R² (best first).
+inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
+        const std::string& var = "x",
+        const std::map<std::string, double>& extra_constants = {},
+        double min_r2 = 0.9) {
+    std::vector<FitResult> fits;
+
+    auto poly = fit_polynomial_auto(samples);
+    if (poly.r_squared > min_r2) {
+        poly.expr = poly_to_expr(poly.coefficients, var, extra_constants);
+        fits.push_back(poly);
+    }
+
+    auto pw = fit_power_law(samples, var, extra_constants);
+    if (pw.r_squared > min_r2) fits.push_back(pw);
+
+    auto ex = fit_exponential(samples, var, extra_constants);
+    if (ex.r_squared > min_r2) fits.push_back(ex);
+
+    auto lg = fit_logarithmic(samples, var, extra_constants);
+    if (lg.r_squared > min_r2) fits.push_back(lg);
+
+    auto sn = fit_sinusoidal(samples, var, extra_constants);
+    if (sn.r_squared > min_r2) fits.push_back(sn);
+
+    // Sort by R² descending, then simplicity
+    std::sort(fits.begin(), fits.end(), [](const FitResult& a, const FitResult& b) {
+        if (std::abs(a.r_squared - b.r_squared) > 1e-6)
+            return a.r_squared > b.r_squared;
+        return a.coefficients.size() < b.coefficients.size();
+    });
+
+    // Deduplicate by expression string
+    std::vector<FitResult> unique;
+    std::set<std::string> seen;
+    for (auto& f : fits) {
+        std::string s = f.expr ? expr_to_string(f.expr) : "";
+        if (seen.insert(s).second) unique.push_back(f);
+    }
+    return unique;
+}

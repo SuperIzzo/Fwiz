@@ -102,13 +102,17 @@ int main(int argc, char* argv[]) {
             for (auto& q : query.queries) {
                 try {
                     auto result = sys.fit(q.variable, query.bindings, query.symbolic);
-                    // Skip if fit matches derive
-                    if (derived_eqs.count(q.variable) && derived_eqs[q.variable] == result.equation)
-                        continue;
-                    std::string sign = result.exact ? " = " : " ~ ";
-                    std::cout << q.alias << sign << result.equation << '\n';
-                    std::cerr << "  R² = " << fmt_num(result.r_squared)
-                              << ", max error = " << fmt_num(result.max_error) << '\n';
+                    auto print_if_new = [&](const FormulaSystem::FitOutput& f) {
+                        if (derived_eqs.count(q.variable) && derived_eqs[q.variable] == f.equation)
+                            return;
+                        std::string sign = f.exact ? " = " : " ~ ";
+                        std::cout << q.alias << sign << f.equation << '\n';
+                        std::cerr << "  R² = " << fmt_num(f.r_squared)
+                                  << ", max error = " << fmt_num(f.max_error) << '\n';
+                    };
+                    print_if_new(result);
+                    for (auto& alt : result.alternatives)
+                        print_if_new(alt);
                 } catch (const std::exception& e) {
                     std::cerr << "Error (fit): " << e.what() << '\n';
                 }
@@ -118,13 +122,18 @@ int main(int argc, char* argv[]) {
 
         // --- Fit mode (without derive) ---
         if (fit_mode) {
+            auto print_fit = [](const std::string& alias, const FormulaSystem::FitOutput& f) {
+                std::string sign = f.exact ? " = " : " ~ ";
+                std::cout << alias << sign << f.equation << '\n';
+                std::cerr << "  R² = " << fmt_num(f.r_squared)
+                          << ", max error = " << fmt_num(f.max_error) << '\n';
+            };
             for (auto& q : query.queries) {
                 try {
                     auto result = sys.fit(q.variable, query.bindings, query.symbolic);
-                    std::string sign = result.exact ? " = " : " ~ ";
-                    std::cout << q.alias << sign << result.equation << '\n';
-                    std::cerr << "  R² = " << fmt_num(result.r_squared)
-                              << ", max error = " << fmt_num(result.max_error) << '\n';
+                    print_fit(q.alias, result);
+                    for (auto& alt : result.alternatives)
+                        print_fit(q.alias, alt);
                 } catch (const std::exception& e) {
                     std::cerr << "Error: " << e.what() << '\n';
                     return 1;
