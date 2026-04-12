@@ -271,11 +271,11 @@ public:
 
 struct Expr {
     ExprType type;
+    BinOp op{};                 // packed with type (2 bytes, then 6 padding before num)
     double num = 0;
-    std::string name;
-    BinOp op{};
     ExprPtr left = nullptr, right = nullptr, child = nullptr;
-    std::vector<ExprPtr> args;
+    std::string name;           // 32 bytes (SSO)
+    std::vector<ExprPtr> args;  // 24 bytes
 
     static ExprPtr Num(double v);
     static ExprPtr Var(const std::string& n);
