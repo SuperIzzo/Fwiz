@@ -509,6 +509,41 @@ public:
             return false; // don't stop — collect all
         });
 
+        // If no equation-based results, check iff conditions for constraint inversion.
+        // For piecewise functions: "result = 1 iff x > 0" → "x > 0 if result = 1"
+        if (results.empty()) {
+            for (auto& eq : equations) {
+                if (!eq.condition || !eq.bidirectional) continue;
+                bool target_in_cond = false;
+                for (auto& cl : eq.condition->clauses)
+                    if (contains_var(cl.lhs, target) || contains_var(cl.rhs, target))
+                        { target_in_cond = true; break; }
+                if (!target_in_cond) continue;
+
+                ExprPtr rhs_val = substitute_bindings(eq.rhs, bindings, target);
+                bool matches = true;
+                if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
+                    try {
+                        double lhs_num = evaluate(*it->second);
+                        double rhs_num = evaluate(*rhs_val);
+                        if (!approx_equal(lhs_num, rhs_num)) matches = false;
+                    } catch (...) {}
+                }
+                if (!matches) continue;
+
+                std::string cond_str = eq.condition->to_valueset(target, {}).to_string();
+                bool body_is_known = false;
+                if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
+                    try { evaluate(*it->second); body_is_known = true; } catch (...) {}
+                }
+                std::string eq_str = eq.lhs_var + " = " + expr_to_string(rhs_val);
+                std::string inverted = body_is_known
+                    ? cond_str
+                    : cond_str + " if " + eq_str;
+                if (seen.insert(inverted).second) results.push_back(inverted);
+            }
+        }
+
         if (results.empty())
             throw std::runtime_error("Cannot derive equation for '" + target + "'");
         return results;
@@ -629,7 +664,7 @@ public:
             // If target only appears in the condition (not the equation body),
             // and the equation body is satisfied by bindings, the condition constrains target.
             // E.g., sign: result = 1 : x > 0, with result=1 → condition x > 0 applies.
-            if (eq.condition && eq.lhs_var != target && !contains_var(eq.rhs, target)) {
+            if (eq.condition && eq.bidirectional && eq.lhs_var != target && !contains_var(eq.rhs, target)) {
                 // Check if this equation's body is satisfied
                 if (auto it = prepared.find(eq.lhs_var); it != prepared.end()) {
                     try {
