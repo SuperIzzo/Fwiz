@@ -243,9 +243,13 @@ inline std::optional<ConstantForm> recognize_constant(double x,
     // If it's already a simple fraction, no constant needed
     if (recognize_fraction(x, 12, tol)) return std::nullopt;
 
-    // Build combined constant table
+    // Build combined constant table: builtins + common roots + extras
     auto& builtins = builtin_constants();
     std::map<std::string, double> all_constants = builtins;
+    // Common irrational roots (output as sqrt(N) via constant_form_to_expr)
+    all_constants["sqrt(2)"] = std::sqrt(2.0);
+    all_constants["sqrt(3)"] = std::sqrt(3.0);
+    all_constants["sqrt(5)"] = std::sqrt(5.0);
     for (auto& [k, v] : extra_constants)
         if (!all_constants.count(k)) all_constants[k] = v;
 
@@ -264,8 +268,15 @@ inline std::optional<ConstantForm> recognize_constant(double x,
 
 // Build an ExprPtr from a ConstantForm: (p/q) * constant^power
 inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
-    // Build constant^power part
-    ExprPtr cexpr = Expr::Var(cf.constant);
+    // Build constant expression — handle sqrt(N) names as function calls
+    ExprPtr cexpr;
+    if (cf.constant.substr(0, 5) == "sqrt(" && cf.constant.back() == ')') {
+        // Parse "sqrt(N)" → Expr::Call("sqrt", {Expr::Num(N)})
+        double n = std::stod(cf.constant.substr(5, cf.constant.size() - 6));
+        cexpr = Expr::Call("sqrt", {Expr::Num(n)});
+    } else {
+        cexpr = Expr::Var(cf.constant);
+    }
     if (cf.power == 2)
         cexpr = Expr::BinOpExpr(BinOp::POW, cexpr, Expr::Num(2));
     else if (cf.power == -1)
@@ -283,7 +294,8 @@ inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
             Expr::Num(static_cast<double>(cf.p)),
             Expr::Num(static_cast<double>(cf.q)));
 
-    return simplify(Expr::BinOpExpr(BinOp::MUL, coeff, cexpr));
+    // Don't simplify — simplifier would evaluate sqrt(3)*5 → 8.66...
+    return Expr::BinOpExpr(BinOp::MUL, coeff, cexpr);
 }
 
 // ============================================================================
@@ -348,7 +360,9 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
     }
 
     if (!result) result = Expr::Num(0);
-    return simplify(result);
+    // Note: don't simplify — the simplifier would evaluate sqrt(3) → 1.732...
+    // The expression is already clean from construction (zero coeffs dropped, etc.)
+    return result;
 }
 
 // ============================================================================
