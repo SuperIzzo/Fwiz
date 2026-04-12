@@ -8154,6 +8154,51 @@ void test_simplify_trig_abs_pow() {
         "simplify: 2^(-3) = 0.125");
 }
 
+void test_simplify_common_factor() {
+    SECTION("Simplify Common Factor Extraction");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    auto p = [](const std::string& s) { return Parser(Lexer(s).tokenize()).parse_expr(); };
+
+    // (a*x + b*x) / x → a + b
+    ASSERT_EQ(expr_to_string(simplify(p("(a * x + b * x) / x"))), "a + b",
+        "factor: (a*x+b*x)/x → a+b");
+
+    // (c*x - b*x) / x → c - b
+    ASSERT_EQ(expr_to_string(simplify(p("(c * x - b * x) / x"))), "c - b",
+        "factor: (c*x-b*x)/x → c-b");
+
+    // (x^2 + x) / x → x + 1
+    ASSERT_EQ(expr_to_string(simplify(p("(x^2 + x) / x"))), "x + 1",
+        "factor: (x²+x)/x → x+1");
+
+    // (3x + 5x) / x → 8
+    ASSERT_EQ(expr_to_string(simplify(p("(3*x + 5*x) / x"))), "8",
+        "factor: (3x+5x)/x → 8");
+
+    // Multivariate: (a*x*y + b*x*y) / (x*y) → a + b
+    ASSERT_EQ(expr_to_string(simplify(p("(a*x*y + b*x*y) / (x*y)"))), "a + b",
+        "factor: multivariate common factor");
+
+    // sum / (-x) → -(sum/x) → correct sign
+    {
+        auto expr = simplify(p("(a*x + b*x) / (0 - x)"));
+        // Should simplify cleanly (neg pulled out, then distributed)
+        ASSERT(expr_to_string(expr).find("/") == std::string::npos,
+            "factor: sum/(-x) cancels fully");
+    }
+
+    // System-level: a*x + b*x = c*x → a = c - b
+    {
+        FormulaSystem sys;
+        sys.load_string("y = a*x + b*x\ny = c*x\n");
+        auto result = sys.derive("a", {}, {{"b","b"},{"c","c"},{"x","x"}});
+        ASSERT_EQ(result, "c - b", "factor: system-level common factor cancellation");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8367,6 +8412,7 @@ int main() {
     test_simplify_assumptions();
     test_simplify_exp_log();
     test_simplify_trig_abs_pow();
+    test_simplify_common_factor();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
