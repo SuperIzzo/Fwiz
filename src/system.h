@@ -104,6 +104,7 @@ struct Equation {
     std::string lhs_var;
     ExprPtr rhs;
     std::optional<Condition> condition;
+    bool bidirectional = false;  // true for "iff", false for "if" or ":"
 };
 
 struct VerifyResult {
@@ -1020,6 +1021,7 @@ private:
         // Not inside parentheses. Optional comma before if/iff.
         std::string eq_part = line;
         std::string cond_part;
+        bool is_iff = false;
         {
             int pd = 0;
             for (size_t i = 0; i < line.size(); i++) {
@@ -1043,6 +1045,7 @@ private:
                     while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
                         eq_part.pop_back();
                     cond_part = line.substr(i + 4);
+                    is_iff = true;
                     break;
                 }
 
@@ -1114,7 +1117,7 @@ private:
         Parser p(std::vector<Token>(mod_tok.begin() + 2, mod_tok.end()));
         std::optional<Condition> cond;
         try { cond = parse_condition(cond_part); } catch (...) { /* malformed condition → ignore */ }
-        equations.push_back({lhs, p.parse_expr(), std::move(cond)});
+        equations.push_back({lhs, p.parse_expr(), std::move(cond), is_iff});
     }
 
     // --- Sub-system loading ---

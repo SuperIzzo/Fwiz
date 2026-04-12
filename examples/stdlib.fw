@@ -2,27 +2,27 @@
 # All defined in pure fwiz using conditions and equations.
 
 [abs]
-result = x : x >= 0
-result = -x : x < 0
+result = x iff x >= 0
+result = -x iff x < 0
 
 [sign]
-result = 1 : x > 0
-result = 0 : x = 0
-result = -1 : x < 0
+result = 1 iff x > 0
+result = 0 iff x = 0
+result = -1 iff x < 0
 
 [clamp]
-result = lo : x < lo
-result = x : x >= lo && x <= hi
-result = hi : x > hi
+result = lo iff x < lo
+result = x iff x >= lo && x <= hi
+result = hi iff x > hi
 
 [max]
-result = a : a >= b
-result = b : b > a
+result = a iff a >= b
+result = b iff b > a
 
 [min]
-result = a : a <= b
-result = b : b < a
+result = a iff a <= b
+result = b iff b < a
 
 [step]
-result = 0 : x < 0
-result = 1 : x >= 0
+result = 0 iff x < 0
+result = 1 iff x >= 0

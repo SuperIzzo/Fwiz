@@ -5017,7 +5017,7 @@ void test_condition_parsing() {
 
     // Equation with simple condition
     {
-        write_fw("/tmp/tcp1.fw", "y = sqrt(x) : x >= 0\n");
+        write_fw("/tmp/tcp1.fw", "y = sqrt(x) if x >=0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcp1.fw");
         ASSERT(sys.equations.size() == 1, "one equation");
@@ -5035,7 +5035,7 @@ void test_condition_parsing() {
 
     // Compound condition with &&
     {
-        write_fw("/tmp/tcp3.fw", "tax = income * 0.1 : income > 0 && income <= 50000\n");
+        write_fw("/tmp/tcp3.fw", "tax = income * 0.1 if income> 0 && income <= 50000\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcp3.fw");
         ASSERT(sys.equations[0].condition.has_value(), "has compound condition");
@@ -5048,7 +5048,7 @@ void test_condition_solving() {
 
     // Condition passes: sqrt(x) with x >= 0
     {
-        write_fw("/tmp/tcs1.fw", "y = sqrt(x) : x >= 0\n");
+        write_fw("/tmp/tcs1.fw", "y = sqrt(x) if x >=0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs1.fw");
         ASSERT_NUM(sys.resolve("y", {{"x", 9}}), 3, "condition passes: sqrt(9) = 3");
@@ -5057,8 +5057,8 @@ void test_condition_solving() {
     // Condition fails: equation skipped
     {
         write_fw("/tmp/tcs2.fw",
-            "y = sqrt(x) : x >= 0\n"
-            "y = 0 : x < 0\n");
+            "y = sqrt(x) if x >=0\n"
+            "y = 0 if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs2.fw");
         ASSERT_NUM(sys.resolve("y", {{"x", -4}}), 0, "condition fails: fallback to y=0");
@@ -5067,8 +5067,8 @@ void test_condition_solving() {
     // Piecewise: tax brackets
     {
         write_fw("/tmp/tcs3.fw",
-            "tax = income * 0.1 : income <= 50000\n"
-            "tax = 5000 + (income - 50000) * 0.2 : income > 50000\n");
+            "tax = income * 0.1 if income<= 50000\n"
+            "tax = 5000 + (income - 50000) * 0.2 if income> 50000\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs3.fw");
         ASSERT_NUM(sys.resolve("tax", {{"income", 30000}}), 3000, "low bracket: 30000*0.1");
@@ -5078,8 +5078,8 @@ void test_condition_solving() {
     // Compound condition: income > 0 && income <= 50000
     {
         write_fw("/tmp/tcs4.fw",
-            "tax = income * 0.1 : income > 0 && income <= 50000\n"
-            "tax = 0 : income <= 0\n");
+            "tax = income * 0.1 if income> 0 && income <= 50000\n"
+            "tax = 0 if income<= 0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs4.fw");
         ASSERT_NUM(sys.resolve("tax", {{"income", 30000}}), 3000, "compound: in range");
@@ -5089,8 +5089,8 @@ void test_condition_solving() {
     // No condition matches → error
     {
         write_fw("/tmp/tcs5.fw",
-            "y = 1 : x > 0\n"
-            "y = -1 : x < 0\n");
+            "y = 1 if x >0\n"
+            "y = -1 if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs5.fw");
         auto msg = get_error([&]() { sys.resolve("y", {{"x", 0}}); });
@@ -5099,7 +5099,7 @@ void test_condition_solving() {
 
     // Condition with unknown variable: treated as satisfied (can't validate)
     {
-        write_fw("/tmp/tcs6.fw", "y = x + 1 : z > 0\n");
+        write_fw("/tmp/tcs6.fw", "y = x + 1 if z >0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs6.fw");
         ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6, "unknown condition var: treated as satisfied");
@@ -5108,12 +5108,12 @@ void test_condition_solving() {
     // All 6 comparison operators
     {
         write_fw("/tmp/tcs_ops.fw",
-            "a = 1 : x > 0\n"
-            "b = 1 : x >= 0\n"
-            "c = 1 : x < 0\n"
-            "d = 1 : x <= 0\n"
-            "e = 1 : x = 5\n"
-            "f = 1 : x != 5\n");
+            "a = 1 if x >0\n"
+            "b = 1 if x >=0\n"
+            "c = 1 if x <0\n"
+            "d = 1 if x <=0\n"
+            "e = 1 if x =5\n"
+            "f = 1 if x !=5\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs_ops.fw");
         ASSERT_NUM(sys.resolve("a", {{"x", 1}}), 1, "op >: passes");
@@ -5167,7 +5167,7 @@ void test_condition_errors() {
 
     // Malformed condition (no operator) — should skip condition, keep equation
     {
-        write_fw("/tmp/tce4.fw", "y = x + 1 : garbage\n");
+        write_fw("/tmp/tce4.fw", "y = x + 1 if garbage\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tce4.fw");
         ASSERT(sys.equations.size() == 1, "malformed condition: equation preserved");
@@ -5176,7 +5176,7 @@ void test_condition_errors() {
 
     // Multiple conditions with || (OR)
     {
-        write_fw("/tmp/tce5.fw", "y = 1 : x < -10 || x > 10\n");
+        write_fw("/tmp/tce5.fw", "y = 1 if x <-10 || x > 10\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tce5.fw");
         ASSERT(sys.equations[0].condition.has_value(), "OR condition: parsed");
@@ -5246,8 +5246,8 @@ void test_multiple_returns() {
     // Conditions filter results
     {
         write_fw("/tmp/tmr_cond.fw",
-            "x = sqrt(y) : x >= 0\n"
-            "x = -sqrt(y) : x < 0\n");
+            "x = sqrt(y) if x >=0\n"
+            "x = -sqrt(y) if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_cond.fw");
         auto result = sys.resolve_all("x", {{"y", 9}});
@@ -5308,8 +5308,8 @@ void test_conditional_branching() {
     // Piecewise: absolute value
     {
         write_fw("/tmp/tcb_abs.fw",
-            "result = x : x >= 0\n"
-            "result = -x : x < 0\n");
+            "result = x if x >=0\n"
+            "result = -x if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_abs.fw");
         ASSERT_NUM(sys.resolve("result", {{"x", 5}}), 5, "abs: positive");
@@ -5320,9 +5320,9 @@ void test_conditional_branching() {
     // Three-way branch: sign function
     {
         write_fw("/tmp/tcb_sign.fw",
-            "sign = 1 : x > 0\n"
-            "sign = 0 : x = 0\n"
-            "sign = -1 : x < 0\n");
+            "sign = 1 if x >0\n"
+            "sign = 0 if x =0\n"
+            "sign = -1 if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_sign.fw");
         ASSERT_NUM(sys.resolve("sign", {{"x", 42}}), 1, "sign: positive");
@@ -5333,10 +5333,10 @@ void test_conditional_branching() {
     // Multi-bracket tax
     {
         write_fw("/tmp/tcb_tax.fw",
-            "tax = 0 : income <= 0\n"
-            "tax = income * 0.1 : income > 0 && income <= 50000\n"
-            "tax = 5000 + (income - 50000) * 0.2 : income > 50000 && income <= 100000\n"
-            "tax = 15000 + (income - 100000) * 0.3 : income > 100000\n");
+            "tax = 0 if income<= 0\n"
+            "tax = income * 0.1 if income> 0 && income <= 50000\n"
+            "tax = 5000 + (income - 50000) * 0.2 if income> 50000 && income <= 100000\n"
+            "tax = 15000 + (income - 100000) * 0.3 if income> 100000\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_tax.fw");
         ASSERT_NUM(sys.resolve("tax", {{"income", -100}}), 0, "tax: negative income");
@@ -5348,9 +5348,9 @@ void test_conditional_branching() {
     // Branching with equations (not just constants)
     {
         write_fw("/tmp/tcb_clamp.fw",
-            "result = low : x < low\n"
-            "result = high : x > high\n"
-            "result = x : x >= low && x <= high\n");
+            "result = low if x <low\n"
+            "result = high if x >high\n"
+            "result = x if x >=low && x <= high\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_clamp.fw");
         ASSERT_NUM(sys.resolve("result", {{"x", 5}, {"low", 0}, {"high", 10}}), 5, "clamp: in range");
@@ -5373,8 +5373,8 @@ void test_conditional_branching() {
     // Inverse through conditional equation
     {
         write_fw("/tmp/tcb_inv.fw",
-            "y = x * 2 : x >= 0\n"
-            "y = x * 3 : x < 0\n");
+            "y = x * 2 if x >=0\n"
+            "y = x * 3 if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_inv.fw");
         // Forward: x=5 → y=10 (first branch)
@@ -5386,7 +5386,7 @@ void test_conditional_branching() {
     // Derive with conditions: should show condition in output
     {
         write_fw("/tmp/tcb_derive.fw",
-            "y = sqrt(x) : x >= 0\n");
+            "y = sqrt(x) if x >=0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_derive.fw");
         auto r = sys.derive("y", {}, {{"x", "x"}});
@@ -6360,8 +6360,8 @@ void test_derive_formula_call() {
     // Condition checking in derive — skips wrong branch
     {
         write_fw("/tmp/tdf_cond.fw",
-            "y = 0 : x = 0\n"
-            "y = x * 2 : x > 0\n");
+            "y = 0 if x =0\n"
+            "y = x * 2 if x >0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tdf_cond.fw");
         // With x=5, should use second equation (y = x * 2), not first
@@ -6372,8 +6372,8 @@ void test_derive_formula_call() {
     // Condition checking — symbolic (condition can't be evaluated, both tried)
     {
         write_fw("/tmp/tdf_cond2.fw",
-            "y = 0 : x = 0\n"
-            "y = x * 2 : x > 0\n");
+            "y = 0 if x =0\n"
+            "y = x * 2 if x >0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tdf_cond2.fw");
         // With symbolic x, condition can't be evaluated — first valid wins
@@ -6733,7 +6733,7 @@ void test_numeric_integration() {
 
     // Quadratic with condition: x > 0
     {
-        write_fw("/tmp/tn_quad_cond.fw", "y = x^2 : x > 0\n");
+        write_fw("/tmp/tn_quad_cond.fw", "y = x^2 if x >0\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tn_quad_cond.fw");
@@ -6781,8 +6781,8 @@ void test_numeric_integration() {
     // Use a constrained file to keep recursion depth manageable under sanitizers
     {
         write_fw("/tmp/tn_fact.fw",
-            "result = 1 : n = 0\n"
-            "result = n * tn_fact(result=?prev, n=n-1) : n > 0\n"
+            "result = 1 if n =0\n"
+            "result = n * tn_fact(result=?prev, n=n-1) if n >0\n"
             "n >= 0\nn <= 20\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
@@ -6797,8 +6797,8 @@ void test_numeric_integration() {
     // Factorial inverse: result=720 → n=6
     {
         write_fw("/tmp/tn_fact2.fw",
-            "result = 1 : n = 0\n"
-            "result = n * tn_fact2(result=?prev, n=n-1) : n > 0\n"
+            "result = 1 if n =0\n"
+            "result = n * tn_fact2(result=?prev, n=n-1) if n >0\n"
             "n >= 0\nn <= 20\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
@@ -6928,8 +6928,8 @@ void test_numeric_edge_cases() {
     // Memoization: same query twice gives same result
     {
         write_fw("/tmp/tne_memo.fw",
-            "result = 1 : n <= 0\n"
-            "result = n * tne_memo(result=?prev, n=n-1) : n > 0\n"
+            "result = 1 if n <=0\n"
+            "result = n * tne_memo(result=?prev, n=n-1) if n >0\n"
             "n >= 0\nn <= 10\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
@@ -6973,8 +6973,8 @@ void test_numeric_binary_integration() {
     // Factorial with --numeric (constrained range for speed)
     {
         write_fw("/tmp/tnb_fact.fw",
-            "result = 1 : n <= 0\n"
-            "result = n * tnb_fact(result=?prev, n=n-1) : n > 0\n"
+            "result = 1 if n <=0\n"
+            "result = n * tnb_fact(result=?prev, n=n-1) if n >0\n"
             "n >= 0\nn <= 20\n");
         int rc = system("./bin/fwiz '/tmp/tnb_fact(n=?, result=120)' 2>/dev/null "
                         "| grep -q '5'");
@@ -7493,7 +7493,7 @@ void test_constants_edge_cases() {
 
     // Constants in conditions
     {
-        write_fw("/tmp/tc_cond.fw", "y = x : x > pi\ny = 0 : x <= pi\n");
+        write_fw("/tmp/tc_cond.fw", "y = x if x >pi\ny = 0 if x <=pi\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tc_cond.fw");
         double y = sys.resolve("y", {{"x", 4}});
@@ -7581,7 +7581,7 @@ void test_derive_edge_cases_extended() {
 
     // Unfold with conditions on sub-system equations
     {
-        write_fw("/tmp/td_cond_inner.fw", "y = x : x > 0\ny = 0 : x <= 0\n");
+        write_fw("/tmp/td_cond_inner.fw", "y = x if x >0\ny = 0 if x <=0\n");
         write_fw("/tmp/td_cond_outer.fw", "td_cond_inner(y=?r, x=a)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/td_cond_outer.fw");
@@ -7790,7 +7790,7 @@ void test_inline_and_stdin() {
     // load_string with conditions
     {
         FormulaSystem sys;
-        sys.load_string("y = x : x > 0\ny = 0 : x <= 0\n");
+        sys.load_string("y = x if x >0\ny = 0 if x <=0\n");
         ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 5, "load_string: condition x>0");
         ASSERT_NUM(sys.resolve("y", {{"x", -3}}), 0, "load_string: condition x<=0");
     }
