@@ -114,18 +114,19 @@ int main(int argc, char* argv[]) {
 
         // --- Derive mode ---
         if (derive_mode) {
-            std::map<std::string, std::string> derived_eqs;
+            std::map<std::string, std::set<std::string>> derived_eqs;
             for (auto& q : query.queries) {
                 try {
-                    auto result = sys.derive(q.variable, query.bindings, query.symbolic);
-                    derived_eqs[q.variable] = result;
-                    std::cout << q.alias << " = " << result << '\n';
+                    auto results = sys.derive_all(q.variable, query.bindings, query.symbolic);
+                    for (auto& r : results) {
+                        derived_eqs[q.variable].insert(r);
+                        std::cout << q.alias << " = " << r << '\n';
+                    }
                 } catch (const std::exception& e) {
                     if (!fit_mode) {
                         std::cerr << "Error: " << e.what() << '\n';
                         return 1;
                     }
-                    // derive failed but fit might still work — continue
                 }
             }
             if (!fit_mode) return 0;
@@ -135,7 +136,7 @@ int main(int argc, char* argv[]) {
                 try {
                     auto result = sys.fit(q.variable, query.bindings, query.symbolic);
                     auto print_if_new = [&](const FormulaSystem::FitOutput& f) {
-                        if (derived_eqs.count(q.variable) && derived_eqs[q.variable] == f.equation)
+                        if (derived_eqs.count(q.variable) && derived_eqs[q.variable].count(f.equation))
                             return;
                         std::string sign = f.exact ? " = " : " ~ ";
                         std::cout << q.alias << sign << f.equation << '\n';

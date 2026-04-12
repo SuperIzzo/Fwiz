@@ -392,31 +392,74 @@ public:
 
     // --- Derive (symbolic) ---
 
-    std::string derive(const std::string& target,
-                       const std::map<std::string, double>& numeric_bindings,
-                       const std::map<std::string, std::string>& symbolic_bindings) const {
-        ExprArena::Scope scope(arena);
+    // Prepare symbolic bindings for derive
+    std::map<std::string, ExprPtr> prepare_derive_bindings(
+            const std::string& target,
+            const std::map<std::string, double>& numeric_bindings,
+            const std::map<std::string, std::string>& symbolic_bindings) const {
         std::map<std::string, ExprPtr> bindings;
         for (auto& [k, v] : numeric_bindings) bindings[k] = Expr::Num(v);
         for (auto& [k, v] : symbolic_bindings) bindings[k] = Expr::Var(v);
-        // Apply defaults as numeric (skip builtin constants — keep them symbolic)
         auto& consts = builtin_constants();
         for (auto& [k, v] : defaults)
             if (!bindings.count(k) && k != target && !consts.count(k))
                 bindings[k] = Expr::Num(v);
+        return bindings;
+    }
 
-        auto result = derive_recursive(target, bindings, {}, 0);
-        if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
-
-        // Try to evaluate to a number; if symbolic vars remain, return as expression
+    // Format a derived ExprPtr as a string (evaluate if fully numeric)
+    std::string format_derived(const ExprPtr& result) const {
         try {
             double val = evaluate(result);
             if (!std::isnan(val) && !std::isinf(val)) return fmt_num(val);
         } catch (const std::exception& ex) {
             trace.calc("derive: symbolic result (cannot evaluate: " + std::string(ex.what()) + ")");
         }
-
         return expr_to_string(result);
+    }
+
+    // Derive single result (backwards compatible)
+    std::string derive(const std::string& target,
+                       const std::map<std::string, double>& numeric_bindings,
+                       const std::map<std::string, std::string>& symbolic_bindings) const {
+        ExprArena::Scope scope(arena);
+        auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
+        auto result = derive_recursive(target, bindings, {}, 0);
+        if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
+        return format_derived(result);
+    }
+
+    // Derive ALL results (for multi-valued inversions: abs, quadratic, etc.)
+    std::vector<std::string> derive_all(const std::string& target,
+                       const std::map<std::string, double>& numeric_bindings,
+                       const std::map<std::string, std::string>& symbolic_bindings) const {
+        ExprArena::Scope scope(arena);
+        auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
+
+        // Collect ALL results from enumerate_candidates
+        std::vector<std::string> results;
+        std::set<std::string> seen;
+        enumerate_candidates(target, [&](const Candidate& c) {
+            if (c.type != CandidateType::EXPR) return false;
+            // Check condition
+            std::map<std::string, double> numeric;
+            for (auto& [k, v] : bindings) {
+                try { numeric[k] = evaluate(*v); } catch (...) {}
+            }
+            if (c.condition && !check_condition(*c.condition, numeric)) return false;
+
+            auto b = bindings; // fresh copy per candidate
+            auto result = try_derive(c.expr, target, b, {}, 0);
+            if (result) {
+                auto s = format_derived(result);
+                if (seen.insert(s).second) results.push_back(s);
+            }
+            return false; // don't stop — collect all
+        });
+
+        if (results.empty())
+            throw std::runtime_error("Cannot derive equation for '" + target + "'");
+        return results;
     }
 
     struct FitOutput {
