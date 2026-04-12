@@ -1152,6 +1152,26 @@ private:
         }
     }
 
+    // --- Shared helpers ---
+
+    // Substitute all bindings into an expression. Works with both numeric and symbolic maps.
+    template<typename MapType>
+    static ExprPtr substitute_bindings(ExprPtr expr, const MapType& bindings,
+            const std::string& skip_var = "") {
+        std::set<std::string> vars;
+        collect_vars(expr, vars);
+        for (auto& v : vars) {
+            if (v == skip_var) continue;
+            if (auto it = bindings.find(v); it != bindings.end()) {
+                if constexpr (std::is_same_v<typename MapType::mapped_type, double>)
+                    expr = substitute(expr, v, Expr::Num(it->second));
+                else
+                    expr = substitute(expr, v, it->second);
+            }
+        }
+        return simplify(expr);
+    }
+
     // --- Derive helpers ---
 
     // Build a mapping from sub-system variable names to parent-scope expressions,
@@ -1160,15 +1180,8 @@ private:
             const FormulaCall& call,
             const std::map<std::string, ExprPtr>& bindings) const {
         std::map<std::string, ExprPtr> parent_map;
-        for (auto& [sv, expr] : call.bindings) {
-            ExprPtr resolved = expr;
-            std::set<std::string> vars;
-            collect_vars(expr, vars);
-            for (auto& v : vars)
-                if (auto it = bindings.find(v); it != bindings.end())
-                    resolved = substitute(resolved, v, it->second);
-            parent_map[sv] = simplify(resolved);
-        }
+        for (auto& [sv, expr] : call.bindings)
+            parent_map[sv] = substitute_bindings(expr, bindings);
         return parent_map;
     }
 
