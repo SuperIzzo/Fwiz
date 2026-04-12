@@ -8202,6 +8202,86 @@ void test_simplify_common_factor() {
     }
 }
 
+void test_iff_semantics() {
+    SECTION("If/Iff Semantics");
+
+    // iff: exclusive branches → derive output says iff
+    {
+        write_fw("/tmp/tiff1.fw",
+            "[mysign]\n"
+            "result = 1 iff x > 0\n"
+            "result = 0 iff x = 0\n"
+            "result = -1 iff x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tiff1.fw", "mysign");
+        auto results = sys.derive_all("x", {}, {{"result", "result"}});
+        bool has_iff = false;
+        for (auto& r : results)
+            if (r.find("iff") != std::string::npos) has_iff = true;
+        ASSERT(has_iff, "iff: exclusive branches produce iff in output");
+    }
+
+    // if: overlapping branches (two equations produce result=1) → downgrade to if
+    {
+        write_fw("/tmp/tiff2.fw",
+            "result = 1 iff x > 0\n"
+            "result = 1 iff x = 0\n"   // overlaps: result=1 for both x>0 and x=0
+            "result = -1 iff x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tiff2.fw");
+        auto results = sys.derive_all("x", {}, {{"result", "result"}});
+        // The two result=1 branches should downgrade to "if"
+        bool found_if_not_iff = false;
+        for (auto& r : results)
+            if (r.find(" if ") != std::string::npos && r.find("iff") == std::string::npos)
+                found_if_not_iff = true;
+        ASSERT(found_if_not_iff, "iff: overlapping branches downgrade to if");
+    }
+
+    // iff with known binding: sign(x=?, result=1) → x : (0, +inf) as range
+    {
+        write_fw("/tmp/tiff3.fw",
+            "result = 1 iff x > 0\n"
+            "result = 0 iff x = 0\n"
+            "result = -1 iff x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tiff3.fw");
+        auto result = sys.resolve_all("x", {{"result", 1}});
+        ASSERT(!result.empty(), "iff: resolve_all returns range for result=1");
+        ASSERT(result.intervals().size() > 0, "iff: result is interval, not discrete");
+    }
+
+    // if (not iff) conditions should NOT produce range inverse
+    {
+        write_fw("/tmp/tiff4.fw",
+            "result = 1 if x > 0\n"
+            "result = 0 if x = 0\n"
+            "result = -1 if x < 0\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tiff4.fw");
+        auto msg = get_error([&]() { sys.resolve_all("x", {{"result", 1}}); });
+        ASSERT(!msg.empty(), "if: non-iff conditions don't produce range inverse");
+    }
+
+    // iff: bidirectional flag correctly set
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x iff x > 0\nz = x if x < 0\n");
+        ASSERT(sys.equations.size() == 2, "iff flag: two equations");
+        ASSERT(sys.equations[0].bidirectional, "iff flag: first is bidirectional");
+        ASSERT(!sys.equations[1].bidirectional, "iff flag: second is not");
+    }
+
+    // Comma syntax: ", iff" works the same
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x, iff x > 0\n");
+        ASSERT(sys.equations.size() == 1, "comma iff: one equation");
+        ASSERT(sys.equations[0].bidirectional, "comma iff: bidirectional");
+        ASSERT(sys.equations[0].condition.has_value(), "comma iff: has condition");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8416,6 +8496,7 @@ int main() {
     test_simplify_exp_log();
     test_simplify_trig_abs_pow();
     test_simplify_common_factor();
+    test_iff_semantics();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
