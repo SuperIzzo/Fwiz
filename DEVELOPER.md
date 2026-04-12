@@ -42,6 +42,9 @@ Current capabilities:
 - Arena allocator for expression nodes (100% cache-friendly)
 - Numeric solving (adaptive grid scan + Newton/bisection, enabled by default)
 - Exact/approximate result classification (`=` vs `~`)
+- Curve fitting (`--fit`) with template matching and recursive composition
+- Built-in constants (`pi`, `e`, `phi`)
+- Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
 
 Planned (see FUTURE.md):
 - **Symbolic differentiation** — sensitivity analysis
@@ -70,7 +73,14 @@ Planned (see FUTURE.md):
 │   expression tree      │   simplify, evaluate,       │
 │                        │   substitute, solve_for,    │
 │                        │   decompose_linear,         │
-│                        │   numeric root-finding      │
+│                        │   numeric root-finding,     │
+│                        │   builtin constants         │
+├────────────────────────┤                             │
+│      fit.h             │                             │
+│   Curve fitting:       │                             │
+│   sampling, templates, │                             │
+│   composition,         │                             │
+│   constant recognition │                             │
 ├────────────────────────┼─────────────────────────────┤
 │      lexer.h           │         trace.h             │
 │   Source text →        │   Trace levels:             │
@@ -78,7 +88,7 @@ Planned (see FUTURE.md):
 └────────────────────────┴─────────────────────────────┘
 ```
 
-All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~9000 lines total including tests.
+All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~12000 lines total including tests.
 
 ### lexer.h
 

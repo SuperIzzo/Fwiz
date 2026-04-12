@@ -10,20 +10,20 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (1300+)
+make test         # run all tests (1400+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
 
 Run: `./bin/fwiz [flags] <file>(<var>=?, <var>=?!, <var>=<value>, <var>=<expr>, ...)`
 
-Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive`, `--no-numeric`, `--precision N`
+Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive`, `--fit [N]`, `--output FILE`, `--no-numeric`, `--precision N`
 
 ## Architecture
 
 Header-only, no external dependencies. Source in `src/`, examples in `examples/`.
 
-**Pipeline:** source → `lexer.h` → `parser.h` → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI)
+**Pipeline:** source → `lexer.h` → `parser.h` → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI). `fit.h` provides curve fitting (sampling, templates, composition).
 
 **Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
@@ -78,12 +78,22 @@ result = n * factorial(result=?prev, n=n-1) : n > 0
 ```
 Depth guard: `max_formula_depth` (default 1000).
 
+### Built-in constants
+`pi`, `e`, `phi` available in any equation. Symbolic in derive, numeric in solve. File defaults override builtins.
+
 ### Numeric solving
 Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive inverses) solved via adaptive grid scan + Newton/bisection. Exact results use `=`, approximate use `~`.
 - `--no-numeric` — algebraic only
 - `--precision N` — scan density (default 200)
 - Conditions narrow the search range: `x > 0` scans only positive values
 - Constants: `NUMERIC_DEFAULT_SAMPLES`, `NUMERIC_TOLERANCE`, `NUMERIC_SEED`
+
+### Curve fitting
+`--fit [N]` samples a function and fits closed-form approximations. Templates: polynomial, power law, exponential (including Gaussian), logarithmic, sinusoidal, reciprocal. Recursive composition (depth N, default 5) discovers nested forms like `sin(sin(x))`, `e^(x*log(x))`. Constants recognized in coefficients (pi, e, sqrt(2), etc.).
+- `--output FILE` — write best fit as `.fw` file
+- `--derive --fit` — derive symbolic first, then fit alternatives
+- `fit.h`: `sample_function`, `fit_base`, `fit_all`, template functions, `recognize_constant`
+- Constants: `FIT_DEFAULT_SAMPLES`, `FIT_MAX_DEGREE`, `FIT_R2_THRESHOLD`, `FIT_DEFAULT_DEPTH`
 
 ## Key conventions
 

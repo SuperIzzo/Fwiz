@@ -397,34 +397,14 @@ Keep rational numbers as `(numerator, denominator)` pairs internally. Only conve
 
 Most engineering formulas use small integer fractions (1/2, 1/3, 1/4). Keeping them exact avoids floating point drift in long derivation chains.
 
-## 11. Curve Fitting / Approximate Formula Derivation
+## 11. Curve Fitting — ✅ DONE
 
-### Problem
+Implemented as `--fit [N]` flag. Templates: polynomial, power law, exponential (including Gaussian/quadratic exponent), logarithmic, sinusoidal, reciprocal. Recursive composition (depth N, default 5) discovers nested forms like `sin(sin(x))`, `e^(x*log(x))` = `x^x`. Product inners (`x*log(x)`, `x*sin(x)`) enable complex decompositions. Constant recognition (pi, e, phi, sqrt(2), sqrt(3)) in fitted coefficients.
 
-Users sometimes need a rational approximation for an irrational function — e.g., replacing `sqrt(x)` with a polynomial for a deterministic physics engine, or fitting sampled data to a closed-form formula.
-
-### Approach
-
-The numeric solver's adaptive grid scan already maps out `f(x)` at many sample points. Curve fitting adds a post-processing step:
-
-1. Scan the function to collect `(x, f(x))` sample points (already done by `adaptive_scan`)
-2. Try fitting standard forms: polynomial (least squares), rational (Padé approximation), piecewise linear
-3. Output an approximate closed-form formula: `y ≈ 0.5*x^2 + 0.3*x + 0.1`
-4. Report fit quality (R², max error in range)
-
-### Proposed syntax
-
-```bash
-fwiz --fit formula(y=?, x=x)  --range x=0..10
-# y ≈ 1.234 * x^2 + 0.567 * x + 0.089  (R² = 0.9998, max error = 0.003)
-```
-
-### Use cases
-
-- Deterministic physics engines needing rational approximations for `sqrt`, `sin`, `cos`
-- Finding patterns in recursive function outputs
-- Approximating expensive formula call chains with simpler expressions
-- Discovering surprising mathematical relationships in sampled data
+**Remaining enhancements:**
+- Rational (Padé) approximation: `p(x)/q(x)` for better convergence near singularities
+- Sum-of-products inners: `a*f(x) + b*g(x)` for Stirling-type approximations
+- Canonical number representation: keep fractions and irrational constants in expression tree
 
 ## 12. Periodicity Detection
 
