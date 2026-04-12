@@ -843,6 +843,28 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             }
             auto s = Expr::Call(e->name, sa);
             if (all_num && builtin_functions().count(e->name)) return Expr::Num(evaluate(s));
+
+            // log/exp simplifications
+            if (e->name == "log" && sa.size() == 1) {
+                auto& arg = sa[0];
+                // log(e^x) → x
+                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW
+                    && is_var(arg->left) && arg->left->name == "e")
+                    return arg->right;
+                // log(x^n) → n * log(x)  (assuming x > 0)
+                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW) {
+                    simplify_assume_nonzero(arg->left); // actually x > 0, but ≠0 is the key part
+                    return Expr::BinOpExpr(BinOp::MUL, arg->right,
+                        Expr::Call("log", {arg->left}));
+                }
+            }
+            if (e->name == "sqrt" && sa.size() == 1) {
+                auto& arg = sa[0];
+                // sqrt(x^2) → abs(x)
+                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW
+                    && is_num(arg->right) && arg->right->num == 2.0)
+                    return Expr::Call("abs", {arg->left});
+            }
             return s;
         }
 
@@ -860,6 +882,17 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                 case BinOp::POW:
                     if (is_zero(r)) return Expr::Num(1);
                     if (is_one(r)) return l;
+                    // e^(log(x)) → x  (assuming x > 0)
+                    if (is_var(l) && l->name == "e"
+                        && r->type == ExprType::FUNC_CALL && r->name == "log"
+                        && !r->args.empty()) {
+                        simplify_assume_nonzero(r->args[0]); // x > 0 implied
+                        return r->args[0];
+                    }
+                    // (x^a)^b → x^(a*b)
+                    if (l->type == ExprType::BINOP && l->op == BinOp::POW)
+                        return Expr::BinOpExpr(BinOp::POW, l->left,
+                            simplify_once(Expr::BinOpExpr(BinOp::MUL, l->right, r)));
                     return Expr::BinOpExpr(BinOp::POW, l, r);
         case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }
