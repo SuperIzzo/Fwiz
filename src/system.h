@@ -980,17 +980,29 @@ private:
     // --- Sub-system loading ---
 
     const FormulaSystem& load_sub_system(const std::string& file_stem) const {
-        std::string path = base_dir + "/" + file_stem;
+        // Split dotted names: "geometry.rectangle" → file="geometry", section="rectangle"
+        std::string file_part = file_stem;
+        std::string section;
+        size_t dot = file_stem.find('.');
+        if (dot != std::string::npos) {
+            file_part = file_stem.substr(0, dot);
+            section = file_stem.substr(dot + 1);
+        }
+
+        std::string path = base_dir + "/" + file_part;
         if (path.find('.') == std::string::npos) path += ".fw";
         std::string abs_path = std::filesystem::weakly_canonical(path).string();
 
-        auto it = sub_systems.find(abs_path);
+        // Cache key includes section
+        std::string cache_key = abs_path + (section.empty() ? "" : "#" + section);
+        auto it = sub_systems.find(cache_key);
         if (it != sub_systems.end()) return *it->second;
 
         auto sub = std::make_shared<FormulaSystem>();
         sub->trace = trace;
-        sub->load_file(abs_path);
-        sub_systems[abs_path] = sub;
+        sub->numeric_mode = numeric_mode;
+        sub->load_file(abs_path, section);
+        sub_systems[cache_key] = sub;
         return *sub;
     }
 
