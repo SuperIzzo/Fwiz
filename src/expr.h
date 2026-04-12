@@ -727,9 +727,11 @@ inline std::vector<SimplifyAssumption>& simplify_assumptions_() {
 inline void simplify_assume_nonzero(const ExprPtr& expr) {
     if (is_num(expr)) return;
     auto& a = simplify_assumptions_();
+    std::string desc = expr_to_string(expr) + " != 0";
+    // Dedup by string (safe across arena scopes — pointer comparison isn't)
     for (auto& existing : a)
-        if (expr_equal(existing.expr, expr)) return;
-    a.push_back({expr, expr_to_string(expr) + " != 0"});
+        if (existing.desc == desc) return;
+    a.push_back({expr, desc});
 }
 
 inline std::vector<SimplifyAssumption> simplify_get_assumptions() {
@@ -777,6 +779,8 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
         return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
     if (is_neg(l) && is_neg(r))
         return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
+    if (is_neg(r))
+        return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l, r->child));
     if (is_neg(l))
         return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
     // Constant reassociation: (K * a) / K2 or (a * K) / K2
@@ -788,6 +792,35 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
     }
     if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::DIV && is_num(l->right))
         return Expr::BinOpExpr(BinOp::DIV, l->left, Expr::Num(l->right->num * r->num));
+    // Distribute division over sum: (a*x + b*x) / x → a + b
+    // Flatten numerator additively, try dividing each term by denominator
+    if (l->type == ExprType::BINOP && is_additive(l->op)) {
+        std::vector<std::pair<double, ExprPtr>> terms;
+        flatten_additive(l, 1.0, terms);
+        bool all_cancel = true;
+        std::vector<ExprPtr> divided;
+        for (auto& [coeff, base] : terms) {
+            if (!base) { // constant term
+                divided.push_back(Expr::BinOpExpr(BinOp::DIV, Expr::Num(coeff), r));
+                continue;
+            }
+            ExprPtr term = (coeff == 1.0) ? base
+                : Expr::BinOpExpr(BinOp::MUL, Expr::Num(coeff), base);
+            auto d = simplify_div(term, r);
+            // Check if the division actually cancelled (no DIV remaining at top)
+            if (d->type == ExprType::BINOP && d->op == BinOp::DIV) {
+                all_cancel = false; break;
+            }
+            divided.push_back(d);
+        }
+        if (all_cancel && !divided.empty()) {
+            ExprPtr result = divided[0];
+            for (size_t i = 1; i < divided.size(); i++)
+                result = Expr::BinOpExpr(BinOp::ADD, result, divided[i]);
+            return result;
+        }
+    }
+
     // Cross-term cancellation: flatten both sides, cancel matching bases
     double lc = 1.0, rc = 1.0;
     std::vector<std::pair<ExprPtr, double>> lf, rf;
