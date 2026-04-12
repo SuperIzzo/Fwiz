@@ -109,7 +109,7 @@ int main(int argc, char* argv[]) {
                 sys.load_string(source, "<stdin>");
             }
         } else {
-            sys.load_file(query.filename);
+            sys.load_file(query.filename, query.section);
         }
 
         // --- Derive mode ---

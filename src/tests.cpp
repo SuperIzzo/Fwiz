@@ -7841,6 +7841,117 @@ void test_inline_and_stdin() {
     }
 }
 
+void test_sections() {
+    SECTION("Multi-System Sections");
+
+    // Basic section selection
+    {
+        FormulaSystem sys;
+        sys.load_string("[rect]\narea = w * h\n[circ]\narea = pi * r^2\n", "<test>", "rect");
+        double a = sys.resolve("area", {{"w", 5}, {"h", 3}});
+        ASSERT_NUM(a, 15, "section: rect area = 15");
+    }
+
+    // Different section from same source
+    {
+        FormulaSystem sys;
+        sys.load_string("[rect]\narea = w * h\n[circ]\narea = pi * r^2\n", "<test>", "circ");
+        double a = sys.resolve("area", {{"r", 5}});
+        ASSERT_NUM(a, M_PI * 25, "section: circ area = pi*25");
+    }
+
+    // Top-level inheritance: defaults shared
+    {
+        FormulaSystem sys;
+        sys.load_string("g = 9.81\n[physics]\nforce = mass * g\n", "<test>", "physics");
+        double f = sys.resolve("force", {{"mass", 10}});
+        ASSERT_NUM(f, 98.1, "section: inherits top-level default g");
+    }
+
+    // Top-level inheritance: equations shared
+    {
+        FormulaSystem sys;
+        sys.load_string("base = x + 1\n[a]\ny = base * 2\n", "<test>", "a");
+        double y = sys.resolve("y", {{"x", 4}});
+        ASSERT_NUM(y, 10, "section: inherits top-level equation");
+    }
+
+    // Cascading: [a.b] inherits from [a]
+    {
+        FormulaSystem sys;
+        sys.load_string("[shape]\narea = w * h\n[shape.box]\nvolume = area * d\n",
+            "<test>", "shape.box");
+        double v = sys.resolve("volume", {{"w", 3}, {"h", 4}, {"d", 5}});
+        ASSERT_NUM(v, 60, "section: shape.box inherits shape area");
+    }
+
+    // Module level only (no section specified, file has sections)
+    {
+        FormulaSystem sys;
+        sys.load_string("shared = 42\n[a]\ny = shared + x\n", "<test>", "");
+        // Only top-level loaded — "y" should not be available
+        auto msg = get_error([&]() { sys.resolve("y", {{"x", 1}}); });
+        ASSERT(!msg.empty(), "section: module-level only, subsystem eq not available");
+    }
+
+    // Section not found → error
+    {
+        FormulaSystem sys;
+        auto msg = get_error([&]() {
+            sys.load_string("[a]\ny = x\n", "<test>", "nonexistent");
+        });
+        ASSERT(msg.find("not found") != std::string::npos,
+            "section: nonexistent section throws");
+    }
+
+    // No sections → backwards compatible (all lines loaded)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x + 1\nz = y * 2\n");
+        double z = sys.resolve("z", {{"x", 4}});
+        ASSERT_NUM(z, 10, "section: no sections = all lines loaded");
+    }
+
+    // CLI: file.section(args) parsing
+    {
+        auto q = parse_cli_query("geometry.triangle(C=?, A=60, B=90)");
+        ASSERT_EQ(q.filename, "geometry.fw", "section CLI: filename = geometry.fw");
+        ASSERT_EQ(q.section, "triangle", "section CLI: section = triangle");
+    }
+
+    // CLI: file.section.sub(args) parsing
+    {
+        auto q = parse_cli_query("shapes.circle.ring(area=?, r=5)");
+        ASSERT_EQ(q.filename, "shapes.fw", "section CLI: nested filename");
+        ASSERT_EQ(q.section, "circle.ring", "section CLI: nested section");
+    }
+
+    // CLI: file.fw(args) — direct file path, no section
+    {
+        auto q = parse_cli_query("examples/triangle.fw(C=?, A=60)");
+        ASSERT_EQ(q.filename, "examples/triangle.fw", "section CLI: .fw is file, not section");
+        ASSERT(q.section.empty(), "section CLI: no section for .fw path");
+    }
+
+    // Binary: section selection
+    {
+        write_fw("/tmp/tsec.fw",
+            "[rect]\narea = w * h\n[circ]\narea = pi * r^2\n");
+        int rc = system("./bin/fwiz '/tmp/tsec.rect(area=?, w=5, h=3)' 2>/dev/null "
+                        "| grep -q 'area = 15'");
+        ASSERT(WEXITSTATUS(rc) == 0, "section binary: rect area = 15");
+    }
+
+    // Binary: cascading section
+    {
+        write_fw("/tmp/tsec2.fw",
+            "g = 9.81\n[phys]\nforce = mass * g\n[phys.gravity]\nweight = force\n");
+        int rc = system("./bin/fwiz '/tmp/tsec2.phys.gravity(weight=?, mass=10)' 2>/dev/null "
+                        "| grep -q 'weight = 98.1'");
+        ASSERT(WEXITSTATUS(rc) == 0, "section binary: cascading phys.gravity");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8050,6 +8161,7 @@ int main() {
     test_fit_templates_edge();
     test_numeric_precision_edge();
     test_inline_and_stdin();
+    test_sections();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
