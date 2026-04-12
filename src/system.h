@@ -308,6 +308,7 @@ public:
         double max_error = 0;
         bool exact = false;
         ExprPtr expr = nullptr;
+        std::vector<FitOutput> alternatives;
     };
 
     FitOutput fit(const std::string& target,
@@ -347,15 +348,27 @@ public:
             throw std::runtime_error("Not enough valid samples for fitting (got "
                 + std::to_string(samples.size()) + ")");
 
-        auto result = fit_polynomial_auto(samples);
-        result.expr = poly_to_expr(result.coefficients, free_var);
+        auto fits = fit_all(samples, free_var, defaults);
+        if (fits.empty())
+            throw std::runtime_error("No fit found with R² > 0.9");
 
         FitOutput out;
-        out.equation = expr_to_string(result.expr);
-        out.r_squared = result.r_squared;
-        out.max_error = result.max_error;
-        out.exact = result.exact;
-        out.expr = result.expr;
+        out.equation = expr_to_string(fits[0].expr);
+        out.r_squared = fits[0].r_squared;
+        out.max_error = fits[0].max_error;
+        out.exact = fits[0].exact;
+        out.expr = fits[0].expr;
+
+        // Include alternative fits
+        for (size_t i = 1; i < fits.size(); i++) {
+            FitOutput alt;
+            alt.equation = expr_to_string(fits[i].expr);
+            alt.r_squared = fits[i].r_squared;
+            alt.max_error = fits[i].max_error;
+            alt.exact = fits[i].exact;
+            alt.expr = fits[i].expr;
+            out.alternatives.push_back(alt);
+        }
         return out;
     }
 
