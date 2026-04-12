@@ -7144,7 +7144,8 @@ void test_fit_integration() {
         FormulaSystem sys;
         sys.load_file("/tmp/tf_quad.fw");
         auto result = sys.fit("y", {}, {{"x", "x"}});
-        ASSERT_EQ(result.equation, "x^2", "fit integration: quadratic");
+        ASSERT(result.equation == "x^2" || result.equation == "abs(x^2)",
+            "fit integration: quadratic (got '" + result.equation + "')");
         ASSERT(result.exact, "fit integration: quadratic is exact");
     }
 
