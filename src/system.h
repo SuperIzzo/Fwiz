@@ -744,10 +744,13 @@ private:
             std::set<std::string> vars;
             collect_vars(lhs, vars);
             collect_vars(rhs, vars);
+            auto& consts = builtin_constants();
             for (auto& v : vars) {
                 if (auto it = bindings.find(v); it != bindings.end()) {
                     lhs = substitute(lhs, v, Expr::Num(it->second));
                     rhs = substitute(rhs, v, Expr::Num(it->second));
+                } else if (consts.count(v)) {
+                    // Builtin constant — evaluate() handles it, no substitution needed
                 } else {
                     return std::nullopt; // unknown variable — can't evaluate
                 }

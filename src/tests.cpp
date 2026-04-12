@@ -7425,6 +7425,233 @@ void test_template_fitting() {
     }
 }
 
+// ---- Coverage gaps (from audit) ----
+
+void test_numeric_edge_cases_extended() {
+    SECTION("Numeric Edge Cases Extended");
+
+    // Newton at exact root — should converge immediately
+    {
+        auto f = [](double x) { return x * x - 4; };
+        auto root = newton_solve(f, 2.0);
+        ASSERT(root.has_value(), "newton: x0 at root converges");
+        ASSERT_NUM(*root, 2.0, "newton: x0=2 for x²-4 → 2");
+    }
+
+    // Bisection with endpoint as root — find_numeric_roots handles this via exact zero check
+    {
+        auto f = [](double x) { return x - 3.0; };
+        auto roots = find_numeric_roots(f, 2.0, 10.0);
+        bool found_3 = false;
+        for (auto r : roots) if (std::abs(r - 3.0) < 1e-6) found_3 = true;
+        ASSERT(found_3, "numeric: endpoint root found via scan");
+    }
+
+    // Constant function — no roots
+    {
+        auto f = [](double x) { (void)x; return 5.0; };
+        auto roots = find_numeric_roots(f, -10, 10);
+        ASSERT(roots.empty(), "numeric: constant function → no roots");
+    }
+
+    // Step function
+    {
+        auto f = [](double x) { return x < 0 ? -1.0 : 1.0; };
+        auto roots = find_numeric_roots(f, -10, 10);
+        // Sign change at 0, but not a true root — should find ~0 or empty
+        // Either outcome is acceptable
+        ASSERT(true, "numeric: step function doesn't crash");
+    }
+
+    // Precision 0 should not crash (guard against division by zero)
+    {
+        auto f = [](double x) { return x; };
+        auto samples = sample_function(f, -1, 1, 0);
+        ASSERT(samples.empty(), "numeric: 0 samples → empty");
+    }
+
+    // Very narrow interval bisection
+    {
+        auto f = [](double x) { return x - 1.0; };
+        auto root = bisection_solve(f, 0.9999999999, 1.0000000001);
+        ASSERT(root.has_value(), "bisection: very narrow interval");
+        ASSERT_NUM(*root, 1.0, "bisection: narrow → 1.0");
+    }
+}
+
+void test_constants_edge_cases() {
+    SECTION("Constants Edge Cases");
+
+    // Constants in conditions
+    {
+        write_fw("/tmp/tc_cond.fw", "y = x : x > pi\ny = 0 : x <= pi\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_cond.fw");
+        double y = sys.resolve("y", {{"x", 4}});
+        ASSERT_NUM(y, 4, "constant: condition x > pi with x=4");
+        double y2 = sys.resolve("y", {{"x", 3}});
+        ASSERT_NUM(y2, 0, "constant: condition x <= pi with x=3");
+    }
+
+    // Phi in equations
+    {
+        write_fw("/tmp/tc_phi.fw", "golden = phi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_phi.fw");
+        double g = sys.resolve("golden", {{"x", 10}});
+        double expected = (1.0 + std::sqrt(5.0)) / 2.0 * 10;
+        ASSERT_NUM(g, expected, "constant: phi in equation");
+    }
+
+    // Multiple constants in derive
+    {
+        write_fw("/tmp/tc_multi.fw", "y = pi * e * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_multi.fw");
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT(result.find("pi") != std::string::npos, "constant: derive has pi");
+        ASSERT(result.find("e") != std::string::npos, "constant: derive has e");
+    }
+
+    // Constants in formula call bindings
+    {
+        write_fw("/tmp/tc_fcall_inner.fw", "y = a * x\n");
+        write_fw("/tmp/tc_fcall.fw", "tc_fcall_inner(y=?result, a=pi, x=r)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_fcall.fw");
+        double result = sys.resolve("result", {{"r", 2}});
+        ASSERT_NUM(result, M_PI * 2, "constant: pi passed to formula call");
+    }
+
+    // Constant override by equation LHS (not just default)
+    {
+        write_fw("/tmp/tc_eq_override.fw", "pi = 3\ny = pi * x\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tc_eq_override.fw");
+        // pi=3 is a default (bare number), so solve_recursive checks defaults first
+        double y = sys.resolve("y", {{"x", 10}});
+        ASSERT_NUM(y, 30, "constant: pi=3 override via default");
+    }
+
+    // Constant recognition edge: value close to pi but not pi
+    {
+        auto r = recognize_constant(3.14);
+        ASSERT(!r.has_value(), "constant: 3.14 is NOT pi");
+    }
+
+    // Negative constant recognition
+    {
+        auto r = recognize_constant(-M_PI);
+        ASSERT(r.has_value() && r->p == -1, "constant: -pi recognized");
+    }
+
+    // Zero not recognized as constant
+    {
+        auto r = recognize_constant(0.0);
+        ASSERT(!r.has_value(), "constant: 0 not a constant");
+    }
+}
+
+void test_derive_edge_cases_extended() {
+    SECTION("Derive Edge Cases Extended");
+
+    // Deeply nested formula calls (3 levels: A → B → C)
+    {
+        write_fw("/tmp/td3_c.fw", "z = w * 2\n");
+        write_fw("/tmp/td3_b.fw", "td3_c(z=?mid, w=v)\ny = mid + 1\n");
+        write_fw("/tmp/td3_a.fw", "td3_b(y=?result, v=x)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td3_a.fw");
+        try {
+            auto result = sys.derive("result", {}, {{"x", "x"}});
+            ASSERT_EQ(result, "2 * x + 1", "derive: 3-level deep formula chain");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("derive: 3-level threw: ") + e.what());
+        }
+    }
+
+    // Unfold with conditions on sub-system equations
+    {
+        write_fw("/tmp/td_cond_inner.fw", "y = x : x > 0\ny = 0 : x <= 0\n");
+        write_fw("/tmp/td_cond_outer.fw", "td_cond_inner(y=?r, x=a)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td_cond_outer.fw");
+        // With a=5, condition x>0 should select first equation
+        auto result = sys.derive("r", {{"a", 5}}, {});
+        ASSERT_EQ(result, "5", "derive: unfold with condition on sub-system");
+    }
+
+    // Derive with multiple constants preserved
+    {
+        write_fw("/tmp/td_multiconst.fw", "y = pi * x + e\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/td_multiconst.fw");
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT(result.find("pi") != std::string::npos && result.find("e") != std::string::npos,
+            "derive: multiple constants preserved (got '" + result + "')");
+    }
+}
+
+void test_fit_edge_cases() {
+    SECTION("Fit Edge Cases");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Too few samples
+    {
+        auto f = [](double x) { return x; };
+        auto samples = sample_function(f, 0, 1, 1); // only 2 points
+        auto result = fit_polynomial(samples, 1);
+        // Should handle gracefully (might have R²=1 with 2 points for degree 1)
+        ASSERT(true, "fit: 2 samples doesn't crash");
+    }
+
+    // NaN-producing function
+    {
+        auto f = [](double x) { return x < 0 ? std::sqrt(x) : x; };
+        auto samples = sample_function(f, -10, 10, 100);
+        // Negative x produces NaN, should be filtered
+        for (auto& s : samples)
+            ASSERT(std::isfinite(s.y), "fit: NaN filtered from samples");
+    }
+
+    // Reciprocal with b ≈ 0 (1/x)
+    {
+        auto f = [](double x) { return 1.0 / x; };
+        auto samples = sample_function(f, 0.5, 10, 100);
+        auto result = fit_reciprocal(samples, "x");
+        ASSERT(result.r_squared > 0.99, "fit: reciprocal 1/x fits well");
+    }
+
+    // Constant function fit
+    {
+        auto f = [](double) { return 42.0; };
+        auto samples = sample_function(f, -10, 10, 50);
+        auto result = fit_polynomial(samples, 1);
+        ASSERT_NUM(result.coefficients[0], 42, "fit: constant function c0=42");
+        ASSERT(std::abs(result.coefficients[1]) < 1e-6, "fit: constant function c1≈0");
+    }
+
+    // Fraction recognition edge cases
+    {
+        auto f1 = recognize_fraction(0.0);
+        ASSERT(f1 && f1->p == 0, "fraction: 0 = 0/1");
+
+        auto f2 = recognize_fraction(-0.5);
+        ASSERT(f2 && f2->p == -1 && f2->q == 2, "fraction: -0.5 = -1/2");
+
+        auto f3 = recognize_fraction(1e20);
+        ASSERT(!f3, "fraction: huge number not a simple fraction");
+
+        auto f4 = recognize_fraction(std::numeric_limits<double>::quiet_NaN());
+        ASSERT(!f4, "fraction: NaN not recognized");
+
+        auto f5 = recognize_fraction(std::numeric_limits<double>::infinity());
+        ASSERT(!f5, "fraction: infinity not recognized");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7625,6 +7852,12 @@ int main() {
     // Builtin constants
     test_builtin_constants();
     test_template_fitting();
+
+    // Coverage gap tests (from audit)
+    test_numeric_edge_cases_extended();
+    test_constants_edge_cases();
+    test_derive_edge_cases_extended();
+    test_fit_edge_cases();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
