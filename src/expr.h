@@ -865,6 +865,41 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                     && is_num(arg->right) && arg->right->num == 2.0)
                     return Expr::Call("abs", {arg->left});
             }
+            // abs rules
+            if (e->name == "abs" && sa.size() == 1) {
+                auto& arg = sa[0];
+                // abs(abs(x)) → abs(x)
+                if (arg->type == ExprType::FUNC_CALL && arg->name == "abs")
+                    return arg;
+                // abs(-x) → abs(x)
+                if (is_neg(arg))
+                    return Expr::Call("abs", {arg->child});
+            }
+            // sin(-x) → -sin(x), cos(-x) → cos(x)
+            if (e->name == "sin" && sa.size() == 1 && is_neg(sa[0]))
+                return Expr::Neg(Expr::Call("sin", {sa[0]->child}));
+            if (e->name == "cos" && sa.size() == 1 && is_neg(sa[0]))
+                return Expr::Call("cos", {sa[0]->child});
+            // Inverse trig pairs: asin(sin(x)) → x, acos(cos(x)) → x, atan(tan(x)) → x
+            if (e->name == "asin" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "sin")
+                return sa[0]->args[0];
+            if (e->name == "acos" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "cos")
+                return sa[0]->args[0];
+            if (e->name == "atan" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "tan")
+                return sa[0]->args[0];
+            // Forward trig of inverse: sin(asin(x)) → x, cos(acos(x)) → x
+            if (e->name == "sin" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "asin")
+                return sa[0]->args[0];
+            if (e->name == "cos" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "acos")
+                return sa[0]->args[0];
+            if (e->name == "tan" && sa.size() == 1
+                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "atan")
+                return sa[0]->args[0];
             return s;
         }
 
@@ -888,6 +923,13 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                         && !r->args.empty()) {
                         simplify_assume_nonzero(r->args[0]); // x > 0 implied
                         return r->args[0];
+                    }
+                    // x^(-1) → 1/x, x^(-n) → 1/x^n
+                    if (is_num(r) && r->num < 0) {
+                        if (r->num == -1.0)
+                            return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), l);
+                        return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
+                            Expr::BinOpExpr(BinOp::POW, l, Expr::Num(-r->num)));
                     }
                     // (x^a)^b → x^(a*b)
                     if (l->type == ExprType::BINOP && l->op == BinOp::POW)
