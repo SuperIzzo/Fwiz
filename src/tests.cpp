@@ -8060,6 +8060,51 @@ void test_simplify_assumptions() {
     }
 }
 
+void test_simplify_exp_log() {
+    SECTION("Simplify Exp/Log Rules");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // e^(log(x)) → x
+    ASSERT_EQ(expr_to_string(simplify(parse("e^(log(x))"))), "x",
+        "simplify: e^log(x) → x");
+
+    // log(e^x) → x
+    ASSERT_EQ(expr_to_string(simplify(parse("log(e^x)"))), "x",
+        "simplify: log(e^x) → x");
+
+    // log(x^3) → 3 * log(x)
+    ASSERT_EQ(expr_to_string(simplify(parse("log(x^3)"))), "3 * log(x)",
+        "simplify: log(x^3) → 3*log(x)");
+
+    // sqrt(x^2) → abs(x)
+    ASSERT_EQ(expr_to_string(simplify(parse("sqrt(x^2)"))), "abs(x)",
+        "simplify: sqrt(x^2) → abs(x)");
+
+    // (x^2)^3 → x^6
+    ASSERT_EQ(expr_to_string(simplify(parse("(x^2)^3"))), "x^6",
+        "simplify: (x^2)^3 → x^6");
+
+    // (x^a)^b → x^(a*b) with symbolic exponents
+    ASSERT_EQ(expr_to_string(simplify(parse("(x^a)^b"))), "x^(a * b)",
+        "simplify: (x^a)^b → x^(a*b)");
+
+    // Existing rules still work
+    ASSERT_EQ(expr_to_string(simplify(parse("e^0"))), "1", "simplify: e^0 → 1");
+    ASSERT_EQ(expr_to_string(simplify(parse("log(1)"))), "0", "simplify: log(1) → 0");
+
+    // Numeric evaluation still works
+    {
+        auto expr = simplify(parse("e^(log(5))"));
+        ASSERT_NUM(evaluate(*expr), 5.0, "simplify: e^log(5) = 5");
+    }
+    {
+        auto expr = simplify(parse("log(e^3)"));
+        ASSERT_NUM(evaluate(*expr), 3.0, "simplify: log(e^3) = 3");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8271,6 +8316,7 @@ int main() {
     test_inline_and_stdin();
     test_sections();
     test_simplify_assumptions();
+    test_simplify_exp_log();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
