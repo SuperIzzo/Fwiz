@@ -656,36 +656,30 @@ public:
             return ValueSet::eq(it->second);
 
         // Try solving for exact values
+        std::vector<double> exact_results;
         try {
-            auto results = solve_all(target, prepared, {}, 0);
+            exact_results = solve_all(target, prepared, {}, 0);
 
-            // In numeric mode, post-validate and classify results.
-            if (numeric_mode) {
-                // Mark numeric results as exact if all values are clean integers
-                // (i.e., the numeric solver found exact integer roots like x^2=9 → ±3)
-                if (numeric_results_.count(target)) {
-                    bool all_exact = true;
-                    for (double r : results) {
-                        if (std::abs(r - std::round(r)) > EPSILON_ZERO)
-                            { all_exact = false; break; }
-                    }
-                    numeric_results_[target] = all_exact;
-                }
+            if (numeric_mode && numeric_results_.count(target)) {
+                bool all_exact = true;
+                for (double r : exact_results)
+                    if (std::abs(r - std::round(r)) > EPSILON_ZERO)
+                        { all_exact = false; break; }
+                numeric_results_[target] = all_exact;
             }
-
-            return ValueSet::discrete(results);
         } catch (...) {}
 
-        // No exact solution — collect constraints from conditions
+        // Collect constraints from iff conditions (range-valued results).
+        // Ranges from iff branches may contribute even when algebraic results exist.
         ValueSet constraints = ValueSet::all();
+        bool has_iff_constraints = false;
         for (auto& eq : equations) {
             if (eq.lhs_var == target && eq.condition)
                 constraints = constraints.intersect(eq.condition->to_valueset(target, prepared));
 
-            // If target only appears in the condition (not the equation body),
-            // and the equation body is satisfied by bindings, the condition constrains target.
-            // E.g., sign: result = 1 : x > 0, with result=1 → condition x > 0 applies.
-            if (eq.condition && eq.bidirectional && eq.lhs_var != target && !contains_var(eq.rhs, target)) {
+            if (eq.condition && eq.bidirectional && eq.lhs_var != target
+                && !contains_var(eq.rhs, target)) {
+                has_iff_constraints = true;
                 // Check if this equation's body is satisfied
                 if (auto it = prepared.find(eq.lhs_var); it != prepared.end()) {
                     try {
@@ -702,7 +696,19 @@ public:
         for (auto& gc : global_conditions)
             constraints = constraints.intersect(gc.to_valueset(target, prepared));
 
-        if (!constraints.empty() && constraints.to_string() != ValueSet::all().to_string())
+        bool has_constraints = !constraints.empty()
+            && constraints.to_string() != ValueSet::all().to_string();
+
+        // Combine results: only unite algebraic + ranges when iff constraints contributed
+        if (!exact_results.empty() && has_iff_constraints && has_constraints) {
+            auto combined = constraints;
+            for (double r : exact_results)
+                combined = combined.unite(ValueSet::eq(r));
+            return combined;
+        }
+        if (!exact_results.empty())
+            return ValueSet::discrete(exact_results);
+        if (has_constraints)
             return constraints;
 
         throw std::runtime_error("Cannot solve for '" + target + "'");
