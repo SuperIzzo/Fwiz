@@ -8280,6 +8280,54 @@ void test_iff_semantics() {
         ASSERT(sys.equations[0].bidirectional, "comma iff: bidirectional");
         ASSERT(sys.equations[0].condition.has_value(), "comma iff: has condition");
     }
+
+    // max: boundary case — result equals b, range of a
+    {
+        FormulaSystem sys;
+        sys.load_string("result = a iff a >= b\nresult = b iff b > a\n");
+        auto result = sys.resolve_all("a", {{"result", 3}, {"b", 3}});
+        // a can be anything <= 3 (since max(a,3)=3 when a<=3)
+        ASSERT(!result.intervals().empty() || result.discrete().size() > 1,
+            "max boundary: produces range or multiple values");
+    }
+
+    // max: non-boundary — exact result
+    {
+        FormulaSystem sys;
+        sys.load_string("result = a iff a >= b\nresult = b iff b > a\n");
+        auto result = sys.resolve_all("a", {{"result", 7}, {"b", 3}});
+        ASSERT(result.is_discrete(), "max non-boundary: exact result");
+        ASSERT(!result.discrete().empty(), "max non-boundary: has result");
+        ASSERT_NUM(result.discrete()[0], 7, "max non-boundary: a = 7");
+    }
+
+    // min: boundary case — result equals b, range of a
+    {
+        FormulaSystem sys;
+        sys.load_string("result = a iff a <= b\nresult = b iff b < a\n");
+        auto result = sys.resolve_all("a", {{"result", 3}, {"b", 3}});
+        ASSERT(!result.intervals().empty() || result.discrete().size() > 1,
+            "min boundary: produces range or multiple values");
+    }
+
+    // clamp: boundary — result equals lo
+    {
+        FormulaSystem sys;
+        sys.load_string("result = lo iff x < lo\nresult = x iff x >= lo && x <= hi\nresult = hi iff x > hi\n");
+        auto result = sys.resolve_all("x", {{"result", 0}, {"lo", 0}, {"hi", 10}});
+        // x can be anything <= 0
+        ASSERT(!result.intervals().empty() || result.discrete().size() > 1,
+            "clamp lo boundary: produces range or multiple values");
+    }
+
+    // clamp: in range — exact
+    {
+        FormulaSystem sys;
+        sys.load_string("result = lo iff x < lo\nresult = x iff x >= lo && x <= hi\nresult = hi iff x > hi\n");
+        auto result = sys.resolve_all("x", {{"result", 5}, {"lo", 0}, {"hi", 10}});
+        ASSERT(result.is_discrete(), "clamp in range: exact");
+        ASSERT_NUM(result.discrete()[0], 5, "clamp in range: x = 5");
+    }
 }
 
 // ---- Main ----
