@@ -8105,6 +8105,55 @@ void test_simplify_exp_log() {
     }
 }
 
+void test_simplify_trig_abs_pow() {
+    SECTION("Simplify Trig/Abs/Pow Rules");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // abs rules
+    ASSERT_EQ(expr_to_string(simplify(parse("abs(abs(x))"))), "abs(x)",
+        "simplify: abs(abs(x)) → abs(x)");
+    ASSERT_EQ(expr_to_string(simplify(parse("abs(-x)"))), "abs(x)",
+        "simplify: abs(-x) → abs(x)");
+
+    // sin/cos odd/even
+    ASSERT_EQ(expr_to_string(simplify(parse("sin(-x)"))), "-(sin(x))",
+        "simplify: sin(-x) → -sin(x)");
+    ASSERT_EQ(expr_to_string(simplify(parse("cos(-x)"))), "cos(x)",
+        "simplify: cos(-x) → cos(x)");
+
+    // Inverse trig pairs
+    ASSERT_EQ(expr_to_string(simplify(parse("asin(sin(x))"))), "x",
+        "simplify: asin(sin(x)) → x");
+    ASSERT_EQ(expr_to_string(simplify(parse("acos(cos(x))"))), "x",
+        "simplify: acos(cos(x)) → x");
+    ASSERT_EQ(expr_to_string(simplify(parse("atan(tan(x))"))), "x",
+        "simplify: atan(tan(x)) → x");
+
+    // Forward trig of inverse
+    ASSERT_EQ(expr_to_string(simplify(parse("sin(asin(x))"))), "x",
+        "simplify: sin(asin(x)) → x");
+    ASSERT_EQ(expr_to_string(simplify(parse("cos(acos(x))"))), "x",
+        "simplify: cos(acos(x)) → x");
+    ASSERT_EQ(expr_to_string(simplify(parse("tan(atan(x))"))), "x",
+        "simplify: tan(atan(x)) → x");
+
+    // Negative exponents
+    ASSERT_EQ(expr_to_string(simplify(parse("x^(-1)"))), "1 / x",
+        "simplify: x^(-1) → 1/x");
+    ASSERT_EQ(expr_to_string(simplify(parse("x^(-2)"))), "1 / x^2",
+        "simplify: x^(-2) → 1/x^2");
+    ASSERT_EQ(expr_to_string(simplify(parse("x^(-3)"))), "1 / x^3",
+        "simplify: x^(-3) → 1/x^3");
+
+    // Numeric correctness
+    ASSERT_NUM(evaluate(*simplify(parse("sin(-0.5)"))), -std::sin(0.5),
+        "simplify: sin(-0.5) evaluates correctly");
+    ASSERT_NUM(evaluate(*simplify(parse("2^(-3)"))), 0.125,
+        "simplify: 2^(-3) = 0.125");
+}
+
 // ---- Main ----
 
 int main() {
@@ -8317,6 +8366,7 @@ int main() {
     test_sections();
     test_simplify_assumptions();
     test_simplify_exp_log();
+    test_simplify_trig_abs_pow();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
