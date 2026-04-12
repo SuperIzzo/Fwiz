@@ -1057,6 +1057,13 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
     return fail();
 }
 
+// Solution from solve_for: expression + optional domain constraint
+struct Solution {
+    ExprPtr expr;
+    ExprPtr condition;  // if non-null: this expr >= 0 must hold (e.g., discriminant)
+    std::string cond_desc;  // human-readable: "y >= 0"
+};
+
 // Inverse function table: f → f⁻¹
 inline const std::map<std::string, std::string>& inverse_functions() {
     static const std::map<std::string, std::string> table = {
@@ -1070,19 +1077,43 @@ inline const std::map<std::string, std::string>& inverse_functions() {
 }
 
 // Try to isolate target by peeling off invertible functions and operations.
-// Given lhs = rhs where lhs contains target, peel layers from lhs and
-// apply inverse to rhs until target is exposed.
-inline ExprPtr solve_by_inversion(ExprPtr lhs, ExprPtr rhs, const std::string& target, int depth = 0) {
-    if (depth > 20) return nullptr; // prevent infinite recursion
+// Returns ALL solutions (e.g., abs gives two, sqrt gives one).
+inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
+        const std::string& target, int depth = 0) {
+    if (depth > 20) return {};
     lhs = simplify(lhs);
     rhs = simplify(rhs);
 
+    // Helper: recurse and propagate results
+    auto recurse = [&](ExprPtr new_lhs, ExprPtr new_rhs) {
+        return solve_by_inversion(new_lhs, simplify(new_rhs), target, depth + 1);
+    };
+
     // Base case: lhs IS the target
-    if (is_var(lhs) && lhs->name == target) return rhs;
+    if (is_var(lhs) && lhs->name == target)
+        return {{rhs, nullptr, ""}};
 
     // lhs = -expr → expr = -rhs
     if (is_neg(lhs) && contains_var(lhs->child, target))
-        return solve_by_inversion(lhs->child, simplify(Expr::Neg(rhs)), target, depth + 1);
+        return recurse(lhs->child, Expr::Neg(rhs));
+
+    // lhs = abs(inner) → inner = rhs OR inner = -rhs (both : rhs >= 0)
+    if (lhs->type == ExprType::FUNC_CALL && lhs->name == "abs"
+        && lhs->args.size() == 1 && contains_var(lhs->args[0], target)) {
+        auto pos = solve_by_inversion(lhs->args[0], rhs, target, depth + 1);
+        auto neg = solve_by_inversion(lhs->args[0], simplify(Expr::Neg(rhs)), target, depth + 1);
+        // Add condition: rhs >= 0
+        for (auto& s : pos) {
+            s.condition = rhs;
+            s.cond_desc = expr_to_string(rhs) + " >= 0";
+        }
+        for (auto& s : neg) {
+            s.condition = rhs;
+            s.cond_desc = expr_to_string(rhs) + " >= 0";
+        }
+        pos.insert(pos.end(), neg.begin(), neg.end());
+        return pos;
+    }
 
     // lhs = f(inner) where f has an inverse → inner = f⁻¹(rhs)
     if (lhs->type == ExprType::FUNC_CALL && lhs->args.size() == 1
@@ -1097,99 +1128,94 @@ inline ExprPtr solve_by_inversion(ExprPtr lhs, ExprPtr rhs, const std::string& t
                 new_rhs = Expr::BinOpExpr(BinOp::POW, rhs, Expr::Num(2));
             else
                 new_rhs = Expr::Call(it->second, {rhs});
-            return solve_by_inversion(lhs->args[0], simplify(new_rhs), target, depth + 1);
+            return recurse(lhs->args[0], new_rhs);
         }
     }
 
     // lhs = base ^ exp
     if (lhs->type == ExprType::BINOP && lhs->op == BinOp::POW) {
-        // target in base: x^n = y → x = y^(1/n)
         if (contains_var(lhs->left, target) && !contains_var(lhs->right, target)) {
             auto inv_exp = simplify(Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), lhs->right));
-            auto new_rhs = simplify(Expr::BinOpExpr(BinOp::POW, rhs, inv_exp));
-            return solve_by_inversion(lhs->left, new_rhs, target, depth + 1);
+            return recurse(lhs->left, Expr::BinOpExpr(BinOp::POW, rhs, inv_exp));
         }
-        // target in exponent: a^x = y → x = log(y)/log(a), or log(y) if a=e
         if (contains_var(lhs->right, target) && !contains_var(lhs->left, target)) {
             ExprPtr new_rhs;
             if (is_var(lhs->left) && lhs->left->name == "e")
                 new_rhs = Expr::Call("log", {rhs});
             else
-                new_rhs = simplify(Expr::BinOpExpr(BinOp::DIV,
-                    Expr::Call("log", {rhs}), Expr::Call("log", {lhs->left})));
-            return solve_by_inversion(lhs->right, new_rhs, target, depth + 1);
+                new_rhs = Expr::BinOpExpr(BinOp::DIV,
+                    Expr::Call("log", {rhs}), Expr::Call("log", {lhs->left}));
+            return recurse(lhs->right, new_rhs);
         }
     }
 
-    // lhs = a / b — target in numerator: a/b = y → a = y*b
+    // lhs = a / b
     if (lhs->type == ExprType::BINOP && lhs->op == BinOp::DIV) {
         if (contains_var(lhs->left, target) && !contains_var(lhs->right, target))
-            return solve_by_inversion(lhs->left,
-                simplify(Expr::BinOpExpr(BinOp::MUL, rhs, lhs->right)), target, depth + 1);
-        // target in denominator: a/b = y → b = a/y
+            return recurse(lhs->left, Expr::BinOpExpr(BinOp::MUL, rhs, lhs->right));
         if (contains_var(lhs->right, target) && !contains_var(lhs->left, target))
-            return solve_by_inversion(lhs->right,
-                simplify(Expr::BinOpExpr(BinOp::DIV, lhs->left, rhs)), target, depth + 1);
+            return recurse(lhs->right, Expr::BinOpExpr(BinOp::DIV, lhs->left, rhs));
     }
 
-    // lhs = a * b — target on one side: a*b = y → a = y/b
+    // lhs = a * b
     if (lhs->type == ExprType::BINOP && lhs->op == BinOp::MUL) {
         if (contains_var(lhs->left, target) && !contains_var(lhs->right, target))
-            return solve_by_inversion(lhs->left,
-                simplify(Expr::BinOpExpr(BinOp::DIV, rhs, lhs->right)), target, depth + 1);
+            return recurse(lhs->left, Expr::BinOpExpr(BinOp::DIV, rhs, lhs->right));
         if (contains_var(lhs->right, target) && !contains_var(lhs->left, target))
-            return solve_by_inversion(lhs->right,
-                simplify(Expr::BinOpExpr(BinOp::DIV, rhs, lhs->left)), target, depth + 1);
+            return recurse(lhs->right, Expr::BinOpExpr(BinOp::DIV, rhs, lhs->left));
     }
 
-    // lhs = a + b — target on one side: a+b = y → a = y-b
+    // lhs = a + b
     if (lhs->type == ExprType::BINOP && lhs->op == BinOp::ADD) {
         if (contains_var(lhs->left, target) && !contains_var(lhs->right, target))
-            return solve_by_inversion(lhs->left,
-                simplify(Expr::BinOpExpr(BinOp::SUB, rhs, lhs->right)), target, depth + 1);
+            return recurse(lhs->left, Expr::BinOpExpr(BinOp::SUB, rhs, lhs->right));
         if (contains_var(lhs->right, target) && !contains_var(lhs->left, target))
-            return solve_by_inversion(lhs->right,
-                simplify(Expr::BinOpExpr(BinOp::SUB, rhs, lhs->left)), target, depth + 1);
+            return recurse(lhs->right, Expr::BinOpExpr(BinOp::SUB, rhs, lhs->left));
     }
 
     // lhs = a - b
     if (lhs->type == ExprType::BINOP && lhs->op == BinOp::SUB) {
         if (contains_var(lhs->left, target) && !contains_var(lhs->right, target))
-            return solve_by_inversion(lhs->left,
-                simplify(Expr::BinOpExpr(BinOp::ADD, rhs, lhs->right)), target, depth + 1);
+            return recurse(lhs->left, Expr::BinOpExpr(BinOp::ADD, rhs, lhs->right));
         if (contains_var(lhs->right, target) && !contains_var(lhs->left, target))
-            return solve_by_inversion(lhs->right,
-                simplify(Expr::BinOpExpr(BinOp::SUB, lhs->left, rhs)), target, depth + 1);
+            return recurse(lhs->right, Expr::BinOpExpr(BinOp::SUB, lhs->left, rhs));
     }
 
-    return nullptr; // can't peel further
+    return {}; // can't peel further
 }
 
-inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::string& target) {
-    // First try linear decomposition (fast, handles most cases)
+
+// Return ALL solutions (multiple for abs, quadratic, etc.)
+inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rhs,
+        const std::string& target) {
+    // First try linear decomposition (fast, single solution)
     auto combined = simplify(Expr::BinOpExpr(BinOp::SUB, lhs, rhs));
     auto decomp = decompose_linear(combined, target);
     if (decomp) {
         auto sc = simplify(decomp->coeff);
-        if (is_num(sc) && std::abs(sc->num) < EPSILON_ZERO) goto try_inversion;
-
-        auto sr = simplify(decomp->rest);
-        if (is_num(sr) && std::abs(sr->num) < EPSILON_ZERO && !is_num(sc))
-            goto try_inversion;
-
-        // coeff · target + rest = 0  →  target = −rest / coeff
-        return simplify(Expr::BinOpExpr(BinOp::DIV, simplify(Expr::Neg(sr)), sc));
+        if (!(is_num(sc) && std::abs(sc->num) < EPSILON_ZERO)) {
+            auto sr = simplify(decomp->rest);
+            if (!(is_num(sr) && std::abs(sr->num) < EPSILON_ZERO && !is_num(sc))) {
+                auto result = simplify(Expr::BinOpExpr(BinOp::DIV,
+                    simplify(Expr::Neg(sr)), sc));
+                return {{result, nullptr, ""}};
+            }
+        }
     }
 
-    try_inversion:
-    // Fall back to recursive inversion (peels functions/operations one at a time)
-    // Try both orientations: lhs contains target, or rhs contains target
+    // Fall back to recursive inversion (may return multiple solutions)
     if (contains_var(lhs, target) && !contains_var(rhs, target))
         return solve_by_inversion(lhs, rhs, target);
     if (contains_var(rhs, target) && !contains_var(lhs, target))
         return solve_by_inversion(rhs, lhs, target);
 
-    return nullptr;
+    return {};
+}
+
+// Single-solution wrapper (backwards compatible — returns first solution)
+inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::string& target) {
+    auto sols = solve_for_all(lhs, rhs, target);
+    return sols.empty() ? nullptr : sols[0].expr;
 }
 
 // ============================================================================
