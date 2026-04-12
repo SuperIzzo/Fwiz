@@ -1,0 +1,28 @@
+# stdlib.fw — Standard library of common functions
+# All defined in pure fwiz using conditions and equations.
+
+[abs]
+result = x : x >= 0
+result = -x : x < 0
+
+[sign]
+result = 1 : x > 0
+result = 0 : x = 0
+result = -1 : x < 0
+
+[clamp]
+result = lo : x < lo
+result = x : x >= lo && x <= hi
+result = hi : x > hi
+
+[max]
+result = a : a >= b
+result = b : b > a
+
+[min]
+result = a : a <= b
+result = b : b < a
+
+[step]
+result = 0 : x < 0
+result = 1 : x >= 0
