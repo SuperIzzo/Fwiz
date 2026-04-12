@@ -1016,17 +1016,46 @@ private:
     }
 
     void parse_line(const std::string& line) {
-        // Split at ':' (not inside parentheses) for condition
+        // Split at condition keyword: "if", "iff", or ":" (legacy)
+        // Not inside parentheses. Optional comma before if/iff.
         std::string eq_part = line;
         std::string cond_part;
-        int paren_depth = 0;
-        for (size_t i = 0; i < line.size(); i++) {
-            if (line[i] == '(') paren_depth++;
-            else if (line[i] == ')') paren_depth--;
-            else if (line[i] == ':' && paren_depth == 0) {
-                eq_part = line.substr(0, i);
-                cond_part = line.substr(i + 1);
-                break;
+        {
+            int pd = 0;
+            for (size_t i = 0; i < line.size(); i++) {
+                char ch = line[i];
+                if (ch == '(') { pd++; continue; }
+                if (ch == ')') { pd--; continue; }
+                if (pd != 0) continue;
+
+                // Legacy: ":"
+                if (ch == ':') {
+                    eq_part = line.substr(0, i);
+                    cond_part = line.substr(i + 1);
+                    break;
+                }
+
+                // "iff " keyword (must be preceded by space or comma)
+                if (ch == 'i' && i + 3 < line.size()
+                    && line[i+1] == 'f' && line[i+2] == 'f' && line[i+3] == ' '
+                    && (i == 0 || line[i-1] == ' ' || line[i-1] == ',')) {
+                    eq_part = line.substr(0, i);
+                    while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
+                        eq_part.pop_back();
+                    cond_part = line.substr(i + 4);
+                    break;
+                }
+
+                // "if " keyword (preceded by space/comma, not followed by 'f')
+                if (ch == 'i' && i + 2 < line.size()
+                    && line[i+1] == 'f' && line[i+2] == ' '
+                    && (i == 0 || line[i-1] == ' ' || line[i-1] == ',')) {
+                    eq_part = line.substr(0, i);
+                    while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
+                        eq_part.pop_back();
+                    cond_part = line.substr(i + 3);
+                    break;
+                }
             }
         }
 
