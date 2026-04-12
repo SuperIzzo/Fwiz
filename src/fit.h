@@ -542,8 +542,18 @@ inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
     std::vector<FitResult> unique;
     std::set<std::string> seen;
     for (auto& f : fits) {
-        std::string s = f.expr ? expr_to_string(f.expr) : "";
-        if (seen.insert(s).second) unique.push_back(f);
+        if (!f.expr) continue;
+        std::string s = expr_to_string(f.expr);
+        if (!seen.insert(s).second) continue;
+
+        // Skip redundant abs() wrapping: unwrap all abs() layers and check
+        ExprPtr unwrapped = f.expr;
+        while (unwrapped->type == ExprType::FUNC_CALL && unwrapped->name == "abs"
+               && !unwrapped->args.empty())
+            unwrapped = unwrapped->args[0];
+        if (unwrapped != f.expr && seen.count(expr_to_string(unwrapped)))
+            continue;
+        unique.push_back(f);
     }
     return unique;
 }
@@ -634,7 +644,6 @@ inline std::vector<FitResult> compose_level(
             {"cos",  [](double v) { return std::cos(v); }},
             {"sqrt", [](double v) { return v > 0 ? std::sqrt(v) : std::numeric_limits<double>::quiet_NaN(); }},
             {"log",  [](double v) { return v > 0 ? std::log(v) : std::numeric_limits<double>::quiet_NaN(); }},
-            {"abs",  [](double v) { return std::fabs(v); }},
         };
         for (auto& ob : outer_builtins) {
             ExprPtr composed = Expr::Call(ob.name, {inner.expr});
@@ -674,7 +683,6 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         {"cos",  [](double x) { return std::cos(x); }},
         {"sqrt", [](double x) { return x > 0 ? std::sqrt(x) : std::numeric_limits<double>::quiet_NaN(); }},
         {"log",  [](double x) { return x > 0 ? std::log(x) : std::numeric_limits<double>::quiet_NaN(); }},
-        {"abs",  [](double x) { return std::fabs(x); }},
     };
 
     // Build initial inners from builtins + level-1 fits
