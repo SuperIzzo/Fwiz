@@ -536,10 +536,31 @@ public:
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
                     try { evaluate(*it->second); body_is_known = true; } catch (...) {}
                 }
+
+                // Check if the inversion is iff (exclusive) or just if.
+                // Start with iff, downgrade if another equation with the same LHS
+                // could produce the same RHS value under a different condition.
+                bool exclusive = true;
+                ExprPtr this_rhs = substitute_bindings(eq.rhs, bindings, target);
+                for (auto& other : equations) {
+                    if (&other == &eq) continue;
+                    if (other.lhs_var != eq.lhs_var) continue;
+                    ExprPtr other_rhs = substitute_bindings(other.rhs, bindings, target);
+                    try {
+                        if (expr_equal(simplify(this_rhs), simplify(other_rhs))) {
+                            exclusive = false; break;
+                        }
+                        // Also check numeric equality
+                        double a = evaluate(*this_rhs), b = evaluate(*other_rhs);
+                        if (approx_equal(a, b)) { exclusive = false; break; }
+                    } catch (...) {}
+                }
+
+                std::string link = exclusive ? " iff " : " if ";
                 std::string eq_str = eq.lhs_var + " = " + expr_to_string(rhs_val);
                 std::string inverted = body_is_known
                     ? cond_str
-                    : cond_str + " if " + eq_str;
+                    : cond_str + link + eq_str;
                 if (seen.insert(inverted).second) results.push_back(inverted);
             }
         }
