@@ -7652,6 +7652,112 @@ void test_fit_edge_cases() {
     }
 }
 
+void test_fit_templates_edge() {
+    SECTION("Fit Templates Edge Cases");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Reciprocal direct unit test: y = 5/(x+3)
+    {
+        auto f = [](double x) { return 5.0 / (x + 3.0); };
+        auto samples = sample_function(f, 0, 20, 100);
+        auto result = fit_reciprocal(samples, "x");
+        ASSERT(result.r_squared > 0.999, "template: reciprocal y=5/(x+3) R² > 0.999");
+        ASSERT(result.expr != nullptr, "template: reciprocal has expr");
+    }
+
+    // Power law with negative x — should not crash, low/no fit
+    {
+        auto f = [](double x) { return x * x; };
+        auto samples = sample_function(f, -10, -1, 50);
+        auto result = fit_power_law(samples, "x");
+        // Power law filters x <= 0, so few/no valid samples → low R² or empty
+        ASSERT(true, "template: power law negative x doesn't crash");
+    }
+
+    // Exponential with all-negative y — should not crash
+    {
+        auto f = [](double x) { return -std::exp(x); };
+        auto samples = sample_function(f, 0, 5, 50);
+        auto result = fit_exponential(samples, "x");
+        // All y < 0, log(y) undefined → should return empty/bad fit
+        ASSERT(result.r_squared < 0.5 || result.coefficients.empty(),
+            "template: exponential negative y handled gracefully");
+    }
+
+    // Sinusoidal with no zero crossings (constant + tiny noise)
+    {
+        auto f = [](double x) { return 100.0 + 0.001 * std::sin(x); };
+        auto samples = sample_function(f, 0, 10, 50);
+        auto result = fit_sinusoidal(samples, "x");
+        // Very few/no zero crossings around mean → might not fit
+        ASSERT(true, "template: sinusoidal no crossings doesn't crash");
+    }
+
+    // Composition depth validation: depth 3 finds sin(sin(x))
+    {
+        auto f = [](double x) { return std::sin(std::sin(x)); };
+        auto samples = sample_function(f, 0, 3, 200);
+        auto fits_d1 = fit_all(samples, "x", {}, 0.9, 1);
+        auto fits_d3 = fit_all(samples, "x", {}, 0.9, 3);
+        // Depth 3 should find more/better fits than depth 1
+        bool d3_better = fits_d3.empty() ? false :
+            fits_d3[0].r_squared > (fits_d1.empty() ? 0 : fits_d1[0].r_squared);
+        ASSERT(d3_better || (!fits_d3.empty() && fits_d3[0].r_squared > 0.999),
+            "template: depth 3 improves on depth 1 for sin(sin(x))");
+    }
+
+    // Singular matrix: all-identical x values
+    {
+        std::vector<FitSample> samples = {{1,2}, {1,3}, {1,4}};
+        auto A = vandermonde(samples, 1);
+        std::vector<double> b = {2, 3, 4};
+        auto x = least_squares_solve(A, b);
+        // Singular Vandermonde (all x=1) — should not crash
+        ASSERT(x.size() == 2, "matrix: singular Vandermonde doesn't crash");
+    }
+
+    // Gaussian template (quadratic exponent)
+    {
+        auto f = [](double x) { return 5.0 * std::exp(-0.5 * (x-3)*(x-3)); };
+        auto samples = sample_function(f, -5, 11, 200);
+        auto result = fit_exponential(samples, "x");
+        ASSERT(result.r_squared > 0.99, "template: Gaussian via quadratic exponent");
+    }
+
+    // Product inner: x*log(x) → e^(x*log(x)) = x^x
+    {
+        auto f = [](double x) { return std::pow(x, x); };
+        auto samples = sample_function(f, 1, 5, 200);
+        auto fits = fit_all(samples, "x", {}, 0.99, 3);
+        bool found_exact = false;
+        for (auto& fit : fits)
+            if (fit.r_squared > 0.9999) found_exact = true;
+        ASSERT(found_exact, "template: x^x found via product inner composition");
+    }
+}
+
+void test_numeric_precision_edge() {
+    SECTION("Numeric Precision Edge Cases");
+
+    // Precision 0 from CLI shouldn't crash binary
+    {
+        write_fw("/tmp/tnpe.fw", "y = x^2\n");
+        int rc = system("./bin/fwiz --precision 0 '/tmp/tnpe(x=?, y=4)' 2>/dev/null");
+        // May fail to find roots (0 samples) but shouldn't crash
+        ASSERT(WEXITSTATUS(rc) == 0 || WEXITSTATUS(rc) == 1,
+            "numeric: --precision 0 doesn't crash");
+    }
+
+    // Negative precision — should handle gracefully
+    {
+        write_fw("/tmp/tnpe2.fw", "y = x + 1\n");
+        int rc = system("./bin/fwiz --precision -5 '/tmp/tnpe2(y=?, x=3)' 2>/dev/null");
+        ASSERT(WEXITSTATUS(rc) == 0, "numeric: negative precision doesn't crash");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -7858,6 +7964,8 @@ int main() {
     test_constants_edge_cases();
     test_derive_edge_cases_extended();
     test_fit_edge_cases();
+    test_fit_templates_edge();
+    test_numeric_precision_edge();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
