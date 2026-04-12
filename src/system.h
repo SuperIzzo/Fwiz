@@ -1784,9 +1784,19 @@ inline CLIQuery parse_cli_query(const std::string& input,
     if (rparen == std::string::npos)
         throw std::runtime_error("Missing closing parenthesis");
 
-    // Capture inline source (text after closing paren, for query-first format)
-    if (q.filename.empty() && rparen + 1 < input.size()) {
-        q.inline_source = trim(input.substr(rparen + 1));
+    // Capture inline source (text after closing paren)
+    if (rparen + 1 < input.size()) {
+        std::string after = trim(input.substr(rparen + 1));
+        if (!after.empty()) {
+            q.inline_source = after;
+            // If there was a "name" before (, it's a section selector, not a filename
+            if (!q.filename.empty()) {
+                // Strip .fw suffix if it was auto-added
+                std::string raw = input.substr(0, lparen);
+                q.section = raw;
+                q.filename.clear();
+            }
+        }
     }
 
     // Split arguments by comma (respecting nested parens)

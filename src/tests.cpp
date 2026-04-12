@@ -7955,6 +7955,21 @@ void test_sections() {
         ASSERT(WEXITSTATUS(rc) == 0, "section binary: cascading phys.gravity");
     }
 
+    // Inline with section selector: name(args) source
+    {
+        auto q = parse_cli_query("formula(x=?) [formula]; x = 10^2");
+        ASSERT(q.filename.empty(), "inline section: no filename");
+        ASSERT_EQ(q.section, "formula", "inline section: section = formula");
+        ASSERT(!q.inline_source.empty(), "inline section: has inline source");
+    }
+
+    // Binary: inline with section
+    {
+        int rc = system("./bin/fwiz 'mybox(vol=?) shared = 3; [mybox]; vol = shared^2' 2>/dev/null "
+                        "| grep -q 'vol = 9'");
+        ASSERT(WEXITSTATUS(rc) == 0, "section binary: inline with section selector");
+    }
+
     // Cross-file section call
     {
         write_fw("/tmp/tsec_shapes.fw",

@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
                 // Replace semicolons with newlines for compact inline format
                 std::string source = query.inline_source;
                 for (auto& c : source) if (c == ';') c = '\n';
-                sys.load_string(source);
+                sys.load_string(source, "<inline>", query.section);
             } else {
                 // Read from stdin
                 std::string source, line;
