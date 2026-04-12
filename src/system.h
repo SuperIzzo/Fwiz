@@ -153,6 +153,42 @@ public:
         return vars;
     }
 
+    void load_string(const std::string& source, const std::string& label = "<inline>") {
+        ExprArena::Scope scope(arena);
+        if (base_dir.empty()) base_dir = ".";
+        trace.step("loading " + label);
+        std::istringstream ss(source);
+        std::string line;
+        int line_num = 0;
+        bool first = true;
+        while (std::getline(ss, line)) {
+            line_num++;
+            if (first) { first = false; strip_bom(line); }
+            line = trim(line);
+            if (line.empty() || line[0] == '#') continue;
+            { int pd = 0;
+              for (size_t ci = 0; ci < line.size(); ci++) {
+                  if (line[ci] == '(') pd++;
+                  else if (line[ci] == ')') pd--;
+                  else if (line[ci] == '#' && pd == 0) { line = trim(line.substr(0, ci)); break; }
+              }
+              if (line.empty()) continue;
+            }
+            try { parse_line(line); }
+            catch (const std::exception& e) {
+                trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
+            }
+        }
+        if (trace.show_steps()) {
+            for (auto& eq : equations)
+                trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
+            for (auto& [k, v] : defaults)
+                trace.step("  default: " + k + " = " + fmt_num(v));
+            for (auto& fc : formula_calls)
+                trace.step("  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var + ")");
+        }
+    }
+
     void load_file(const std::string& path) {
         ExprArena::Scope scope(arena);
         if (path.empty())
@@ -1604,6 +1640,7 @@ struct CLIQueryVar {
 
 struct CLIQuery {
     std::string filename;
+    std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
     std::map<std::string, double> bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
@@ -1619,7 +1656,12 @@ inline CLIQuery parse_cli_query(const std::string& input,
         throw std::runtime_error("Expected format: filename(var=?, var=value, ...)");
 
     q.filename = input.substr(0, lparen);
-    if (q.filename.find('.') == std::string::npos) q.filename += ".fw";
+    // Query-first format: "(args) inline equations..." — empty filename
+    if (q.filename.empty()) {
+        // filename stays empty — caller detects this and uses inline/stdin
+    } else if (q.filename.find('.') == std::string::npos) {
+        q.filename += ".fw";
+    }
 
     // Find matching closing paren (respecting nesting)
     size_t rparen = std::string::npos;
@@ -1631,6 +1673,11 @@ inline CLIQuery parse_cli_query(const std::string& input,
     }
     if (rparen == std::string::npos)
         throw std::runtime_error("Missing closing parenthesis");
+
+    // Capture inline source (text after closing paren, for query-first format)
+    if (q.filename.empty() && rparen + 1 < input.size()) {
+        q.inline_source = trim(input.substr(rparen + 1));
+    }
 
     // Split arguments by comma (respecting nested parens)
     std::vector<std::string> args;
