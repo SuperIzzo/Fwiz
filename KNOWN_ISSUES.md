@@ -15,7 +15,22 @@ Query: `w=?, area=12, perimeter=14` → should give `w = 3` or `w = 4`.
 
 **What's needed:** Substitution-then-solve: derive `h = 7 - w` from perimeter, substitute into area → `w² - 7w + 12 = 0`, then solve the quadratic. This requires the solver to recognize it can eliminate a variable by substitution across equations, reducing a 2-equation system to a single-variable problem.
 
-## 2. Quadratic formula
+## 2. Multi-equation validation (spurious solutions)
+
+```
+r1 = sqrt(x^2 + y^2)
+r2 = sqrt((x-6)^2 + y^2)
+```
+
+Query: `x=?, r1=5, r2=4, y=0` → returns 4 values (±5 from circle 1, 2 and 10 from circle 2).
+
+**What happens:** Each equation is solved independently. Solutions from one equation aren't validated against the others. None of the 4 values actually satisfy both equations simultaneously.
+
+**What's needed:** Post-validation of candidates against ALL equations in the system, not just the source equation. A candidate `x=5` from `r1=5` should be checked against `r2=4` — if it fails, discard it.
+
+This is related to issue #1 (simultaneous equations) — both require the solver to reason across multiple equations at once.
+
+## 3. Quadratic formula
 
 ```
 y = a*x^2 + b*x + c
