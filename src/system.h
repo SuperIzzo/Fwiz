@@ -154,26 +154,62 @@ public:
         return vars;
     }
 
-    // Stored sections from multi-system files: [name] → lines
+    // Stored sections from multi-system files: [name(args) -> return]
     struct Section {
         std::string name;
+        std::vector<std::string> positional_args;  // e.g., {"x", "y"} for [func(x, y)]
+        std::string return_var;                     // e.g., "result" for [func(x) -> result]
         std::vector<std::string> lines;
     };
-    std::vector<Section> sections_; // parsed sections (empty = single-system)
+    std::vector<Section> sections_;
 
     // Pre-parse: split raw lines into sections by [name] headers
     // Returns the section list. Lines before the first [name] go into section ""
+    // Parse section header: [name], [name(x, y)], or [name(x, y) -> result]
+    static Section parse_section_header(const std::string& header) {
+        Section sec;
+        // Strip [ and ]
+        std::string inner = trim(header.substr(1, header.size() - 2));
+
+        // Check for -> return_var
+        auto arrow = inner.find("->");
+        if (arrow != std::string::npos) {
+            sec.return_var = trim(inner.substr(arrow + 2));
+            inner = trim(inner.substr(0, arrow));
+        }
+
+        // Check for (args)
+        auto lparen = inner.find('(');
+        if (lparen != std::string::npos) {
+            auto rparen = inner.find(')', lparen);
+            if (rparen != std::string::npos) {
+                std::string args_str = inner.substr(lparen + 1, rparen - lparen - 1);
+                // Split by comma
+                std::istringstream ss(args_str);
+                std::string arg;
+                while (std::getline(ss, arg, ',')) {
+                    arg = trim(arg);
+                    if (!arg.empty()) sec.positional_args.push_back(arg);
+                }
+                inner = trim(inner.substr(0, lparen));
+            }
+        }
+
+        sec.name = inner;
+        return sec;
+    }
+
     static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
         std::vector<Section> result;
-        result.push_back({"", {}}); // top-level (unnamed)
+        result.push_back({"", {}, {}, {}}); // top-level (unnamed)
         for (auto& line : all_lines) {
-            // Check for section header: [name] alone on a line
             auto trimmed = trim(line);
             if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']'
                 && trimmed.find('=') == std::string::npos) {
-                std::string name = trim(trimmed.substr(1, trimmed.size() - 2));
-                if (!name.empty()) {
-                    result.push_back({name, {}});
+                auto sec = parse_section_header(trimmed);
+                if (!sec.name.empty()) {
+                    sec.lines = {}; // lines will be populated below
+                    result.push_back(std::move(sec));
                     continue;
                 }
             }
