@@ -107,6 +107,14 @@ struct Equation {
     bool bidirectional = false;  // true for "iff", false for "if" or ":"
 };
 
+// Rewrite rule: pattern → replacement (e.g., cos(-x) → cos(x))
+// Variables in pattern are wildcards that match any sub-expression.
+struct RewriteRule {
+    ExprPtr pattern;      // e.g., cos(Neg(Var("x")))
+    ExprPtr replacement;  // e.g., cos(Var("x"))
+    std::string desc;     // human-readable: "cos(-x) = cos(x)"
+};
+
 struct VerifyResult {
     std::string equation_desc;
     double computed;
@@ -128,6 +136,7 @@ public:
     std::map<std::string, double> defaults;
     std::vector<FormulaCall> formula_calls;
     std::vector<Condition> global_conditions;
+    std::vector<RewriteRule> rewrite_rules;
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;

@@ -451,6 +451,86 @@ inline bool expr_equal(ExprPtr a, ExprPtr b) {
     return expr_equal(*a, *b);
 }
 
+// ============================================================================
+//  Pattern matching for rewrite rules
+// ============================================================================
+
+// Match a pattern expression against a target expression.
+// Variables in the pattern are wildcards — they bind to any sub-expression.
+// Numbers and operators must match exactly.
+// Returns bindings map on success, nullopt on failure.
+inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
+        const ExprPtr& pattern, const ExprPtr& target) {
+    if (!pattern || !target) return std::nullopt;
+    std::map<std::string, ExprPtr> bindings;
+
+    std::function<bool(const ExprPtr&, const ExprPtr&)> match =
+        [&](const ExprPtr& p, const ExprPtr& t) -> bool {
+        if (!p || !t) return p == t;
+
+        // Variable in pattern → wildcard, binds to target
+        if (p->type == ExprType::VAR) {
+            auto it = bindings.find(p->name);
+            if (it != bindings.end())
+                return expr_equal(it->second, t); // already bound — must match
+            bindings[p->name] = t;
+            return true;
+        }
+
+        // Number must match exactly
+        if (p->type == ExprType::NUM)
+            return t->type == ExprType::NUM && std::abs(p->num - t->num) < EPSILON_ZERO;
+
+        // Negation
+        if (p->type == ExprType::UNARY_NEG)
+            return t->type == ExprType::UNARY_NEG && match(p->child, t->child);
+
+        // Binary op — operator and both sides must match
+        if (p->type == ExprType::BINOP)
+            return t->type == ExprType::BINOP && p->op == t->op
+                && match(p->left, t->left) && match(p->right, t->right);
+
+        // Function call — name and all args must match
+        if (p->type == ExprType::FUNC_CALL) {
+            if (t->type != ExprType::FUNC_CALL || p->name != t->name) return false;
+            if (p->args.size() != t->args.size()) return false;
+            for (size_t i = 0; i < p->args.size(); i++)
+                if (!match(p->args[i], t->args[i])) return false;
+            return true;
+        }
+
+        return false;
+    };
+
+    if (match(pattern, target)) return bindings;
+    return std::nullopt;
+}
+
+// Apply a rewrite: substitute bindings into the replacement template.
+inline ExprPtr apply_rewrite(const ExprPtr& replacement,
+        const std::map<std::string, ExprPtr>& bindings) {
+    if (!replacement) return nullptr;
+
+    if (replacement->type == ExprType::VAR) {
+        auto it = bindings.find(replacement->name);
+        return (it != bindings.end()) ? it->second : replacement;
+    }
+    if (replacement->type == ExprType::NUM) return replacement;
+    if (replacement->type == ExprType::UNARY_NEG)
+        return Expr::Neg(apply_rewrite(replacement->child, bindings));
+    if (replacement->type == ExprType::BINOP)
+        return Expr::BinOpExpr(replacement->op,
+            apply_rewrite(replacement->left, bindings),
+            apply_rewrite(replacement->right, bindings));
+    if (replacement->type == ExprType::FUNC_CALL) {
+        std::vector<ExprPtr> args;
+        for (auto& a : replacement->args)
+            args.push_back(apply_rewrite(a, bindings));
+        return Expr::Call(replacement->name, args);
+    }
+    return replacement;
+}
+
 inline int precedence(const Expr& e) {
     if (e.type == ExprType::BINOP) return binop_info(e.op).precedence;
     if (e.type == ExprType::UNARY_NEG) return 3;
