@@ -8069,6 +8069,11 @@ void test_simplify_exp_log() {
     ExprArena arena;
     ExprArena::Scope scope(arena);
 
+    // Load builtin rewrite rules for simplifier
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
     // e^(log(x)) → x
     ASSERT_EQ(expr_to_string(simplify(parse("e^(log(x))"))), "x",
         "simplify: e^log(x) → x");
@@ -8113,6 +8118,11 @@ void test_simplify_trig_abs_pow() {
 
     ExprArena arena;
     ExprArena::Scope scope(arena);
+
+    // Load builtin rewrite rules for simplifier
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
 
     // abs rules
     ASSERT_EQ(expr_to_string(simplify(parse("abs(abs(x))"))), "abs(x)",
@@ -8392,6 +8402,96 @@ void test_cross_equation_validation() {
     }
 }
 
+void test_rewrite_rules() {
+    SECTION("Rewrite Rules");
+
+    // 1. Rewrite rules parsed from .fw input (builtins auto-loaded + 2 user rules)
+    {
+        FormulaSystem sys;
+        sys.load_string("cos(-x) = cos(x)\nsin(-x) = -sin(x)\n");
+        constexpr size_t builtin_count = 14;  // from BUILTIN_REWRITE_RULES
+        // User rules may duplicate builtins; total should be builtins + user rules
+        ASSERT(sys.rewrite_rules.size() >= builtin_count,
+            "parse: has builtin rules (got " + std::to_string(sys.rewrite_rules.size()) + ")");
+        ASSERT(sys.equations.empty(), "parse: no equations stored");
+    }
+
+    // 2. Simplifier applies cos(-x) → cos(x) via rewrite rule
+    {
+        FormulaSystem sys;
+        sys.load_string("y = cos(-a)\ncos(-x) = cos(x)\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "cos(-a) rewrite: has result");
+        // Should simplify to y = cos(a)
+        bool found_clean = false;
+        for (auto& r : results)
+            if (r.find("cos(a)") != std::string::npos) found_clean = true;
+        ASSERT(found_clean, "cos(-a) rewrite: y = cos(a) (got " + results[0] + ")");
+    }
+
+    // 3. Simplifier applies sin(-x) → -sin(x) via rewrite rule
+    {
+        FormulaSystem sys;
+        sys.load_string("y = sin(-a)\nsin(-x) = -sin(x)\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "sin(-a) rewrite: has result");
+        bool found_clean = false;
+        for (auto& r : results)
+            if (r.find("-sin(a)") != std::string::npos
+                || r.find("-(sin(a))") != std::string::npos) found_clean = true;
+        ASSERT(found_clean, "sin(-a) rewrite: y = -sin(a) (got " + results[0] + ")");
+    }
+
+    // 4. abs(abs(x)) → abs(x) via rewrite rule
+    {
+        FormulaSystem sys;
+        sys.load_string("y = abs(abs(a))\nabs(abs(x)) = abs(x)\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "abs(abs) rewrite: has result");
+        bool found_clean = false;
+        for (auto& r : results)
+            if (r == "abs(a)") found_clean = true;
+        ASSERT(found_clean, "abs(abs) rewrite: y = abs(a) (got " + results[0] + ")");
+    }
+
+    // 5. Numeric: rewrite rules applied during solving
+    {
+        FormulaSystem sys;
+        sys.load_string("y = cos(-x)\ncos(-a) = cos(a)\n");
+        // cos(-pi/3) should equal cos(pi/3) = 0.5
+        double result = sys.resolve("y", {{"x", M_PI / 3}});
+        ASSERT(std::abs(result - 0.5) < 1e-9,
+            "numeric with rewrite: cos(-pi/3) = 0.5 (got " + std::to_string(result) + ")");
+    }
+
+    // 6. x/x = 1 as rewrite rule (simulates data-driven cancellation)
+    {
+        FormulaSystem sys;
+        // Parse as rewrite rule — note: this is BINOP DIV with two wildcards
+        // x/x pattern: Var("x") / Var("x") → Num(1)
+        // But match_pattern requires same binding for same variable name
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        auto pattern = Expr::BinOpExpr(BinOp::DIV, Expr::Var("x"), Expr::Var("x"));
+        auto replacement = Expr::Num(1);
+        sys.rewrite_rules.push_back({pattern, replacement, "x/x = 1"});
+
+        sys.load_string("y = a / a\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "x/x rewrite: has result");
+        ASSERT(results[0] == "1", "x/x rewrite: a/a = 1 (got " + results[0] + ")");
+    }
+
+    // 7. Rewrite rules don't affect unrelated expressions
+    {
+        FormulaSystem sys;
+        sys.load_string("y = cos(a)\ncos(-x) = cos(x)\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "no-match rewrite: has result");
+        ASSERT(results[0] == "cos(a)", "no-match rewrite: unchanged (got " + results[0] + ")");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8608,6 +8708,7 @@ int main() {
     test_simplify_common_factor();
     test_iff_semantics();
     test_cross_equation_validation();
+    test_rewrite_rules();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

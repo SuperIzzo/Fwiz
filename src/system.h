@@ -107,14 +107,6 @@ struct Equation {
     bool bidirectional = false;  // true for "iff", false for "if" or ":"
 };
 
-// Rewrite rule: pattern → replacement (e.g., cos(-x) → cos(x))
-// Variables in pattern are wildcards that match any sub-expression.
-struct RewriteRule {
-    ExprPtr pattern;      // e.g., cos(Neg(Var("x")))
-    ExprPtr replacement;  // e.g., cos(Var("x"))
-    std::string desc;     // human-readable: "cos(-x) = cos(x)"
-};
-
 struct VerifyResult {
     std::string equation_desc;
     double computed;
@@ -333,6 +325,35 @@ public:
     }
 
     // Load lines with section selection (shared by load_file and load_string)
+    // Built-in rewrite rules — loaded automatically, replace hardcoded C++ simplifier rules.
+    // These are the .fw equivalents; the file examples/builtin.fw mirrors this for documentation.
+    static constexpr const char* BUILTIN_REWRITE_RULES = R"(
+sin(-x) = -sin(x)
+cos(-x) = cos(x)
+asin(sin(x)) = x
+acos(cos(x)) = x
+atan(tan(x)) = x
+sin(asin(x)) = x
+cos(acos(x)) = x
+tan(atan(x)) = x
+abs(abs(x)) = abs(x)
+abs(-x) = abs(x)
+sqrt(x^2) = abs(x)
+log(e^x) = x
+e^log(x) = x
+log(x^n) = n * log(x) iff x != 0
+)";
+
+    void load_builtins() {
+        std::istringstream ss(BUILTIN_REWRITE_RULES);
+        std::string line;
+        while (std::getline(ss, line)) {
+            line = trim(line);
+            if (line.empty() || line[0] == '#') continue;
+            parse_line(line);
+        }
+    }
+
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
         sections_ = split_sections(all_lines);
         if (sections_.size() <= 1 && section.empty())
@@ -346,6 +367,7 @@ public:
                      const std::string& section = "") {
         ExprArena::Scope scope(arena);
         if (base_dir.empty()) base_dir = ".";
+        if (rewrite_rules.empty()) load_builtins();
         trace.step("loading " + label);
         std::istringstream ss(source);
         load_with_sections(read_all_lines(ss), section);
@@ -361,6 +383,7 @@ public:
 
         base_dir = std::filesystem::path(path).parent_path().string();
         if (base_dir.empty()) base_dir = ".";
+        if (rewrite_rules.empty()) load_builtins();
 
         std::ifstream f(path);
         if (!f.is_open())
@@ -491,6 +514,7 @@ public:
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
+        RewriteRulesGuard rr_guard(&rewrite_rules);
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Collect ALL results from enumerate_candidates
@@ -699,6 +723,7 @@ public:
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
+        RewriteRulesGuard rr_guard(&rewrite_rules);
         auto prepared = prepare_bindings(target, bindings);
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         return solve_recursive(target, prepared, {}, 0);
@@ -707,6 +732,7 @@ public:
     ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
+        RewriteRulesGuard rr_guard(&rewrite_rules);
         auto prepared = prepare_bindings(target, bindings);
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
@@ -1236,7 +1262,40 @@ private:
         // Standalone formula call: just "output_var END" after extraction
         if (mod_tok.size() <= 2) return;
 
-        if (mod_tok[0].type != TokenType::IDENT || mod_tok[1].type != TokenType::EQUALS) return;
+        // Find the '=' token (not part of >=, <=, !=, ==)
+        size_t eq_pos = 0;
+        for (size_t i = 0; i < mod_tok.size(); i++) {
+            if (mod_tok[i].type == TokenType::EQUALS) { eq_pos = i; break; }
+        }
+        if (eq_pos == 0) return;  // no '=' found
+
+        // Simple equation: "var = expr" (IDENT followed by EQUALS)
+        bool simple_lhs = (eq_pos == 1 && mod_tok[0].type == TokenType::IDENT);
+
+        if (!simple_lhs) {
+            // Complex LHS: this is a rewrite rule (e.g., cos(-x) = cos(x))
+            auto lhs_tok = std::vector<Token>(mod_tok.begin(), mod_tok.begin() + eq_pos);
+            lhs_tok.push_back(Token{TokenType::END, "", 0});
+            Parser lp(lhs_tok);
+            Parser rp(std::vector<Token>(mod_tok.begin() + eq_pos + 1, mod_tok.end()));
+            auto lhs_expr = lp.parse_expr();
+            auto rhs_expr = rp.parse_expr();
+            std::string desc = eq_part;
+            // Parse condition: "iff VAR != 0" → assume_nonzero_var
+            std::string assume_var;
+            if (is_iff && !cond_part.empty()) {
+                auto ct = trim(cond_part);
+                // Match pattern: "VAR != 0"
+                auto neq = ct.find("!=");
+                if (neq != std::string::npos) {
+                    auto var = trim(ct.substr(0, neq));
+                    auto val = trim(ct.substr(neq + 2));
+                    if (val == "0") assume_var = var;
+                }
+            }
+            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, assume_var});
+            return;
+        }
 
         const std::string& lhs = mod_tok[0].text;
 
