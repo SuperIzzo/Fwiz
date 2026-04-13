@@ -660,6 +660,41 @@ public:
         try {
             exact_results = solve_all(target, prepared, {}, 0);
 
+            // Cross-equation validation: verify each candidate against ALL equations
+            // For each equation, substitute all known values + candidate,
+            // then check LHS == evaluated RHS
+            // Only cross-validate when there are multiple equations with known LHS values
+            // (single-equation multiple roots are already valid by construction)
+            int known_lhs_count = 0;
+            for (auto& eq : equations)
+                if (prepared.count(eq.lhs_var)) known_lhs_count++;
+            if (exact_results.size() > 1 && known_lhs_count > 1) {
+                std::vector<double> validated;
+                for (double r : exact_results) {
+                    auto test = prepared;
+                    test[target] = r;
+                    bool valid = true;
+                    for (auto& eq : equations) {
+                        // Need LHS value in bindings to compare against
+                        auto lhs_it = test.find(eq.lhs_var);
+                        if (lhs_it == test.end()) continue;
+                        if (eq.condition && !check_condition(*eq.condition, test))
+                            continue;
+                        // Evaluate this equation's RHS with all known bindings
+                        try {
+                            double computed = evaluate(*simplify(
+                                substitute_bindings(eq.rhs, test)));
+                            if (!std::isfinite(computed)) continue;
+                            if (!approx_equal(computed, lhs_it->second)) {
+                                valid = false; break;
+                            }
+                        } catch (...) {}
+                    }
+                    if (valid) validated.push_back(r);
+                }
+                exact_results = validated; // may be empty — all rejected
+            }
+
             if (numeric_mode && numeric_results_.count(target)) {
                 bool all_exact = true;
                 for (double r : exact_results)

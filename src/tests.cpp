@@ -8330,6 +8330,68 @@ void test_iff_semantics() {
     }
 }
 
+void test_cross_equation_validation() {
+    SECTION("Cross-Equation Validation");
+
+    // Two linear equations: y = 2x+1 and y = x+3 → intersection at x=2, y=5
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2*x + 1\ny = x + 3\n");
+        auto result = sys.resolve_all("x", {{"y", 5}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "linear intersection: exactly one x (got "
+            + std::to_string(d.size()) + ")");
+        if (!d.empty()) ASSERT_NUM(d[0], 2, "linear intersection: x = 2");
+    }
+
+    // Same but y=4 — no intersection (2x+1=4 → x=1.5, x+3=4 → x=1)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2*x + 1\ny = x + 3\n");
+        try {
+            auto result = sys.resolve_all("x", {{"y", 4}});
+            auto& d = result.discrete();
+            ASSERT(d.empty(), "no intersection: no valid x for y=4 (got "
+                + std::to_string(d.size()) + ")");
+        } catch (const std::exception&) {
+            ASSERT(true, "no intersection: correctly throws (no valid x for y=4)");
+        }
+    }
+
+    // Circle-like: two equations with shared variable, different constraints
+    // r1 = sqrt(x^2) = |x|, r2 = sqrt((x-4)^2) = |x-4|
+    // r1=3, r2=1 → |x|=3 gives x=3,-3; |x-4|=1 gives x=3,5
+    // Only x=3 satisfies both
+    {
+        FormulaSystem sys;
+        sys.load_string("r1 = sqrt(x^2)\nr2 = sqrt((x-4)^2)\n");
+        auto result = sys.resolve_all("x", {{"r1", 3}, {"r2", 1}});
+        auto& d = result.discrete();
+        bool has_3 = false;
+        for (auto v : d) if (std::abs(v - 3) < 1e-6) has_3 = true;
+        ASSERT(has_3, "circle-like: x=3 found");
+        // Should NOT have -3 or 5
+        bool has_neg3 = false, has_5 = false;
+        for (auto v : d) {
+            if (std::abs(v + 3) < 1e-6) has_neg3 = true;
+            if (std::abs(v - 5) < 1e-6) has_5 = true;
+        }
+        ASSERT(!has_neg3, "circle-like: x=-3 rejected (fails r2)");
+        ASSERT(!has_5, "circle-like: x=5 rejected (fails r1)");
+    }
+
+    // Single equation — no cross-validation needed, all solutions valid
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = x^2\n");
+        auto result = sys.resolve_all("x", {{"y", 9}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 2, "single equation: both roots valid (got "
+            + std::to_string(d.size()) + ")");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8545,6 +8607,7 @@ int main() {
     test_simplify_trig_abs_pow();
     test_simplify_common_factor();
     test_iff_semantics();
+    test_cross_equation_validation();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
