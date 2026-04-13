@@ -468,8 +468,10 @@ inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
         [&](const ExprPtr& p, const ExprPtr& t) -> bool {
         if (!p || !t) return p == t;
 
-        // Variable in pattern → wildcard, binds to target
+        // Variable in pattern: builtin constants match literally, others are wildcards
         if (p->type == ExprType::VAR) {
+            if (builtin_constants().count(p->name))
+                return t->type == ExprType::VAR && t->name == p->name;
             auto it = bindings.find(p->name);
             if (it != bindings.end())
                 return expr_equal(it->second, t); // already bound — must match
@@ -824,6 +826,42 @@ inline void simplify_clear_assumptions() {
     simplify_assumptions_().clear();
 }
 
+// ============================================================================
+//  Rewrite rules — thread-local access for simplifier
+// ============================================================================
+
+// Rewrite rule: pattern → replacement (e.g., cos(-x) → cos(x))
+// Variables in pattern are wildcards that match any sub-expression.
+struct RewriteRule {
+    ExprPtr pattern;      // e.g., cos(Neg(Var("x")))
+    ExprPtr replacement;  // e.g., cos(Var("x"))
+    std::string desc;     // human-readable: "cos(-x) = cos(x)"
+    std::string assume_nonzero_var;  // if non-empty, record assumption "var != 0" when applied
+};
+
+inline const std::vector<RewriteRule>*& simplify_rewrite_rules_() {
+    static thread_local const std::vector<RewriteRule>* rules = nullptr;
+    return rules;
+}
+
+inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules) {
+    simplify_rewrite_rules_() = rules;
+}
+
+inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
+    return simplify_rewrite_rules_();
+}
+
+// RAII guard: sets rewrite rules on construction, clears on destruction
+struct RewriteRulesGuard {
+    RewriteRulesGuard(const std::vector<RewriteRule>* rules) {
+        simplify_set_rewrite_rules(rules);
+    }
+    ~RewriteRulesGuard() { simplify_set_rewrite_rules(nullptr); }
+    RewriteRulesGuard(const RewriteRulesGuard&) = delete;
+    RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
+};
+
 // ---- Simplify: per-operator helpers ----
 
 inline ExprPtr simplify_additive(const ExprPtr& combined) {
@@ -929,7 +967,9 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
 
 // ---- Simplify: main entry ----
 
-inline ExprPtr simplify_once(const ExprPtr& e) {
+inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl — impl calls wrapper recursively
+
+inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     if (!e) return e;
     switch (e->type) {
         case ExprType::NUM:
@@ -957,62 +997,7 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
             auto s = Expr::Call(e->name, sa);
             if (all_num && builtin_functions().count(e->name)) return Expr::Num(evaluate(s));
 
-            // log/exp simplifications
-            if (e->name == "log" && sa.size() == 1) {
-                auto& arg = sa[0];
-                // log(e^x) → x
-                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW
-                    && is_var(arg->left) && arg->left->name == "e")
-                    return arg->right;
-                // log(x^n) → n * log(x)  (assuming x > 0)
-                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW) {
-                    simplify_assume_nonzero(arg->left); // actually x > 0, but ≠0 is the key part
-                    return Expr::BinOpExpr(BinOp::MUL, arg->right,
-                        Expr::Call("log", {arg->left}));
-                }
-            }
-            if (e->name == "sqrt" && sa.size() == 1) {
-                auto& arg = sa[0];
-                // sqrt(x^2) → abs(x)
-                if (arg->type == ExprType::BINOP && arg->op == BinOp::POW
-                    && is_num(arg->right) && arg->right->num == 2.0)
-                    return Expr::Call("abs", {arg->left});
-            }
-            // abs rules
-            if (e->name == "abs" && sa.size() == 1) {
-                auto& arg = sa[0];
-                // abs(abs(x)) → abs(x)
-                if (arg->type == ExprType::FUNC_CALL && arg->name == "abs")
-                    return arg;
-                // abs(-x) → abs(x)
-                if (is_neg(arg))
-                    return Expr::Call("abs", {arg->child});
-            }
-            // sin(-x) → -sin(x), cos(-x) → cos(x)
-            if (e->name == "sin" && sa.size() == 1 && is_neg(sa[0]))
-                return Expr::Neg(Expr::Call("sin", {sa[0]->child}));
-            if (e->name == "cos" && sa.size() == 1 && is_neg(sa[0]))
-                return Expr::Call("cos", {sa[0]->child});
-            // Inverse trig pairs: asin(sin(x)) → x, acos(cos(x)) → x, atan(tan(x)) → x
-            if (e->name == "asin" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "sin")
-                return sa[0]->args[0];
-            if (e->name == "acos" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "cos")
-                return sa[0]->args[0];
-            if (e->name == "atan" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "tan")
-                return sa[0]->args[0];
-            // Forward trig of inverse: sin(asin(x)) → x, cos(acos(x)) → x
-            if (e->name == "sin" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "asin")
-                return sa[0]->args[0];
-            if (e->name == "cos" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "acos")
-                return sa[0]->args[0];
-            if (e->name == "tan" && sa.size() == 1
-                && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "atan")
-                return sa[0]->args[0];
+            // Function-specific rules migrated to BUILTIN_REWRITE_RULES
             return s;
         }
 
@@ -1033,13 +1018,6 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
                     // x^0.5 → sqrt(x)
                     if (is_num(r) && r->num == 0.5)
                         return Expr::Call("sqrt", {l});
-                    // e^(log(x)) → x  (assuming x > 0)
-                    if (is_var(l) && l->name == "e"
-                        && r->type == ExprType::FUNC_CALL && r->name == "log"
-                        && !r->args.empty()) {
-                        simplify_assume_nonzero(r->args[0]); // x > 0 implied
-                        return r->args[0];
-                    }
                     // x^(-1) → 1/x, x^(-n) → 1/x^n
                     if (is_num(r) && r->num < 0) {
                         if (r->num == -1.0)
@@ -1058,6 +1036,27 @@ inline ExprPtr simplify_once(const ExprPtr& e) {
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
     return e;
+}
+
+// Apply user-defined rewrite rules to a simplified expression
+inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
+    auto* rules = simplify_get_rewrite_rules();
+    if (!rules) return e;
+    for (auto& rule : *rules) {
+        auto bindings = match_pattern(rule.pattern, e);
+        if (!bindings) continue;
+        if (!rule.assume_nonzero_var.empty()) {
+            auto it = bindings->find(rule.assume_nonzero_var);
+            if (it != bindings->end())
+                simplify_assume_nonzero(it->second);
+        }
+        return apply_rewrite(rule.replacement, *bindings);
+    }
+    return e;
+}
+
+inline ExprPtr simplify_once(const ExprPtr& e) {
+    return apply_rewrite_rules(simplify_once_impl(e));
 }
 
 inline ExprPtr simplify(const ExprPtr& e) {
