@@ -159,6 +159,7 @@ public:
         std::string name;
         std::vector<std::string> positional_args;  // e.g., {"x", "y"} for [func(x, y)]
         std::string return_var;                     // e.g., "result" for [func(x) -> result]
+        std::string extern_func;                    // e.g., "sin" from @extern sin
         std::vector<std::string> lines;
     };
     std::vector<Section> sections_;
@@ -201,17 +202,27 @@ public:
 
     static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
         std::vector<Section> result;
-        result.push_back({"", {}, {}, {}}); // top-level (unnamed)
+        result.push_back({"", {}, {}, {}, {}}); // top-level (unnamed)
         for (auto& line : all_lines) {
             auto trimmed = trim(line);
+            // Section header
             if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']'
                 && trimmed.find('=') == std::string::npos) {
                 auto sec = parse_section_header(trimmed);
                 if (!sec.name.empty()) {
-                    sec.lines = {}; // lines will be populated below
+                    sec.lines = {};
                     result.push_back(std::move(sec));
                     continue;
                 }
+            }
+            // Annotation: @name value
+            if (!trimmed.empty() && trimmed[0] == '@') {
+                auto space = trimmed.find(' ');
+                std::string tag = trimmed.substr(1, space == std::string::npos ? std::string::npos : space - 1);
+                std::string val = (space != std::string::npos) ? trim(trimmed.substr(space + 1)) : "";
+                if (tag == "extern") result.back().extern_func = val;
+                // Future annotations handled here
+                continue; // don't add to lines
             }
             result.back().lines.push_back(line);
         }
