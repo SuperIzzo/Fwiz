@@ -8474,7 +8474,7 @@ void test_rewrite_rules() {
         ExprArena::Scope scope(arena);
         auto pattern = Expr::BinOpExpr(BinOp::DIV, Expr::Var("x"), Expr::Var("x"));
         auto replacement = Expr::Num(1);
-        sys.rewrite_rules.push_back({pattern, replacement, "x/x = 1"});
+        sys.rewrite_rules.push_back({pattern, replacement, "x/x = 1", "x != 0"});
 
         sys.load_string("y = a / a\n");
         auto results = sys.derive_all("y", {}, {{"a", "a"}});
@@ -8489,6 +8489,65 @@ void test_rewrite_rules() {
         auto results = sys.derive_all("y", {}, {{"a", "a"}});
         ASSERT(!results.empty(), "no-match rewrite: has result");
         ASSERT(results[0] == "cos(a)", "no-match rewrite: unchanged (got " + results[0] + ")");
+    }
+
+    // 8. Builtin log condition: log(x^n) = n*log(x) iff x != 0
+    {
+        // Test via direct simplify with rules loaded
+        FormulaSystem sys;
+        sys.load_string("y = log(a^3)\n");
+        simplify_clear_assumptions();
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        auto e = simplify(parse("log(a^3)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(expr_to_string(e) == "3 * log(a)",
+            "log condition: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
+        bool found = false;
+        for (auto& a : assumptions)
+            if (a.desc.find("a") != std::string::npos
+                && a.desc.find("!= 0") != std::string::npos)
+                found = true;
+        ASSERT(found, "log condition: assumption 'a != 0' recorded");
+    }
+
+    // 9. Custom user condition: iff x > 0
+    {
+        FormulaSystem sys;
+        sys.load_string("y = foo(bar)\nfoo(x) = x^2 iff x > 0\n");
+        simplify_clear_assumptions();
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        auto e = simplify(parse("foo(a + 1)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(expr_to_string(e) == "(a + 1)^2",
+            "custom condition: foo(a+1) = (a+1)^2 (got " + expr_to_string(e) + ")");
+        bool found = false;
+        for (auto& a : assumptions)
+            if (a.desc.find("a + 1") != std::string::npos
+                && a.desc.find("> 0") != std::string::npos)
+                found = true;
+        ASSERT(found, "custom condition: assumption 'a + 1 > 0' recorded");
+    }
+
+    // 10. Multiple conditions compound (&&)
+    {
+        FormulaSystem sys;
+        sys.load_string("magic(x, y) = x + y iff x > 0 && y > 0\n");
+        simplify_clear_assumptions();
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        auto e = simplify(parse("magic(a, b)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(expr_to_string(e) == "a + b",
+            "compound condition: magic(a,b) = a+b (got " + expr_to_string(e) + ")");
+        bool found = false;
+        for (auto& a : assumptions)
+            if (a.desc.find("a > 0") != std::string::npos
+                && a.desc.find("b > 0") != std::string::npos)
+                found = true;
+        ASSERT(found, "compound condition: 'a > 0 && b > 0' recorded");
     }
 }
 
