@@ -129,6 +129,15 @@ public:
     std::vector<FormulaCall> formula_calls;
     std::vector<Condition> global_conditions;
     std::vector<RewriteRule> rewrite_rules;
+
+    struct RewriteRuleGroup {
+        std::string pattern_key;             // expr_to_string(pattern)
+        std::vector<size_t> rule_indices;    // into rewrite_rules
+        bool exhaustive = false;             // all conditions cover (-inf, +inf)
+    };
+    std::vector<RewriteRuleGroup> rewrite_rule_groups_;
+    std::vector<bool> rewrite_exhaustive_flags_;  // indexed by group_index
+
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;
@@ -342,6 +351,8 @@ sqrt(x^2) = abs(x)
 log(e^x) = x
 e^log(x) = x
 log(x^n) = n * log(x) iff x != 0
+x/x = 1 iff x != 0
+x/x = undefined iff x = 0
 )";
 
     void load_builtins() {
@@ -352,6 +363,82 @@ log(x^n) = n * log(x) iff x != 0
             if (line.empty() || line[0] == '#') continue;
             parse_line(line);
         }
+        compute_rewrite_groups();
+    }
+
+    // Group rewrite rules by LHS pattern and check exhaustiveness.
+    // Rules with the same pattern string are grouped (e.g., "x / x").
+    // A group is exhaustive if its conditions' union covers all reals for every
+    // constrained variable.
+    void compute_rewrite_groups() {
+        rewrite_rule_groups_.clear();
+        std::map<std::string, size_t> key_to_group;
+
+        for (size_t i = 0; i < rewrite_rules.size(); i++) {
+            auto key = expr_to_string(rewrite_rules[i].pattern);
+            auto it = key_to_group.find(key);
+            if (it == key_to_group.end()) {
+                key_to_group[key] = rewrite_rule_groups_.size();
+                rewrite_rules[i].group_index = static_cast<int>(rewrite_rule_groups_.size());
+                rewrite_rule_groups_.push_back({key, {i}, false});
+            } else {
+                rewrite_rules[i].group_index = static_cast<int>(it->second);
+                rewrite_rule_groups_[it->second].rule_indices.push_back(i);
+            }
+        }
+
+        // Check exhaustiveness for groups with multiple rules
+        for (auto& group : rewrite_rule_groups_) {
+            if (group.rule_indices.size() < 2) continue;
+
+            // Collect all condition variables and their ValueSets
+            std::map<std::string, ValueSet> var_coverage;
+            bool all_have_conditions = true;
+
+            for (size_t idx : group.rule_indices) {
+                auto& rule = rewrite_rules[idx];
+                if (rule.condition.empty()) {
+                    // Unconditional rule → covers everything
+                    group.exhaustive = true;
+                    break;
+                }
+                try {
+                    auto cond = parse_condition(rule.condition);
+                    if (!cond) { all_have_conditions = false; continue; }
+
+                    // Extract constrained variables from condition
+                    for (auto& clause : cond->clauses) {
+                        std::string var;
+                        if (is_var(clause.lhs)) var = clause.lhs->name;
+                        else if (is_var(clause.rhs)) var = clause.rhs->name;
+                        if (var.empty()) continue;
+
+                        auto vs = cond->to_valueset(var);
+                        if (var_coverage.count(var))
+                            var_coverage[var] = var_coverage[var].unite(vs);
+                        else
+                            var_coverage[var] = vs;
+                    }
+                } catch (...) { all_have_conditions = false; }
+            }
+
+            if (group.exhaustive) continue;  // already set by unconditional rule
+            if (!all_have_conditions || var_coverage.empty()) continue;
+
+            // Exhaustive if every constrained variable covers all reals
+            group.exhaustive = true;
+            for (auto& [var, vs] : var_coverage) {
+                if (!vs.covers_reals()) {
+                    group.exhaustive = false;
+                    break;
+                }
+            }
+        }
+
+        // Build flat flags vector for thread-local access
+        rewrite_exhaustive_flags_.resize(rewrite_rule_groups_.size());
+        for (size_t i = 0; i < rewrite_rule_groups_.size(); i++)
+            rewrite_exhaustive_flags_[i] = rewrite_rule_groups_[i].exhaustive;
     }
 
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
@@ -360,6 +447,7 @@ log(x^n) = n * log(x) iff x != 0
             load_lines(all_lines);
         else
             load_section(section);
+        compute_rewrite_groups();  // regroup after user rules loaded
         trace_loaded();
     }
 
@@ -514,7 +602,7 @@ log(x^n) = n * log(x) iff x != 0
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Collect ALL results from enumerate_candidates
@@ -723,7 +811,7 @@ log(x^n) = n * log(x) iff x != 0
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
         auto prepared = prepare_bindings(target, bindings);
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         return solve_recursive(target, prepared, {}, 0);
@@ -732,7 +820,7 @@ log(x^n) = n * log(x) iff x != 0
     ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
         auto prepared = prepare_bindings(target, bindings);
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
@@ -1282,7 +1370,7 @@ private:
             auto rhs_expr = rp.parse_expr();
             std::string desc = eq_part;
             std::string cond = (is_iff && !cond_part.empty()) ? trim(cond_part) : "";
-            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, cond});
+            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, cond, is_undefined(rhs_expr)});
             return;
         }
 
@@ -1565,7 +1653,7 @@ private:
         simplify_clear_assumptions();
         auto result = simplify(resolved);
         for (auto& a : simplify_get_assumptions())
-            trace.step("  assuming: " + a.desc, depth + 1);
+            trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 1);
 
         // If the target appears in the resolved expression, we have:
         //   target = f(target, ...) — try to solve algebraically
@@ -2073,7 +2161,7 @@ private:
             auto simplified = simplify(resolved);
             auto assumptions = simplify_get_assumptions();
             for (auto& a : assumptions)
-                trace.step("  assuming: " + a.desc, depth + 2);
+                trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
             double result = evaluate(simplified);
             if (std::isnan(result) || std::isinf(result)) {
                 trace.step("result is " + std::string(std::isnan(result) ? "NaN" : "inf")

@@ -202,6 +202,39 @@ public:
     // Is this a purely discrete set (no intervals)?
     bool is_discrete() const { return intervals_.empty(); }
 
+    // Does this set cover all real numbers (-inf, +inf)?
+    // Checks if intervals + discrete points leave no gaps.
+    bool covers_reals() const {
+        if (intervals_.empty() && discrete_.empty()) return false;
+        // Merge all coverage into sorted intervals (discrete points become [v,v])
+        std::vector<Interval> all = intervals_;
+        for (double d : discrete_)
+            all.push_back({d, d, true, true});
+        std::sort(all.begin(), all.end(),
+            [](auto& a, auto& b) {
+                return a.low < b.low || (a.low == b.low && a.low_inclusive > b.low_inclusive);
+            });
+        // Walk intervals tracking coverage boundary and its inclusivity
+        constexpr double INF = std::numeric_limits<double>::infinity();
+        double covered_to = -INF;
+        bool covered_inclusive = false;  // is covered_to itself included?
+        for (auto& iv : all) {
+            // Can this interval extend from where we left off?
+            if (iv.low > covered_to) return false;  // numeric gap
+            if (iv.low == covered_to && covered_to != -INF
+                && !covered_inclusive && !iv.low_inclusive)
+                return false;  // both sides open at the boundary
+            // Extend coverage
+            if (iv.high > covered_to) {
+                covered_to = iv.high;
+                covered_inclusive = iv.high_inclusive;
+            } else if (iv.high == covered_to) {
+                covered_inclusive = covered_inclusive || iv.high_inclusive;
+            }
+        }
+        return covered_to == INF;
+    }
+
     // String representation
     std::string to_string() const {
         if (empty()) return "{}";
@@ -394,13 +427,23 @@ inline const std::map<std::string, double>& builtin_constants() {
 }
 
 // ============================================================================
+//  Undefined: symbolic domain boundary
+// ============================================================================
+
+// "undefined" is represented as Var("undefined") — no parser changes needed.
+// It propagates through arithmetic (like NaN) and throws at evaluation time.
+inline bool is_undefined(const ExprPtr& e) {
+    return e && e->type == ExprType::VAR && e->name == "undefined";
+}
+
+// ============================================================================
 //  Tree queries
 // ============================================================================
 
 inline void collect_vars(const Expr& e, std::set<std::string>& out) {
     switch (e.type) {
         case ExprType::NUM:       break;
-        case ExprType::VAR:       out.insert(e.name); break;
+        case ExprType::VAR:       if (e.name != "undefined") out.insert(e.name); break;
         case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
         case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
         case ExprType::FUNC_CALL: for (auto& a : e.args) collect_vars(*a, out); break;
@@ -612,6 +655,8 @@ inline double evaluate(const Expr& e) {
     switch (e.type) {
         case ExprType::NUM: return e.num;
         case ExprType::VAR: {
+            if (e.name == "undefined")
+                throw std::runtime_error("Expression is undefined");
             auto& consts = builtin_constants();
             auto it = consts.find(e.name);
             if (it != consts.end()) return it->second;
@@ -799,6 +844,7 @@ inline void group_multiplicative(std::vector<std::pair<ExprPtr, double>>& factor
 struct SimplifyAssumption {
     ExprPtr expr;       // the expression constrained (may be null for general conditions)
     std::string desc;   // human-readable: "x - 3 != 0", "x > 0"
+    bool inherent = false;  // true = original was also undefined here (safe to always apply)
 };
 
 inline std::vector<SimplifyAssumption>& simplify_assumptions_() {
@@ -806,16 +852,18 @@ inline std::vector<SimplifyAssumption>& simplify_assumptions_() {
     return assumptions;
 }
 
-inline void simplify_record_assumption(const ExprPtr& expr, const std::string& desc) {
+inline void simplify_record_assumption(const ExprPtr& expr, const std::string& desc,
+                                       bool inherent = false) {
     auto& a = simplify_assumptions_();
     for (auto& existing : a)
         if (existing.desc == desc) return;  // dedup by string
-    a.push_back({expr, desc});
+    a.push_back({expr, desc, inherent});
 }
 
-inline void simplify_assume_nonzero(const ExprPtr& expr) {
+// Division cancellation: S/S → 1 is inherently safe (S was already undefined at S=0)
+inline void simplify_assume_nonzero(const ExprPtr& expr, bool inherent = true) {
     if (is_num(expr)) return;
-    simplify_record_assumption(expr, expr_to_string(expr) + " != 0");
+    simplify_record_assumption(expr, expr_to_string(expr) + " != 0", inherent);
 }
 
 inline std::vector<SimplifyAssumption> simplify_get_assumptions() {
@@ -841,6 +889,8 @@ struct RewriteRule {
     // Condition template: pattern variables are substituted with bound expressions.
     // e.g., "x != 0" with binding x→(a+b) becomes "(a + b) != 0"
     std::string condition;
+    bool is_undefined_branch = false;  // true when replacement is "undefined"
+    int group_index = -1;              // index into rewrite_rule_groups_ (-1 = ungrouped)
 };
 
 inline const std::vector<RewriteRule>*& simplify_rewrite_rules_() {
@@ -848,20 +898,29 @@ inline const std::vector<RewriteRule>*& simplify_rewrite_rules_() {
     return rules;
 }
 
-inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules) {
+// Exhaustiveness flags indexed by group_index (parallel to rewrite_rule_groups_)
+inline const std::vector<bool>*& simplify_rewrite_exhaustive_() {
+    static thread_local const std::vector<bool>* flags = nullptr;
+    return flags;
+}
+
+inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
+                                        const std::vector<bool>* exhaustive = nullptr) {
     simplify_rewrite_rules_() = rules;
+    simplify_rewrite_exhaustive_() = exhaustive;
 }
 
 inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
     return simplify_rewrite_rules_();
 }
 
-// RAII guard: sets rewrite rules on construction, clears on destruction
+// RAII guard: sets rewrite rules + exhaustiveness flags, clears on destruction
 struct RewriteRulesGuard {
-    RewriteRulesGuard(const std::vector<RewriteRule>* rules) {
-        simplify_set_rewrite_rules(rules);
+    RewriteRulesGuard(const std::vector<RewriteRule>* rules,
+                      const std::vector<bool>* exhaustive = nullptr) {
+        simplify_set_rewrite_rules(rules, exhaustive);
     }
-    ~RewriteRulesGuard() { simplify_set_rewrite_rules(nullptr); }
+    ~RewriteRulesGuard() { simplify_set_rewrite_rules(nullptr, nullptr); }
     RewriteRulesGuard(const RewriteRulesGuard&) = delete;
     RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
 };
@@ -982,6 +1041,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 
         case ExprType::UNARY_NEG: {
             auto c = simplify_once(e->child);
+            if (is_undefined(c)) return c;
             if (is_num(c)) return Expr::Num(-c->num);
             if (is_neg(c)) return c->child;
             if (c->type == ExprType::BINOP && is_additive(c->op))
@@ -996,6 +1056,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             bool all_num = true;
             for (auto& a : e->args) {
                 sa.push_back(simplify_once(a));
+                if (is_undefined(sa.back())) return sa.back();  // propagate
                 if (!is_num(sa.back())) all_num = false;
             }
             auto s = Expr::Call(e->name, sa);
@@ -1008,6 +1069,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
         case ExprType::BINOP: {
             auto l = simplify_once(e->left);
             auto r = simplify_once(e->right);
+            if (is_undefined(l) || is_undefined(r)) return Expr::Var("undefined");
             if (is_num(l) && is_num(r))
                 return Expr::Num(binop_info(e->op).eval(l->num, r->num));
 
@@ -1074,12 +1136,18 @@ inline std::string substitute_condition(const std::string& cond,
 inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
     auto* rules = simplify_get_rewrite_rules();
     if (!rules) return e;
+    auto* exhaustive_flags = simplify_rewrite_exhaustive_();
     for (auto& rule : *rules) {
+        if (rule.is_undefined_branch) continue;  // skip: exists for exhaustiveness only
         auto bindings = match_pattern(rule.pattern, e);
         if (!bindings) continue;
-        if (!rule.condition.empty())
+        if (!rule.condition.empty()) {
+            bool inherent = exhaustive_flags && rule.group_index >= 0
+                && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
+                && (*exhaustive_flags)[rule.group_index];
             simplify_record_assumption(nullptr,
-                substitute_condition(rule.condition, *bindings));
+                substitute_condition(rule.condition, *bindings), inherent);
+        }
         return apply_rewrite(rule.replacement, *bindings);
     }
     return e;

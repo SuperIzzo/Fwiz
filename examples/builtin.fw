@@ -2,6 +2,7 @@
 # These replace hardcoded C++ simplification rules.
 # Convention: LHS is pattern to match, RHS is replacement (left → right).
 # Builtin constants (e, pi, phi) match literally in patterns, not as wildcards.
+# Rules with "undefined" RHS declare domain boundaries for exhaustiveness checking.
 
 # Trig: odd/even symmetry
 sin(-x) = -sin(x)
@@ -24,3 +25,7 @@ sqrt(x^2) = abs(x)
 log(e^x) = x
 e^log(x) = x
 log(x^n) = n * log(x) iff x != 0
+
+# Division: exhaustive (both branches cover all reals)
+x/x = 1 iff x != 0
+x/x = undefined iff x = 0
