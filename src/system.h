@@ -1281,19 +1281,8 @@ private:
             auto lhs_expr = lp.parse_expr();
             auto rhs_expr = rp.parse_expr();
             std::string desc = eq_part;
-            // Parse condition: "iff VAR != 0" → assume_nonzero_var
-            std::string assume_var;
-            if (is_iff && !cond_part.empty()) {
-                auto ct = trim(cond_part);
-                // Match pattern: "VAR != 0"
-                auto neq = ct.find("!=");
-                if (neq != std::string::npos) {
-                    auto var = trim(ct.substr(0, neq));
-                    auto val = trim(ct.substr(neq + 2));
-                    if (val == "0") assume_var = var;
-                }
-            }
-            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, assume_var});
+            std::string cond = (is_iff && !cond_part.empty()) ? trim(cond_part) : "";
+            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, cond});
             return;
         }
 
