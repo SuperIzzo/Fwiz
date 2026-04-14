@@ -602,7 +602,7 @@ x/x = undefined iff x = 0
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings);
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Collect ALL results from enumerate_candidates
@@ -811,8 +811,8 @@ x/x = undefined iff x = 0
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
         auto prepared = prepare_bindings(target, bindings);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         return solve_recursive(target, prepared, {}, 0);
     }
@@ -820,8 +820,8 @@ x/x = undefined iff x = 0
     ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_);
         auto prepared = prepare_bindings(target, bindings);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
 

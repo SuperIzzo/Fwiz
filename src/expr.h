@@ -904,6 +904,12 @@ inline const std::vector<bool>*& simplify_rewrite_exhaustive_() {
     return flags;
 }
 
+// Numeric bindings — the simplifier uses these to check rewrite rule conditions
+inline const std::map<std::string, double>*& simplify_bindings_() {
+    static thread_local const std::map<std::string, double>* b = nullptr;
+    return b;
+}
+
 inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
                                         const std::vector<bool>* exhaustive = nullptr) {
     simplify_rewrite_rules_() = rules;
@@ -914,13 +920,18 @@ inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
     return simplify_rewrite_rules_();
 }
 
-// RAII guard: sets rewrite rules + exhaustiveness flags, clears on destruction
+// RAII guard: sets rewrite rules + exhaustiveness flags + bindings, clears on destruction
 struct RewriteRulesGuard {
     RewriteRulesGuard(const std::vector<RewriteRule>* rules,
-                      const std::vector<bool>* exhaustive = nullptr) {
+                      const std::vector<bool>* exhaustive = nullptr,
+                      const std::map<std::string, double>* bindings = nullptr) {
         simplify_set_rewrite_rules(rules, exhaustive);
+        simplify_bindings_() = bindings;
     }
-    ~RewriteRulesGuard() { simplify_set_rewrite_rules(nullptr, nullptr); }
+    ~RewriteRulesGuard() {
+        simplify_set_rewrite_rules(nullptr, nullptr);
+        simplify_bindings_() = nullptr;
+    }
     RewriteRulesGuard(const RewriteRulesGuard&) = delete;
     RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
 };
@@ -1013,6 +1024,18 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
         for (auto& [rb, re] : rf) {
             if (!rb) continue;
             if (expr_equal(lb, rb)) {
+                // Context-aware: don't cancel if the term is known to be zero
+                bool is_zero_term = false;
+                if (auto* bindings = simplify_bindings_()) {
+                    try {
+                        auto resolved = lb;
+                        for (auto& [var, val] : *bindings)
+                            resolved = substitute(resolved, var, Expr::Num(val));
+                        double v = evaluate(*resolved);
+                        if (std::abs(v) < EPSILON_ZERO) is_zero_term = true;
+                    } catch (...) {}
+                }
+                if (is_zero_term) continue;  // skip: would be 0/0
                 simplify_assume_nonzero(lb);
                 le -= re; re = 0; rb = nullptr; changed = true;
             }
@@ -1133,6 +1156,92 @@ inline std::string substitute_condition(const std::string& cond,
     return result;
 }
 
+// Check if a rewrite rule condition is violated by numeric bindings.
+// Returns true if the condition is definitely false (should skip rule).
+// Returns false if condition holds or can't be determined (should apply rule).
+// Works by substituting the condition string and checking simple patterns.
+inline bool condition_violated(const std::string& cond,
+        const std::map<std::string, ExprPtr>& bindings) {
+    // Try to resolve each bound expression to a number
+    // Use both the expression itself and the global bindings
+    auto* global_bindings = simplify_bindings_();
+    std::map<std::string, double> numeric;
+    for (auto& [var, expr] : bindings) {
+        if (is_num(expr)) {
+            numeric[var] = expr->num;
+        } else if (is_var(expr) && global_bindings) {
+            auto it = global_bindings->find(expr->name);
+            if (it != global_bindings->end())
+                numeric[var] = it->second;
+            // else: symbolic, can't resolve this variable
+        }
+        // else: complex symbolic expression, can't check
+    }
+
+    // Check simple clause: "VAR CMP VALUE"
+    auto check_clause = [&](const std::string& clause) -> int {
+        // Returns: 1 = true, 0 = false, -1 = can't determine
+        // Find the comparison operator
+        struct { const char* str; size_t len; } ops[] = {
+            {"!=", 2}, {">=", 2}, {"<=", 2}, {"==", 2}, {">", 1}, {"<", 1}, {"=", 1}
+        };
+        for (auto& [opstr, oplen] : ops) {
+            auto p = clause.find(opstr);
+            if (p == std::string::npos) continue;
+            // Skip if this = is part of a longer operator
+            if (oplen == 1 && opstr[0] == '=' && p > 0
+                && (clause[p-1] == '!' || clause[p-1] == '>' || clause[p-1] == '<'))
+                continue;
+            if (oplen == 1 && opstr[0] == '=' && p + 1 < clause.size() && clause[p+1] == '=')
+                continue;
+            if (oplen == 1 && opstr[0] == '>' && p + 1 < clause.size() && clause[p+1] == '=')
+                continue;
+            if (oplen == 1 && opstr[0] == '<' && p + 1 < clause.size() && clause[p+1] == '=')
+                continue;
+
+            // Extract LHS and RHS variable/value
+            auto lhs_s = clause.substr(0, p);
+            auto rhs_s = clause.substr(p + oplen);
+            while (!lhs_s.empty() && lhs_s.back() == ' ') lhs_s.pop_back();
+            while (!lhs_s.empty() && lhs_s.front() == ' ') lhs_s.erase(lhs_s.begin());
+            while (!rhs_s.empty() && rhs_s.back() == ' ') rhs_s.pop_back();
+            while (!rhs_s.empty() && rhs_s.front() == ' ') rhs_s.erase(rhs_s.begin());
+
+            // Resolve to numbers
+            auto resolve = [&](const std::string& s) -> std::optional<double> {
+                auto it = numeric.find(s);
+                if (it != numeric.end()) return it->second;
+                try { return std::stod(s); } catch (...) {}
+                return std::nullopt;
+            };
+            auto lval = resolve(lhs_s);
+            auto rval = resolve(rhs_s);
+            if (!lval || !rval) return -1;  // can't determine
+
+            std::string op(opstr, oplen);
+            if (op == "!=") return std::abs(*lval - *rval) > EPSILON_ZERO ? 1 : 0;
+            if (op == "=" || op == "==") return std::abs(*lval - *rval) <= EPSILON_ZERO ? 1 : 0;
+            if (op == ">") return *lval > *rval + EPSILON_ZERO ? 1 : 0;
+            if (op == ">=") return *lval >= *rval - EPSILON_ZERO ? 1 : 0;
+            if (op == "<") return *lval < *rval - EPSILON_ZERO ? 1 : 0;
+            if (op == "<=") return *lval <= *rval + EPSILON_ZERO ? 1 : 0;
+        }
+        return -1;
+    };
+
+    // Split by && and check each clause
+    std::string remaining = cond;
+    while (!remaining.empty()) {
+        auto pos = remaining.find("&&");
+        std::string clause = (pos != std::string::npos)
+            ? remaining.substr(0, pos) : remaining;
+        remaining = (pos != std::string::npos) ? remaining.substr(pos + 2) : "";
+        int result = check_clause(clause);
+        if (result == 0) return true;   // clause is false → condition violated
+    }
+    return false;  // all clauses passed or undetermined
+}
+
 inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
     auto* rules = simplify_get_rewrite_rules();
     if (!rules) return e;
@@ -1142,6 +1251,8 @@ inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
         auto bindings = match_pattern(rule.pattern, e);
         if (!bindings) continue;
         if (!rule.condition.empty()) {
+            // Context-aware: if bound values are numeric, check condition
+            if (condition_violated(rule.condition, *bindings)) continue;
             bool inherent = exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index];

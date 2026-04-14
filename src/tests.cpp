@@ -8788,6 +8788,64 @@ void test_undefined() {
     }
 }
 
+void test_context_aware_simplification() {
+    SECTION("Context-Aware Simplification");
+
+    // x/x at x=0 should NOT return 1 — the rewrite rule condition (x != 0) is violated
+    // Tests both resolve() and resolve_all() paths
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x/x\n");
+        // resolve() path
+        bool threw_resolve = false;
+        try { sys.resolve("y", {{"x", 0}}); }
+        catch (...) { threw_resolve = true; }
+        ASSERT(threw_resolve, "x/x at x=0 (resolve): should error, not return 1");
+        // resolve_all() path — should throw or return empty, not {1}
+        bool threw_all = false;
+        bool got_one = false;
+        try {
+            auto result = sys.resolve_all("y", {{"x", 0}});
+            got_one = !result.discrete().empty();
+        } catch (...) { threw_all = true; }
+        ASSERT(threw_all || !got_one,
+            "x/x at x=0 (resolve_all): should be empty or throw, not return 1");
+    }
+
+    // x/x at x=0 should fall through to alternative equation
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x/x\ny = 42 iff x <= 0\n");
+        try {
+            double result = sys.resolve("y", {{"x", 0}});
+            ASSERT(std::abs(result - 42) < 1e-9,
+                "x/x fallback: y = 42 when x=0 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "x/x fallback: should not throw (got: " + std::string(e.what()) + ")");
+        }
+    }
+
+    // x/x at x=5 should still work fine
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x/x\n");
+        auto result = sys.resolve_all("y", {{"x", 5}});
+        ASSERT(!result.discrete().empty(), "x/x at x=5: has result");
+        ASSERT(std::abs(result.discrete()[0] - 1) < 1e-9,
+            "x/x at x=5: y = 1 (got " + std::to_string(result.discrete()[0]) + ")");
+    }
+
+    // (a+b)/(a+b) at a=-b should error
+    {
+        FormulaSystem sys;
+        sys.load_string("y = (a+b)/(a+b)\n");
+        bool threw = false;
+        try { sys.resolve("y", {{"a", 3}, {"b", -3}}); }
+        catch (...) { threw = true; }
+        ASSERT(threw, "(a+b)/(a+b) at a=-b: should error");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -9006,6 +9064,7 @@ int main() {
     test_cross_equation_validation();
     test_rewrite_rules();
     test_undefined();
+    test_context_aware_simplification();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
