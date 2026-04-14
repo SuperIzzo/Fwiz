@@ -8551,6 +8551,243 @@ void test_rewrite_rules() {
     }
 }
 
+void test_undefined() {
+    SECTION("Undefined Keyword");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // 1. Parse: "undefined" parses as Var("undefined")
+    {
+        auto e = parse("undefined");
+        ASSERT(e->type == ExprType::VAR, "parse: undefined is VAR");
+        ASSERT(e->name == "undefined", "parse: name is 'undefined'");
+        ASSERT(is_undefined(e), "parse: is_undefined() true");
+    }
+
+    // 2. is_undefined predicate
+    {
+        ASSERT(!is_undefined(Expr::Num(0)), "is_undefined: Num(0) false");
+        ASSERT(!is_undefined(Expr::Var("x")), "is_undefined: Var(x) false");
+        ASSERT(is_undefined(Expr::Var("undefined")), "is_undefined: Var(undefined) true");
+    }
+
+    // 3. Evaluate throws
+    {
+        bool threw = false;
+        try { evaluate(*parse("undefined")); }
+        catch (const std::runtime_error& e) {
+            threw = true;
+            ASSERT(std::string(e.what()).find("undefined") != std::string::npos,
+                "evaluate: error mentions 'undefined'");
+        }
+        ASSERT(threw, "evaluate: undefined throws");
+    }
+
+    // 4. expr_to_string
+    {
+        ASSERT_EQ(expr_to_string(Expr::Var("undefined")), "undefined",
+            "to_string: prints 'undefined'");
+    }
+
+    // 5. Simplify propagation: -undefined → undefined
+    {
+        auto e = simplify(Expr::Neg(Expr::Var("undefined")));
+        ASSERT(is_undefined(e), "propagate: -undefined → undefined");
+    }
+
+    // 6. Simplify propagation: undefined + x → undefined
+    {
+        auto e = simplify(Expr::BinOpExpr(BinOp::ADD,
+            Expr::Var("undefined"), Expr::Var("x")));
+        ASSERT(is_undefined(e), "propagate: undefined + x → undefined");
+    }
+
+    // 7. Simplify propagation: x * undefined → undefined
+    {
+        auto e = simplify(Expr::BinOpExpr(BinOp::MUL,
+            Expr::Var("x"), Expr::Var("undefined")));
+        ASSERT(is_undefined(e), "propagate: x * undefined → undefined");
+    }
+
+    // 8. Simplify propagation: 0 * undefined → undefined (conservative)
+    {
+        auto e = simplify(Expr::BinOpExpr(BinOp::MUL,
+            Expr::Num(0), Expr::Var("undefined")));
+        ASSERT(is_undefined(e), "propagate: 0 * undefined → undefined");
+    }
+
+    // 9. Simplify propagation: sin(undefined) → undefined
+    {
+        auto e = simplify(Expr::Call("sin", {Expr::Var("undefined")}));
+        ASSERT(is_undefined(e), "propagate: sin(undefined) → undefined");
+    }
+
+    // 10. Simplify propagation: undefined^2 → undefined
+    {
+        auto e = simplify(Expr::BinOpExpr(BinOp::POW,
+            Expr::Var("undefined"), Expr::Num(2)));
+        ASSERT(is_undefined(e), "propagate: undefined^2 → undefined");
+    }
+
+    // 11. collect_vars excludes undefined
+    {
+        std::set<std::string> vars;
+        collect_vars(*Expr::BinOpExpr(BinOp::ADD,
+            Expr::Var("x"), Expr::Var("undefined")), vars);
+        ASSERT(vars.count("x") == 1, "collect_vars: has x");
+        ASSERT(vars.count("undefined") == 0, "collect_vars: no undefined");
+    }
+
+    // 12. Bare undefined doesn't simplify away
+    {
+        auto e = simplify(Expr::Var("undefined"));
+        ASSERT(is_undefined(e), "simplify: bare undefined stays");
+    }
+
+    // 13. Rewrite rule: x/x = undefined iff x = 0 parsed correctly
+    {
+        FormulaSystem sys;
+        sys.load_string("x/x = undefined iff x = 0\n");
+        bool found_undef = false;
+        for (auto& r : sys.rewrite_rules)
+            if (r.is_undefined_branch && r.desc.find("x/x") != std::string::npos)
+                found_undef = true;
+        ASSERT(found_undef, "parse: x/x = undefined branch detected");
+    }
+
+    // 14. Undefined branch skipped: a/a still simplifies to 1
+    {
+        FormulaSystem sys;
+        sys.load_string("y = a / a\n");
+        auto results = sys.derive_all("y", {}, {{"a", "a"}});
+        ASSERT(!results.empty(), "undefined skip: has result");
+        ASSERT(results[0] == "1", "undefined skip: a/a = 1 (got " + results[0] + ")");
+    }
+
+    // 15. Builtin has both x/x branches
+    {
+        FormulaSystem sys;
+        sys.load_builtins();
+        int xdivx_count = 0;
+        bool has_defined = false, has_undefined = false;
+        for (auto& r : sys.rewrite_rules) {
+            if (expr_to_string(r.pattern) == "x / x") {
+                xdivx_count++;
+                if (r.is_undefined_branch) has_undefined = true;
+                else has_defined = true;
+            }
+        }
+        ASSERT(xdivx_count == 2, "builtin: x/x has 2 branches (got "
+            + std::to_string(xdivx_count) + ")");
+        ASSERT(has_defined, "builtin: x/x has defined branch");
+        ASSERT(has_undefined, "builtin: x/x has undefined branch");
+    }
+
+    // 16. ValueSet::covers_reals()
+    {
+        // (-inf, +inf) covers reals
+        ASSERT(ValueSet::all().covers_reals(), "covers_reals: all() = true");
+        // Single point doesn't
+        ASSERT(!ValueSet::eq(0).covers_reals(), "covers_reals: {0} = false");
+        // ne(0) = (-inf,0) | (0,+inf) doesn't cover 0
+        ASSERT(!ValueSet::ne(0).covers_reals(), "covers_reals: ne(0) = false");
+        // ne(0) | {0} covers reals
+        auto full = ValueSet::ne(0).unite(ValueSet::eq(0));
+        ASSERT(full.covers_reals(), "covers_reals: ne(0)|{0} = true");
+        // gt(0) doesn't
+        ASSERT(!ValueSet::gt(0).covers_reals(), "covers_reals: (0,+inf) = false");
+        // gt(0) | le(0) covers reals
+        auto full2 = ValueSet::gt(0).unite(ValueSet::le(0));
+        ASSERT(full2.covers_reals(), "covers_reals: (0,+inf)|(-inf,0] = true");
+    }
+
+    // 17. Rewrite rule grouping: x/x group is exhaustive
+    {
+        FormulaSystem sys;
+        sys.load_builtins();
+        bool found_exhaustive = false;
+        for (auto& g : sys.rewrite_rule_groups_) {
+            if (g.pattern_key == "x / x") {
+                found_exhaustive = g.exhaustive;
+                ASSERT(g.rule_indices.size() == 2,
+                    "group: x/x has 2 rules (got " + std::to_string(g.rule_indices.size()) + ")");
+            }
+        }
+        ASSERT(found_exhaustive, "group: x/x is exhaustive");
+    }
+
+    // 18. Non-exhaustive group: single-branch rule
+    {
+        FormulaSystem sys;
+        sys.load_string("log(x^n) = n * log(x) iff x != 0\n");
+        bool found_non_exhaustive = false;
+        for (auto& g : sys.rewrite_rule_groups_) {
+            if (g.pattern_key.find("log") != std::string::npos
+                && g.rule_indices.size() == 1) {
+                found_non_exhaustive = !g.exhaustive;
+            }
+        }
+        ASSERT(found_non_exhaustive, "group: log(x^n) single branch is not exhaustive");
+    }
+
+    // 19. Custom exhaustive group
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "foo(x) = x^2 iff x >= 0\n"
+            "foo(x) = -x^2 iff x < 0\n"
+        );
+        bool found_exhaustive = false;
+        for (auto& g : sys.rewrite_rule_groups_) {
+            if (g.pattern_key == "foo(x)" && g.rule_indices.size() == 2)
+                found_exhaustive = g.exhaustive;
+        }
+        ASSERT(found_exhaustive, "group: foo(x) with >= 0 and < 0 is exhaustive");
+    }
+
+    // 20. Inherent assumption: x/x = 1 from exhaustive group
+    {
+        FormulaSystem sys;
+        sys.load_string("y = a / a\n");
+        simplify_clear_assumptions();
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        auto e = simplify(parse("a / a"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(expr_to_string(e) == "1", "inherent: a/a = 1 (got " + expr_to_string(e) + ")");
+        bool found_inherent = false;
+        for (auto& a : assumptions)
+            if (a.desc.find("a") != std::string::npos
+                && a.desc.find("!= 0") != std::string::npos
+                && a.inherent)
+                found_inherent = true;
+        ASSERT(found_inherent, "inherent: a != 0 marked as inherent");
+    }
+
+    // 21. Non-inherent assumption: log(x^n) from non-exhaustive group
+    {
+        FormulaSystem sys;
+        sys.load_string("y = log(a^3)\n");
+        simplify_clear_assumptions();
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        auto e = simplify(parse("log(a^3)"));
+        auto assumptions = simplify_get_assumptions();
+        ASSERT(expr_to_string(e) == "3 * log(a)",
+            "non-inherent: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
+        bool found_non_inherent = false;
+        for (auto& a : assumptions)
+            if (a.desc.find("a") != std::string::npos
+                && a.desc.find("!= 0") != std::string::npos
+                && !a.inherent)
+                found_non_inherent = true;
+        ASSERT(found_non_inherent, "non-inherent: a != 0 NOT marked inherent");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -8768,6 +9005,7 @@ int main() {
     test_iff_semantics();
     test_cross_equation_validation();
     test_rewrite_rules();
+    test_undefined();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
