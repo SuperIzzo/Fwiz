@@ -230,7 +230,12 @@ public:
                         auto sec = parse_section_header(header);
                         if (!sec.name.empty()) {
                             sec.lines = {};
-                            if (!rest.empty()) sec.lines.push_back(rest);
+                            if (!rest.empty()) {
+                                // Sugar: [f(x) -> result] = x^2 → result = x^2
+                                if (rest[0] == '=' && !sec.return_var.empty())
+                                    rest = sec.return_var + " " + rest;
+                                sec.lines.push_back(rest);
+                            }
                             result.push_back(std::move(sec));
                             continue;
                         }
