@@ -9060,6 +9060,25 @@ void test_semicolon_separator() {
             ASSERT(false, "oneline threw: " + std::string(e.what()));
         }
     }
+
+    // 5. Sugar: [f(x) -> result] = expr  →  result = expr
+    {
+        auto write_fw = [](const std::string& path, const std::string& content) {
+            std::ofstream f(path);
+            f << content;
+        };
+        write_fw("/tmp/tpa_sugar.fw", "[sugar(x) -> result] = x^2 + 1\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_sugar(3)\n");
+        try {
+            double r = sys.resolve("y", {});
+            ASSERT(std::abs(r - 10) < 1e-9,
+                "sugar: sugar(3) = 10 (got " + std::to_string(r) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "sugar threw: " + std::string(e.what()));
+        }
+    }
 }
 
 void test_commutative_matching() {
