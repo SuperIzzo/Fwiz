@@ -40,7 +40,7 @@ The `.fw` extension is added automatically if omitted. Use `=?` to query a varia
 ### Run tests
 
 ```bash
-make test       # functional tests (1400+ tests)
+make test       # functional tests (1700+ tests)
 make sanitize   # memory safety checks (ASan + UBSan)
 make analyze    # static analysis (clang-tidy, zero warnings)
 ```
@@ -380,7 +380,7 @@ At each step, if a needed variable is unknown, fwiz recursively tries to solve f
 
 ### What fwiz can solve
 
-**Algebraically** (exact, instant): linear equations where the solve target appears in additions, subtractions, and multiplied/divided by constants. Like terms are combined (`y + 3 * y` → `4 * y`).
+**Algebraically** (exact, instant): linear equations, quadratic equations (`ax² + bx + c = 0` via the quadratic formula), and invertible functions (sin, cos, sqrt, log, etc. via `.fw`-defined inverse equations). Like terms are combined (`y + 3 * y` → `4 * y`).
 
 **Numerically** (enabled by default): nonlinear equations where algebraic inversion fails. Uses adaptive grid scan with Newton's method and bisection refinement. Finds all roots in the search range.
 
@@ -476,3 +476,5 @@ See the `examples/` directory:
 - **rectangle.fw** — Simple area formula (used by box.fw via formula calls)
 - **box.fw** — Box surface area and volume via cross-file formula calls to rectangle.fw
 - **factorial.fw** — Recursive factorial with conditional base case (demonstrates Turing completeness)
+- **stdlib.fw** — Standard library: abs, sign, clamp, max, min, step (pure `.fw` piecewise definitions)
+- **builtin.fw** — Built-in function documentation: sin, cos, sqrt, log, abs with `@extern` and inverse equations
