@@ -445,12 +445,100 @@ x^0.5 = sqrt(x)
             rewrite_exhaustive_flags_[i] = rewrite_rule_groups_[i].exhaustive;
     }
 
+    // Walk an expression, find FUNC_CALL nodes that aren't builtins, and convert them
+    // to formula calls using positional arg metadata from the sub-system's section header.
+    // Returns the expression with formula calls replaced by their output variables.
+    ExprPtr extract_positional_calls(const ExprPtr& e, const std::string& eq_lhs,
+                                     std::vector<FormulaCall>& calls) {
+        if (!e) return e;
+        if (e->type == ExprType::FUNC_CALL && !builtin_functions().count(e->name)) {
+            // Not a builtin — try loading as sub-system formula
+            std::string file_stem = e->name;
+            try {
+                auto& sub = load_sub_system(file_stem);
+                // Find section metadata with positional args
+                std::vector<std::string> pos_args;
+                std::string return_var;
+                for (auto& sec : sub.sections_) {
+                    if (sec.name == "" || sec.name == file_stem
+                        || file_stem.find('.') != std::string::npos) {
+                        if (!sec.positional_args.empty()) {
+                            pos_args = sec.positional_args;
+                            return_var = sec.return_var;
+                            break;
+                        }
+                    }
+                }
+                // Also check first section with matching args count
+                if (pos_args.empty()) {
+                    for (auto& sec : sub.sections_) {
+                        if (!sec.positional_args.empty()) {
+                            pos_args = sec.positional_args;
+                            return_var = sec.return_var;
+                            break;
+                        }
+                    }
+                }
+                if (pos_args.empty()) return e;  // no positional metadata
+
+                // Build FormulaCall with positional bindings
+                FormulaCall call;
+                call.file_stem = file_stem;
+                if (return_var.empty()) return_var = "result";
+                call.query_var = return_var;
+
+                // Generate unique output variable name
+                static int call_counter = 0;
+                call.output_var = "_fc" + std::to_string(call_counter++);
+
+                // Map positional args
+                for (size_t i = 0; i < e->args.size() && i < pos_args.size(); i++) {
+                    // Recursively process nested calls in the argument
+                    auto arg = extract_positional_calls(e->args[i], eq_lhs, calls);
+                    call.bindings[pos_args[i]] = arg;
+                }
+
+                calls.push_back(std::move(call));
+                return Expr::Var(calls.back().output_var);
+            } catch (...) {
+                // Sub-system not found — leave as FUNC_CALL
+                return e;
+            }
+        }
+
+        // Recurse into sub-expressions
+        if (e->type == ExprType::UNARY_NEG)
+            return Expr::Neg(extract_positional_calls(e->child, eq_lhs, calls));
+        if (e->type == ExprType::BINOP)
+            return Expr::BinOpExpr(e->op,
+                extract_positional_calls(e->left, eq_lhs, calls),
+                extract_positional_calls(e->right, eq_lhs, calls));
+        if (e->type == ExprType::FUNC_CALL) {
+            std::vector<ExprPtr> args;
+            for (auto& a : e->args)
+                args.push_back(extract_positional_calls(a, eq_lhs, calls));
+            return Expr::Call(e->name, args);
+        }
+        return e;
+    }
+
+    // Post-load: convert FUNC_CALL nodes that match sub-systems into formula calls
+    void resolve_positional_calls() {
+        for (auto& eq : equations) {
+            std::vector<FormulaCall> new_calls;
+            eq.rhs = extract_positional_calls(eq.rhs, eq.lhs_var, new_calls);
+            for (auto& c : new_calls)
+                formula_calls.push_back(std::move(c));
+        }
+    }
+
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
         sections_ = split_sections(all_lines);
         if (sections_.size() <= 1 && section.empty())
             load_lines(all_lines);
         else
             load_section(section);
+        resolve_positional_calls();
         compute_rewrite_groups();  // regroup after user rules loaded
         trace_loaded();
     }
@@ -1431,6 +1519,23 @@ private:
         sub->trace = trace;
         sub->numeric_mode = numeric_mode;
         sub->load_file(abs_path, section);
+        // Auto-select section: if no equations loaded and file has exactly one
+        // named section, load that section (common for single-function .fw files)
+        if (sub->equations.empty() && section.empty()) {
+            std::string auto_section;
+            for (auto& s : sub->sections_) {
+                if (!s.name.empty()) {
+                    if (!auto_section.empty()) { auto_section.clear(); break; } // multiple
+                    auto_section = s.name;
+                }
+            }
+            if (!auto_section.empty()) {
+                sub = std::make_shared<FormulaSystem>();
+                sub->trace = trace;
+                sub->numeric_mode = numeric_mode;
+                sub->load_file(abs_path, auto_section);
+            }
+        }
         sub_systems[cache_key] = sub;
         return *sub;
     }

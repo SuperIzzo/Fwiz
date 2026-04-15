@@ -8861,6 +8861,80 @@ void test_context_aware_simplification() {
     }
 }
 
+void test_positional_args() {
+    SECTION("Positional Arguments");
+
+    // Write test files for cross-file formula calls with positional args
+    auto write_fw = [](const std::string& path, const std::string& content) {
+        std::ofstream f(path);
+        f << content;
+    };
+
+    // 1. Basic: square(5) → square(x=5, result=?)
+    {
+        write_fw("/tmp/tpa_square.fw",
+            "[square(x) -> result]\nresult = x^2\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_square(5)\n");
+        try {
+            double result = sys.resolve("y", {});
+            ASSERT(std::abs(result - 25) < 1e-9,
+                "positional: square(5) = 25 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "positional: square(5) threw: " + std::string(e.what()));
+        }
+    }
+
+    // 2. Multiple args: myadd(3, 4) → myadd(a=3, b=4, result=?)
+    {
+        write_fw("/tmp/tpa_myadd.fw",
+            "[myadd(a, b) -> result]\nresult = a + b\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_myadd(3, 4)\n");
+        try {
+            double result = sys.resolve("y", {});
+            ASSERT(std::abs(result - 7) < 1e-9,
+                "positional: myadd(3, 4) = 7 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "positional: myadd(3, 4) threw: " + std::string(e.what()));
+        }
+    }
+
+    // 3. Reverse: solve for input given output
+    {
+        write_fw("/tmp/tpa_sq2.fw",
+            "[sq2(x) -> result]\nresult = x^2\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_sq2(x)\n");
+        try {
+            double result = sys.resolve("x", {{"y", 25}});
+            ASSERT(std::abs(result - 5) < 1e-9 || std::abs(result + 5) < 1e-9,
+                "reverse positional: sq2(x)=25 → x=±5 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "reverse positional threw: " + std::string(e.what()));
+        }
+    }
+
+    // 4. Expression args: square(2+3) → square(x=5, result=?)
+    {
+        write_fw("/tmp/tpa_sq3.fw",
+            "[sq3(x) -> result]\nresult = x^2\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_sq3(2+3)\n");
+        try {
+            double result = sys.resolve("y", {});
+            ASSERT(std::abs(result - 25) < 1e-9,
+                "positional expr: square(2+3) = 25 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "positional expr threw: " + std::string(e.what()));
+        }
+    }
+}
+
 void test_commutative_matching() {
     SECTION("Commutative Pattern Matching");
 
@@ -9235,6 +9309,7 @@ int main() {
     test_rewrite_rules();
     test_undefined();
     test_context_aware_simplification();
+    test_positional_args();
     test_commutative_matching();
     test_quadratic_formula();
 
