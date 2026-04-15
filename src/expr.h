@@ -1541,16 +1541,18 @@ struct Solution {
     std::string cond_desc;  // human-readable: "y >= 0"
 };
 
-// Inverse function table: f → f⁻¹
-inline const std::map<std::string, std::string>& inverse_functions() {
-    static const std::map<std::string, std::string> table = {
-        {"sin",  "asin"}, {"asin", "sin"},
-        {"cos",  "acos"}, {"acos", "cos"},
-        {"tan",  "atan"}, {"atan", "tan"},
-        {"log",  "exp"},  // log(x) → e^x (handled specially)
-        {"sqrt", "sqr"},  // sqrt(x) → x² (handled specially)
-    };
-    return table;
+// Function inverter: given f(inner) = rhs, produce inner = f⁻¹(rhs).
+// Returns the inverted RHS expression, or nullptr if no inverse is known.
+// Set by FormulaSystem to resolve via .fw sub-system definitions.
+using FuncInverter = std::function<ExprPtr(const std::string& func_name, const ExprPtr& rhs)>;
+
+inline FuncInverter& solve_func_inverter_() {
+    static thread_local FuncInverter inverter;
+    return inverter;
+}
+
+inline void solve_set_func_inverter(FuncInverter fn) {
+    solve_func_inverter_() = std::move(fn);
 }
 
 // Try to isolate target by peeling off invertible functions and operations.
@@ -1595,17 +1597,10 @@ inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
     // lhs = f(inner) where f has an inverse → inner = f⁻¹(rhs)
     if (lhs->type == ExprType::FUNC_CALL && lhs->args.size() == 1
         && contains_var(lhs->args[0], target)) {
-        auto& inv_table = inverse_functions();
-        auto it = inv_table.find(lhs->name);
-        if (it != inv_table.end()) {
-            ExprPtr new_rhs;
-            if (it->second == "exp")
-                new_rhs = Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), rhs);
-            else if (it->second == "sqr")
-                new_rhs = Expr::BinOpExpr(BinOp::POW, rhs, Expr::Num(2));
-            else
-                new_rhs = Expr::Call(it->second, {rhs});
-            return recurse(lhs->args[0], new_rhs);
+        auto& inverter = solve_func_inverter_();
+        if (inverter) {
+            auto new_rhs = inverter(lhs->name, rhs);
+            if (new_rhs) return recurse(lhs->args[0], new_rhs);
         }
     }
 
