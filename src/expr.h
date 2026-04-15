@@ -413,6 +413,23 @@ inline const std::map<std::string, double(*)(double)>& builtin_functions() {
     return registry;
 }
 
+// Thread-local custom function registry (set by FormulaSystem for per-system functions)
+inline const std::map<std::string, double(*)(double)>*& custom_functions_ptr_() {
+    static thread_local const std::map<std::string, double(*)(double)>* p = nullptr;
+    return p;
+}
+
+// Look up a function by name: custom first, then builtin
+inline double(*lookup_function(const std::string& name))(double) {
+    if (auto* custom = custom_functions_ptr_()) {
+        auto it = custom->find(name);
+        if (it != custom->end()) return it->second;
+    }
+    auto& builtins = builtin_functions();
+    auto it = builtins.find(name);
+    return (it != builtins.end()) ? it->second : nullptr;
+}
+
 // ============================================================================
 //  Builtin constants
 // ============================================================================
@@ -866,11 +883,9 @@ inline double evaluate(const Expr& e) {
         case ExprType::FUNC_CALL: {
             if (e.args.size() != 1)
                 throw std::runtime_error("Unknown function: " + e.name);
-            auto& registry = builtin_functions();
-            auto it = registry.find(e.name);
-            if (it == registry.end())
-                throw std::runtime_error("Unknown function: " + e.name);
-            return it->second(evaluate(*e.args[0]));
+            auto fn = lookup_function(e.name);
+            if (!fn) throw std::runtime_error("Unknown function: " + e.name);
+            return fn(evaluate(*e.args[0]));
         }
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
@@ -1117,17 +1132,20 @@ inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
     return simplify_rewrite_rules_();
 }
 
-// RAII guard: sets rewrite rules + exhaustiveness flags + bindings, clears on destruction
+// RAII guard: sets rewrite rules + exhaustiveness flags + bindings + custom functions
 struct RewriteRulesGuard {
     RewriteRulesGuard(const std::vector<RewriteRule>* rules,
                       const std::vector<bool>* exhaustive = nullptr,
-                      const std::map<std::string, double>* bindings = nullptr) {
+                      const std::map<std::string, double>* bindings = nullptr,
+                      const std::map<std::string, double(*)(double)>* custom_funcs = nullptr) {
         simplify_set_rewrite_rules(rules, exhaustive);
         simplify_bindings_() = bindings;
+        custom_functions_ptr_() = custom_funcs;
     }
     ~RewriteRulesGuard() {
         simplify_set_rewrite_rules(nullptr, nullptr);
         simplify_bindings_() = nullptr;
+        custom_functions_ptr_() = nullptr;
     }
     RewriteRulesGuard(const RewriteRulesGuard&) = delete;
     RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
@@ -1280,7 +1298,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 if (!is_num(sa.back())) all_num = false;
             }
             auto s = Expr::Call(e->name, sa);
-            if (all_num && builtin_functions().count(e->name)) return Expr::Num(evaluate(s));
+            if (all_num && lookup_function(e->name)) return Expr::Num(evaluate(s));
 
             // Function-specific rules migrated to BUILTIN_REWRITE_RULES
             return s;
