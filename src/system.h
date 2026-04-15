@@ -359,6 +359,23 @@ x^0.5 = sqrt(x)
 (x^a)^b = x^(a*b)
 )";
 
+    // Built-in function definitions — loaded as sub-systems when called.
+    // Each maps a function name to its .fw section content.
+    static const std::map<std::string, std::string>& builtin_function_defs() {
+        static const std::map<std::string, std::string> defs = {
+            {"sin",  "[sin(x) -> result]\n@extern sin\nx = asin(result)\n"},
+            {"cos",  "[cos(x) -> result]\n@extern cos\nx = acos(result)\n"},
+            {"tan",  "[tan(x) -> result]\n@extern tan\nx = atan(result)\n"},
+            {"asin", "[asin(x) -> result]\n@extern asin\nx = sin(result)\n"},
+            {"acos", "[acos(x) -> result]\n@extern acos\nx = cos(result)\n"},
+            {"atan", "[atan(x) -> result]\n@extern atan\nx = tan(result)\n"},
+            {"sqrt", "[sqrt(x) -> result]\n@extern sqrt\nx = result^2\nresult >= 0\n"},
+            {"log",  "[log(x) -> result]\n@extern log\nx = e^result\n"},
+            {"abs",  "[abs(x) -> result]\n@extern abs\nresult = x iff x >= 0\nresult = -x iff x < 0\n"},
+        };
+        return defs;
+    }
+
     void load_builtins() {
         std::istringstream ss(BUILTIN_REWRITE_RULES);
         std::string line;
@@ -1506,19 +1523,47 @@ private:
             section = file_stem.substr(dot + 1);
         }
 
+        // Check builtin function definitions first
+        auto& builtins = builtin_function_defs();
+        auto blt = builtins.find(file_part);
+
         std::string path = base_dir + "/" + file_part;
         if (path.find('.') == std::string::npos) path += ".fw";
-        std::string abs_path = std::filesystem::weakly_canonical(path).string();
+        std::string abs_path;
+        try { abs_path = std::filesystem::weakly_canonical(path).string(); }
+        catch (...) { abs_path = path; }
 
-        // Cache key includes section
-        std::string cache_key = abs_path + (section.empty() ? "" : "#" + section);
+        // Cache key: builtin functions use name directly, files use abs path
+        std::string cache_key = (blt != builtins.end())
+            ? ("@builtin:" + file_part)
+            : (abs_path + (section.empty() ? "" : "#" + section));
         auto it = sub_systems.find(cache_key);
         if (it != sub_systems.end()) return *it->second;
 
         auto sub = std::make_shared<FormulaSystem>();
         sub->trace = trace;
         sub->numeric_mode = numeric_mode;
-        sub->load_file(abs_path, section);
+
+        // Try loading from file first; fall back to builtin definition
+        bool loaded = false;
+        if (blt == builtins.end()) {
+            sub->load_file(abs_path, section);
+            loaded = true;
+        } else {
+            // Try file first (user can override builtins)
+            try {
+                std::ifstream f(abs_path);
+                if (f.is_open()) {
+                    sub->load_file(abs_path, section);
+                    loaded = true;
+                }
+            } catch (...) {}
+            if (!loaded) {
+                // Load from embedded definition
+                sub->load_string(blt->second, "@builtin:" + file_part);
+                loaded = true;
+            }
+        }
         // Auto-select section: if no equations loaded and file has exactly one
         // named section, load that section (common for single-function .fw files)
         if (sub->equations.empty() && section.empty()) {

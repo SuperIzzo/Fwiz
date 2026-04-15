@@ -1,37 +1,41 @@
-# builtin.fw — Rewrite rules for built-in functions
-# These replace hardcoded C++ simplification rules.
-# Convention: LHS is pattern to match, RHS is replacement (left → right).
-# Builtin constants (e, pi, phi) match literally in patterns, not as wildcards.
-# Rules with "undefined" RHS declare domain boundaries for exhaustiveness checking.
+# builtin.fw — Built-in function definitions
+# Each section defines: @extern for C++ evaluation, inverse equations for solving,
+# and rewrite rules for simplification.
 
-# Trig: odd/even symmetry
-sin(-x) = -sin(x)
-cos(-x) = cos(x)
+[sin(x) -> result]
+@extern sin
+x = asin(result)
 
-# Trig inverse pairs
-asin(sin(x)) = x
-acos(cos(x)) = x
-atan(tan(x)) = x
-sin(asin(x)) = x
-cos(acos(x)) = x
-tan(atan(x)) = x
+[cos(x) -> result]
+@extern cos
+x = acos(result)
 
-# abs rules
-abs(abs(x)) = abs(x)
-abs(-x) = abs(x)
+[tan(x) -> result]
+@extern tan
+x = atan(result)
 
-# sqrt / log / exp identities
-sqrt(x^2) = abs(x)
-log(e^x) = x
-e^log(x) = x
-log(x^n) = n * log(x) iff x != 0
+[asin(x) -> result]
+@extern asin
+x = sin(result)
 
-# Division: exhaustive (both branches cover all reals)
-x/x = 1 iff x != 0
-x/x = undefined iff x = 0
+[acos(x) -> result]
+@extern acos
+x = cos(result)
 
-# Power rules
-x^0 = 1
-x^1 = x
-x^0.5 = sqrt(x)
-(x^a)^b = x^(a*b)
+[atan(x) -> result]
+@extern atan
+x = tan(result)
+
+[sqrt(x) -> result]
+@extern sqrt
+x = result^2
+result >= 0
+
+[log(x) -> result]
+@extern log
+x = e^result
+
+[abs(x) -> result]
+@extern abs
+result = x iff x >= 0
+result = -x iff x < 0
