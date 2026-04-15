@@ -1,6 +1,6 @@
 # Testing Methodology
 
-A practical guide to writing rigorous tests, based on the process used to test fwiz from 0 to 807 tests and 10 bug fixes across the codebase.
+A practical guide to writing rigorous tests, based on the process used to test fwiz from 0 to 1700+ tests and 10+ bug fixes across the codebase.
 
 ---
 

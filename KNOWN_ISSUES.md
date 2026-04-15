@@ -30,17 +30,15 @@ Query: `x=?, r1=5, r2=4, y=0` → returns 4 values (±5 from circle 1, 2 and 10 
 
 This is related to issue #1 (simultaneous equations) — both require the solver to reason across multiple equations at once.
 
-## 3. Quadratic formula
+## 3. Quadratic formula — ✅ RESOLVED
 
+Algebraic quadratic solving now works. `decompose_quadratic` in `solve_for_all()` flattens expressions into additive terms, classifies each by degree in the target variable, and applies the quadratic formula. Returns two `Solution` structs with discriminant condition (`b²-4ac >= 0`).
+
+```bash
+$ fwiz --no-numeric '(x=?, y=0) y = x^2 - 7*x + 12'
+x = 3
+x = 4
 ```
-y = a*x^2 + b*x + c
-```
-
-Query: `x=?, y=0, a=1, b=2, c=-10` → should give `x = -1 ± sqrt(11)`.
-
-**What happens:** Numeric solver finds both roots approximately (`x ~ -4.317, x ~ 2.317`). Algebraic solver fails because target appears in both `x²` and `x` terms.
-
-**What's needed:** `decompose_quadratic(expr, target)` that detects `ax² + bx + c` form and applies the quadratic formula. Returns two `Solution` structs with discriminant condition (`b²-4ac >= 0`).
 
 ## 3. Numeric solver explosion on multi-equation systems
 

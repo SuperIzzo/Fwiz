@@ -19,16 +19,18 @@ The long-term vision is a language where you declare mathematical relationships 
 ### Roadmap
 
 Current capabilities:
-- Linear algebraic solving (variable in additions, subtractions, multiplied/divided by constants)
+- Linear and quadratic algebraic solving (quadratic formula for `ax²+bx+c=0`)
 - Multi-equation substitution via shared variables
 - Equation chains with recursive resolution
 - Like-term combining (`y + 3*y → 4y`) via additive/multiplicative flattening
-- Built-in math functions (sqrt, sin, cos, tan, log, abs, asin, acos, atan)
+- Built-in math functions (sqrt, sin, cos, tan, log, abs, asin, acos, atan) — defined in `.fw` with `@extern` + inverse equations
+- Custom C++ function registration via `register_function()` API
 - Default values
 - Step-by-step trace output (`--steps`, `--calc`)
-- Cross-file formula calls with explicit binding maps
+- Cross-file formula calls with explicit or positional argument binding
+- Positional args: `sin(3)` maps to `sin(x=3, result=?)` via `[sin(x) -> result]`
 - Expression bindings in formula calls (`n=n-1`)
-- Conditions on equations (`: x >= 0`, compound `&&`/`||`)
+- Conditions on equations (`if x >= 0`, `iff x > 0`, compound `&&`/`||`)
 - Global conditions (standalone `x > 0` lines)
 - Conditional branching (piecewise functions via conditions + equation ordering)
 - Recursion (self-referencing formula calls with conditional base cases)
@@ -38,7 +40,12 @@ Current capabilities:
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
-- Inline comments (`# after equations`)
+- Inline comments (`# after equations`), semicolons as line separators
+- Data-driven rewrite rules (20 builtin `.fw` patterns for simplification)
+- Commutative pattern matching (N-term additive/multiplicative permutation search)
+- `undefined` keyword for explicit domain boundaries and exhaustiveness checking
+- Context-aware simplification (conditions checked against known numeric bindings)
+- Section headers with return-var sugar: `[f(x) -> result] = x^2`
 - Arena allocator for expression nodes (100% cache-friendly)
 - Numeric solving (adaptive grid scan + Newton/bisection, enabled by default)
 - Exact/approximate result classification (`=` vs `~`)
@@ -88,7 +95,7 @@ Planned (see FUTURE.md):
 └────────────────────────┴─────────────────────────────┘
 ```
 
-All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~12000 lines total including tests.
+All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~15000 lines total including tests.
 
 ### lexer.h
 
@@ -200,7 +207,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-678 tests organized into functional tests, edge cases, and robustness groups:
+1700+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -261,7 +268,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 678 tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 1700+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 
@@ -359,9 +366,22 @@ Classic Mac line endings (bare `\r` without `\n`) are not supported as line sepa
 
 ### Adding a new built-in function
 
-1. Add to the `builtin_functions()` registry in `expr.h` — it's a `std::map<std::string, double(*)(double)>`
-2. Consider whether it needs an inverse for `decompose_linear` (most functions make expressions nonlinear)
+**Via C++ API (runtime):**
+```cpp
+sys.register_function("sigmoid", my_sigmoid_fn,
+    "[sigmoid(x) -> result] @extern sigmoid; x = -log(1/result - 1)");
+```
+
+**Via embedded definition (compile-time):**
+1. Add to `builtin_function_defs()` in `system.h` — one-liner `.fw` definition
+2. Add to `builtin_functions()` in `expr.h` if C++ function pointer needed for `@extern`
 3. Add tests in `tests.cpp`
+
+**Via .fw file (no C++ changes):**
+Create a `.fw` file with a section header — it will be auto-loaded when called:
+```fw
+[myfunc(x) -> result] = x^2 + 1
+```
 
 ### Adding a solver strategy
 
@@ -371,12 +391,22 @@ Classic Mac line endings (bare `\r` without `\n`) are not supported as line sepa
 
 ### Extending the simplifier
 
-The simplifier uses **flattening** rather than case-by-case pattern matching:
-- **Additive**: `flatten_additive()` decomposes ADD/SUB chains into `(coefficient, base)` term lists. `group_additive()` combines like terms. `rebuild_additive()` reconstructs.
-- **Multiplicative**: `flatten_multiplicative()` decomposes MUL chains into `(base, exponent)` factor lists. `group_multiplicative()` combines matching bases. `rebuild_multiplicative()` reconstructs.
-- **Division**: handled with targeted rules (not flattened) to preserve readable forms like `x / 2`. Cross-term cancellation via flatten-both-sides.
+**Preferred: add a `.fw` rewrite rule** — no C++ changes needed:
+```fw
+# In BUILTIN_REWRITE_RULES or a .fw file:
+sin(-x) = -sin(x)
+log(x^n) = n * log(x) iff x != 0
+x/x = 1 iff x != 0
+x/x = undefined iff x = 0
+```
 
-To add a new simplification: check if it can be handled by extending the flattening logic before adding a new case-by-case rule.
+Rewrite rules support conditions (`iff`), domain exhaustiveness checking (`undefined` branches), and context-aware evaluation (conditions checked against known bindings).
+
+**Structural simplification stays in C++:**
+- **Additive**: `flatten_additive()` decomposes ADD/SUB chains into `(coefficient, base)` term lists. `group_additive()` combines like terms.
+- **Multiplicative**: `flatten_multiplicative()` decomposes MUL chains into `(base, exponent)` factor lists. `group_multiplicative()` combines matching bases.
+- **Division**: Cross-term cancellation via flatten-both-sides, context-aware zero-check.
+- **Constant folding**: `2 + 3 → 5`, `0 * x → 0`, etc.
 
 ---
 

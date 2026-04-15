@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (1400+)
+make test         # run all tests (1700+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
@@ -27,15 +27,23 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
-**Solver:** `enumerate_candidates()` generates candidates (6 strategies), shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results.
+**Solver:** `enumerate_candidates()` generates candidates (6 strategies), shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results. Algebraic solver includes quadratic formula (`decompose_quadratic` detects `ax²+bx+c` form).
 
 **Numeric solver:** Strategy 6 — adaptive grid scan with Newton/bisection refinement. Enabled by default. `try_resolve_numeric()` handles equation-based root-finding and system-probe fallback (for recursive formulas). Memoization via `numeric_memo_`. Results classified as exact (`=`) or approximate (`~`) via forward verification.
 
 **Derive unfolding:** Formula call bodies are inlined into parent expressions when possible, enabling algebraic solving through formula calls. Detects self-referencing calls and falls back to direct sub-system derivation.
 
-**Simplifier:** Additive and multiplicative flattening. Extend flattening logic, don't add pattern-match rules.
+**Rewrite rules:** Data-driven simplification via `.fw` patterns. 20 builtin rules (trig symmetry, inverse pairs, abs, log/exp, power rules, division). Commutative flattened matching handles N-term additive/multiplicative permutations. Rules loaded from `BUILTIN_REWRITE_RULES` string; user `.fw` files can add more.
 
-**ValueSet:** Unified representation for conditions, ranges, and solutions. Intervals + discrete points + set operations (intersect, union, filter).
+**Function definitions:** Builtin functions (sin, cos, sqrt, log, abs, etc.) defined as embedded `.fw` sections with `@extern` for C++ evaluation and inverse equations for reverse solving. Custom functions registered via `register_function()` C++ API. Function inversion uses a thread-local callback resolved from `.fw` sub-system definitions.
+
+**Simplifier:** Additive and multiplicative flattening. Most pattern-match rules migrated to `.fw` rewrite rules. Extend flattening logic for structural simplification; add new patterns as `.fw` rules.
+
+**Pattern matcher:** `match_pattern()` with commutative flattened matching. Variables in patterns are wildcards; builtin constants match literally. Supports N-term additive permutation search and multiplicative coefficient extraction.
+
+**ValueSet:** Unified representation for conditions, ranges, and solutions. Intervals + discrete points + set operations (intersect, union, filter). `covers_reals()` for rewrite rule exhaustiveness checking.
+
+**Undefined:** Symbolic `undefined` keyword (`Var("undefined")`) for domain boundaries. Propagates through arithmetic. Rewrite rules can declare `x/x = undefined iff x = 0` for exhaustiveness checking.
 
 ## Language features
 
@@ -68,6 +76,30 @@ rectangle(area=?floor, width=width, height=depth)
 volume = floor * height
 ```
 Expression bindings: `factorial(result=?prev, n=n-1)` — `n-1` evaluated in parent scope.
+
+Positional arguments: `sin(3)` maps to `sin(x=3, result=?)` using `[sin(x) -> result]` header metadata.
+
+### Sections and function definitions
+```
+[square(x) -> result] = x^2                    # single-line with = sugar
+[abs(x) -> result]                              # multi-line piecewise
+= x iff x >= 0
+= -x iff x < 0
+[sin(x) -> result] @extern sin; x = asin(result)  # @extern + inverse
+```
+- `[name(args) -> return]` declares a section with positional args and return variable
+- `@extern func` bridges to C++ function pointer for fast numeric evaluation
+- Lines starting with `=` in a section with `-> var` expand to `var = ...`
+- `;` works as a line separator anywhere
+
+### Rewrite rules
+```
+sin(-x) = -sin(x)                              # simplification pattern
+log(x^n) = n * log(x) iff x != 0              # with condition
+x/x = 1 iff x != 0                            # exhaustive pair...
+x/x = undefined iff x = 0                     # ...covers full domain
+```
+Complex LHS (not `var = expr`) parsed as rewrite rules. Variables are wildcards; builtin constants match literally.
 
 ### Multiple returns
 - `x=?` — all solutions (returns ValueSet)
