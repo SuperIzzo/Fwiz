@@ -2152,7 +2152,30 @@ private:
                 sub_sys.max_formula_depth = max_formula_depth;
                 for (auto& [sv, val] : sub_binds)
                     trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
-                double result = sub_sys.resolve(resolve_var, sub_binds);
+
+                // @extern fast path: if sub-system has extern_func and we're
+                // resolving the return var with all inputs known, call C++ directly
+                double result;
+                bool used_extern = false;
+                for (auto& sec : sub_sys.sections_) {
+                    if (!sec.extern_func.empty() && resolve_var == sec.return_var) {
+                        auto& registry = builtin_functions();
+                        auto fit = registry.find(sec.extern_func);
+                        if (fit != registry.end() && sec.positional_args.size() == 1) {
+                            auto ait = sub_binds.find(sec.positional_args[0]);
+                            if (ait != sub_binds.end()) {
+                                result = fit->second(ait->second);
+                                trace.step("  @extern " + sec.extern_func
+                                    + "(" + fmt_num(ait->second) + ") = "
+                                    + fmt_num(result), depth + 2);
+                                used_extern = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!used_extern)
+                    result = sub_sys.resolve(resolve_var, sub_binds);
                 if (std::isnan(result) || std::isinf(result)) { had_nan_inf = true; return false; }
                 trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
                 bindings[target] = result;

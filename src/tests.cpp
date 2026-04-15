@@ -8933,6 +8933,43 @@ void test_positional_args() {
             ASSERT(false, "positional expr threw: " + std::string(e.what()));
         }
     }
+
+    // 5. @extern fast path: use C++ function pointer directly
+    {
+        write_fw("/tmp/tpa_mysin.fw",
+            "[mysin(x) -> result]\n@extern sin\nresult = x\n");  // fallback eq
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_mysin(1.5707963267948966)\n");  // sin(pi/2)
+        try {
+            double result = sys.resolve("y", {});
+            ASSERT(std::abs(result - 1.0) < 1e-6,
+                "@extern: sin(pi/2) = 1 (got " + std::to_string(result) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "@extern: threw: " + std::string(e.what()));
+        }
+    }
+
+    // 6. @extern with inverse: solve for input given output
+    {
+        write_fw("/tmp/tpa_mysqrt.fw",
+            "[mysqrt(x) -> result]\n@extern sqrt\nx = result^2\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_mysqrt(x)\n");
+        try {
+            // Forward: sqrt(9) = 3
+            double fwd = sys.resolve("y", {{"x", 9}});
+            ASSERT(std::abs(fwd - 3.0) < 1e-9,
+                "@extern fwd: sqrt(9) = 3 (got " + std::to_string(fwd) + ")");
+            // Reverse: solve x given y=4 → x = 16
+            double rev = sys.resolve("x", {{"y", 4}});
+            ASSERT(std::abs(rev - 16.0) < 1e-9,
+                "@extern rev: sqrt(x)=4 → x=16 (got " + std::to_string(rev) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "@extern inv threw: " + std::string(e.what()));
+        }
+    }
 }
 
 void test_commutative_matching() {
