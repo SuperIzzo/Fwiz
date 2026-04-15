@@ -502,13 +502,160 @@ inline bool expr_equal(ExprPtr a, ExprPtr b) {
 // Variables in the pattern are wildcards — they bind to any sub-expression.
 // Numbers and operators must match exactly.
 // Returns bindings map on success, nullopt on failure.
+// Forward declarations for flattened matching
+inline void flatten_additive(ExprPtr e, double sign,
+                             std::vector<std::pair<double, ExprPtr>>& terms);
+inline void flatten_multiplicative(ExprPtr e, double& coeff,
+                                   std::vector<std::pair<ExprPtr, double>>& factors);
+
+// Helper: is this op commutative?
+inline constexpr bool is_commutative(BinOp op) {
+    return op == BinOp::ADD || op == BinOp::MUL;
+}
+
+// Helper: is this an additive chain (ADD/SUB at top)?
+inline bool is_additive_chain(const ExprPtr& e) {
+    return e && e->type == ExprType::BINOP && is_additive(e->op);
+}
+
 inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
         const ExprPtr& pattern, const ExprPtr& target) {
     if (!pattern || !target) return std::nullopt;
     std::map<std::string, ExprPtr> bindings;
 
-    std::function<bool(const ExprPtr&, const ExprPtr&)> match =
-        [&](const ExprPtr& p, const ExprPtr& t) -> bool {
+    // Decompose an additive term into its multiplicative factors for matching.
+    // Returns {numeric_coeff, [(base, exponent)]} where base^exponent are the factors.
+    struct TermFactors {
+        double coeff;
+        std::vector<std::pair<ExprPtr, double>> factors; // base^exp pairs
+    };
+
+    auto decompose_term = [](double additive_coeff, const ExprPtr& base) -> TermFactors {
+        TermFactors tf;
+        tf.coeff = additive_coeff;
+        if (!base) return tf;  // pure constant
+        double mul_coeff = 1.0;
+        flatten_multiplicative(base, mul_coeff, tf.factors);
+        tf.coeff *= mul_coeff;
+        return tf;
+    };
+
+    std::function<bool(const ExprPtr&, const ExprPtr&)> match;
+
+    // Match a pattern term's multiplicative factors against a target term's factors.
+    // Pattern wildcards that don't match any target factor bind to 1.
+    auto match_factors = [&](const TermFactors& p, const TermFactors& t) -> bool {
+        // Separate pattern factors into wildcards (plain vars) and structural
+        std::vector<size_t> p_wildcards, p_structural;
+        for (size_t i = 0; i < p.factors.size(); i++) {
+            auto& [base, exp] = p.factors[i];
+            if (base->type == ExprType::VAR && !builtin_constants().count(base->name)
+                && std::abs(exp - 1.0) < EPSILON_ZERO)
+                p_wildcards.push_back(i);
+            else
+                p_structural.push_back(i);
+        }
+
+        // Match structural pattern factors against target factors
+        std::vector<bool> t_used(t.factors.size(), false);
+        for (size_t si : p_structural) {
+            auto& [p_base, p_exp] = p.factors[si];
+            bool found = false;
+            for (size_t ti = 0; ti < t.factors.size(); ti++) {
+                if (t_used[ti]) continue;
+                auto& [t_base, t_exp] = t.factors[ti];
+                if (std::abs(p_exp - t_exp) > EPSILON_ZERO) continue;
+                auto saved = bindings;
+                if (match(p_base, t_base)) {
+                    t_used[ti] = true;
+                    found = true;
+                    break;
+                }
+                bindings = saved;
+            }
+            if (!found) return false;
+        }
+
+        // Collect remaining target factors into a product
+        double remaining_coeff = (std::abs(p.coeff) < EPSILON_ZERO) ? 0.0 : t.coeff / p.coeff;
+        ExprPtr remaining = nullptr;
+        for (size_t ti = 0; ti < t.factors.size(); ti++) {
+            if (t_used[ti]) continue;
+            auto& [t_base, t_exp] = t.factors[ti];
+            auto factor = (std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
+                : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp));
+            remaining = remaining ? Expr::BinOpExpr(BinOp::MUL, remaining, factor) : factor;
+        }
+
+        if (p_wildcards.empty())
+            return !remaining && std::abs(remaining_coeff - 1.0) < EPSILON_ZERO;
+
+        // Collect remaining target factors as individual expressions
+        std::vector<ExprPtr> t_remaining;
+        for (size_t ti = 0; ti < t.factors.size(); ti++) {
+            if (t_used[ti]) continue;
+            auto& [t_base, t_exp] = t.factors[ti];
+            t_remaining.push_back((std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
+                : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp)));
+        }
+
+        // Try to assign remaining target factors to wildcards via backtracking
+        // Unassigned wildcards get the numeric coefficient (or 1)
+        std::vector<bool> t_rem_used(t_remaining.size(), false);
+        std::function<bool(size_t)> assign_wildcards = [&](size_t wi) -> bool {
+            if (wi == p_wildcards.size()) {
+                // All wildcards assigned; check no unmatched target factors
+                for (bool u : t_rem_used) if (!u) return false;
+                return true;
+            }
+            auto& var_name = p.factors[p_wildcards[wi]].first->name;
+
+            // Try matching this wildcard against each remaining target factor
+            for (size_t ri = 0; ri < t_remaining.size(); ri++) {
+                if (t_rem_used[ri]) continue;
+                auto saved = bindings;
+                auto it = bindings.find(var_name);
+                bool ok = false;
+                if (it != bindings.end())
+                    ok = expr_equal(it->second, t_remaining[ri]);
+                else {
+                    bindings[var_name] = t_remaining[ri];
+                    ok = true;
+                }
+                if (ok) {
+                    t_rem_used[ri] = true;
+                    if (assign_wildcards(wi + 1)) return true;
+                    t_rem_used[ri] = false;
+                }
+                bindings = saved;
+            }
+
+            // Try binding this wildcard to the numeric coefficient
+            if (std::abs(remaining_coeff - 1.0) > EPSILON_ZERO || t_remaining.empty()) {
+                auto saved = bindings;
+                auto it = bindings.find(var_name);
+                bool ok = false;
+                if (it != bindings.end())
+                    ok = is_num(it->second) && std::abs(it->second->num - remaining_coeff) < EPSILON_ZERO;
+                else {
+                    bindings[var_name] = Expr::Num(remaining_coeff);
+                    ok = true;
+                }
+                if (ok) {
+                    double saved_coeff = remaining_coeff;
+                    remaining_coeff = 1.0;  // consumed
+                    if (assign_wildcards(wi + 1)) return true;
+                    remaining_coeff = saved_coeff;
+                }
+                bindings = saved;
+            }
+
+            return false;
+        };
+        return assign_wildcards(0);
+    };
+
+    match = [&](const ExprPtr& p, const ExprPtr& t) -> bool {
         if (!p || !t) return p == t;
 
         // Variable in pattern: builtin constants match literally, others are wildcards
@@ -530,10 +677,60 @@ inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
         if (p->type == ExprType::UNARY_NEG)
             return t->type == ExprType::UNARY_NEG && match(p->child, t->child);
 
-        // Binary op — operator and both sides must match
-        if (p->type == ExprType::BINOP)
-            return t->type == ExprType::BINOP && p->op == t->op
-                && match(p->left, t->left) && match(p->right, t->right);
+        // Binary op — with commutativity and flattened matching
+        if (p->type == ExprType::BINOP) {
+            if (t->type != ExprType::BINOP) return false;
+
+            // Flattened additive matching: when both are additive chains,
+            // flatten into term lists and match by permutation
+            if (is_additive(p->op) && is_additive(t->op)
+                && (is_additive_chain(p->left) || is_additive_chain(p->right)
+                    || is_additive_chain(t->left) || is_additive_chain(t->right))) {
+                std::vector<std::pair<double, ExprPtr>> p_terms, t_terms;
+                flatten_additive(p, 1.0, p_terms);
+                flatten_additive(t, 1.0, t_terms);
+                if (p_terms.size() == t_terms.size() && p_terms.size() > 1) {
+                    // Decompose each term into multiplicative factors
+                    std::vector<TermFactors> p_tf, t_tf;
+                    for (auto& [c, b] : p_terms) p_tf.push_back(decompose_term(c, b));
+                    for (auto& [c, b] : t_terms) t_tf.push_back(decompose_term(c, b));
+
+                    // Backtracking permutation search over additive terms
+                    std::vector<bool> used(t_tf.size(), false);
+                    std::function<bool(size_t)> backtrack = [&](size_t pi) -> bool {
+                        if (pi == p_tf.size()) return true;
+                        for (size_t ti = 0; ti < t_tf.size(); ti++) {
+                            if (used[ti]) continue;
+                            auto saved = bindings;
+                            if (match_factors(p_tf[pi], t_tf[ti])) {
+                                used[ti] = true;
+                                if (backtrack(pi + 1)) return true;
+                                used[ti] = false;
+                            }
+                            bindings = saved;
+                        }
+                        return false;
+                    };
+                    return backtrack(0);
+                }
+            }
+
+            // Standard binary match with commutativity
+            if (p->op != t->op && !(is_additive(p->op) && is_additive(t->op)))
+                return false;
+            // For ADD/SUB: both are additive, handled above for chains.
+            // For same-op: try direct, then swapped for commutative ops.
+            if (p->op == t->op) {
+                auto saved = bindings;
+                if (match(p->left, t->left) && match(p->right, t->right))
+                    return true;
+                bindings = saved;
+                if (is_commutative(p->op))
+                    return match(p->left, t->right) && match(p->right, t->left);
+                return false;
+            }
+            return false;
+        }
 
         // Function call — name and all args must match
         if (p->type == ExprType::FUNC_CALL) {
@@ -1491,11 +1688,102 @@ inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rh
         }
     }
 
-    // Fall back to recursive inversion (may return multiple solutions)
-    if (contains_var(lhs, target) && !contains_var(rhs, target))
-        return solve_by_inversion(lhs, rhs, target);
-    if (contains_var(rhs, target) && !contains_var(lhs, target))
-        return solve_by_inversion(rhs, lhs, target);
+    // Try recursive inversion first (handles x^2=y, sin(x)=y, etc. cleanly)
+    {
+        std::vector<Solution> inv_results;
+        if (contains_var(lhs, target) && !contains_var(rhs, target))
+            inv_results = solve_by_inversion(lhs, rhs, target);
+        else if (contains_var(rhs, target) && !contains_var(lhs, target))
+            inv_results = solve_by_inversion(rhs, lhs, target);
+        if (!inv_results.empty()) return inv_results;
+    }
+
+    // Try quadratic decomposition: ax² + bx + c = 0
+    // Flatten into additive terms, classify each by degree in target variable
+    if (contains_var(combined, target)) {
+        std::vector<std::pair<double, ExprPtr>> terms;
+        flatten_additive(combined, 1.0, terms);
+        ExprPtr a_expr = Expr::Num(0), b_expr = Expr::Num(0), c_expr = Expr::Num(0);
+        bool is_quadratic = false;
+        bool too_complex = false;
+
+        for (auto& [coeff, base] : terms) {
+            if (!base || !contains_var(base, target)) {
+                // Constant term (no target variable)
+                c_expr = simplify(Expr::BinOpExpr(BinOp::ADD, c_expr,
+                    base ? Expr::BinOpExpr(BinOp::MUL, Expr::Num(coeff), base)
+                         : Expr::Num(coeff)));
+            } else {
+                // Contains target — classify by degree
+                // Check for target^2 or target*target patterns
+                double mc = 1.0;
+                std::vector<std::pair<ExprPtr, double>> factors;
+                flatten_multiplicative(base, mc, factors);
+                mc *= coeff;
+
+                double target_degree = 0;
+                ExprPtr non_target = nullptr;
+                bool valid = true;
+                for (auto& [fb, fe] : factors) {
+                    if (is_var(fb) && fb->name == target) {
+                        target_degree += fe;
+                    } else if (contains_var(fb, target)) {
+                        valid = false; break;  // target inside function/power base
+                    } else {
+                        auto f = (std::abs(fe - 1.0) < EPSILON_ZERO) ? fb
+                            : Expr::BinOpExpr(BinOp::POW, fb, Expr::Num(fe));
+                        non_target = non_target
+                            ? Expr::BinOpExpr(BinOp::MUL, non_target, f) : f;
+                    }
+                }
+                if (!valid) { too_complex = true; break; }
+
+                auto term_coeff = non_target
+                    ? simplify(Expr::BinOpExpr(BinOp::MUL, Expr::Num(mc), non_target))
+                    : Expr::Num(mc);
+
+                if (std::abs(target_degree - 2.0) < EPSILON_ZERO) {
+                    a_expr = simplify(Expr::BinOpExpr(BinOp::ADD, a_expr, term_coeff));
+                    is_quadratic = true;
+                } else if (std::abs(target_degree - 1.0) < EPSILON_ZERO) {
+                    b_expr = simplify(Expr::BinOpExpr(BinOp::ADD, b_expr, term_coeff));
+                } else if (std::abs(target_degree) < EPSILON_ZERO) {
+                    c_expr = simplify(Expr::BinOpExpr(BinOp::ADD, c_expr, term_coeff));
+                } else {
+                    too_complex = true; break;  // cubic or fractional degree
+                }
+            }
+        }
+
+        if (is_quadratic && !too_complex) {
+            auto a = simplify(a_expr);
+            auto b = simplify(b_expr);
+            auto c = simplify(c_expr);
+            // Verify a != 0
+            if (!(is_num(a) && std::abs(a->num) < EPSILON_ZERO)) {
+                // discriminant: b² - 4ac
+                auto disc = simplify(Expr::BinOpExpr(BinOp::SUB,
+                    Expr::BinOpExpr(BinOp::POW, b, Expr::Num(2)),
+                    Expr::BinOpExpr(BinOp::MUL, Expr::Num(4),
+                        Expr::BinOpExpr(BinOp::MUL, a, c))));
+                auto neg_b = simplify(Expr::Neg(b));
+                auto two_a = simplify(Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), a));
+                auto sqrt_disc = Expr::Call("sqrt", {disc});
+
+                auto sol1 = simplify(Expr::BinOpExpr(BinOp::DIV,
+                    Expr::BinOpExpr(BinOp::ADD, neg_b, sqrt_disc), two_a));
+                auto sol2 = simplify(Expr::BinOpExpr(BinOp::DIV,
+                    Expr::BinOpExpr(BinOp::SUB, neg_b, sqrt_disc), two_a));
+
+                std::string cond = expr_to_string(disc) + " >= 0";
+                std::vector<Solution> results;
+                results.push_back({sol1, disc, cond});
+                if (!expr_equal(sol1, sol2))
+                    results.push_back({sol2, disc, cond});
+                return results;
+            }
+        }
+    }
 
     return {};
 }
