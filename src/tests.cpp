@@ -8972,6 +8972,96 @@ void test_positional_args() {
     }
 }
 
+void test_register_function() {
+    SECTION("Register Custom Functions");
+
+    // 1. Register a C++ function and use it
+    {
+        FormulaSystem sys;
+        sys.register_function("double_it", [](double x) { return x * 2; },
+            "[double_it(x) -> result]\nresult = 2 * x\nx = result / 2\n");
+        sys.load_string("y = double_it(x)\n");
+        double r = sys.resolve("y", {{"x", 7}});
+        ASSERT(std::abs(r - 14) < 1e-9,
+            "register: double_it(7) = 14 (got " + std::to_string(r) + ")");
+    }
+
+    // 2. Inverse solving with registered function
+    {
+        FormulaSystem sys;
+        sys.register_function("double_it", [](double x) { return x * 2; },
+            "[double_it(x) -> result]\nresult = 2 * x\nx = result / 2\n");
+        sys.load_string("y = double_it(x)\n");
+        double r = sys.resolve("x", {{"y", 14}});
+        ASSERT(std::abs(r - 7) < 1e-9,
+            "register inv: double_it(x)=14 → x=7 (got " + std::to_string(r) + ")");
+    }
+
+    // 3. Register without .fw def (forward only, no inverse)
+    {
+        FormulaSystem sys;
+        sys.register_function("triple", [](double x) { return x * 3; });
+        sys.load_string("y = triple(x)\n");
+        double r = sys.resolve("y", {{"x", 5}});
+        ASSERT(std::abs(r - 15) < 1e-9,
+            "register no-def: triple(5) = 15 (got " + std::to_string(r) + ")");
+    }
+}
+
+void test_semicolon_separator() {
+    SECTION("Semicolon Line Separator");
+
+    // 1. Semicolons as line separators in load_string
+    {
+        FormulaSystem sys;
+        sys.load_string("x = 3; y = x + 1\n");
+        double r = sys.resolve("y", {});
+        ASSERT(std::abs(r - 4) < 1e-9,
+            "semicolon: y = x + 1 with x=3 (got " + std::to_string(r) + ")");
+    }
+
+    // 2. Section header with semicolon continuation
+    {
+        FormulaSystem sys;
+        sys.load_string("[sq(x) -> result]; result = x^2\n");
+        // The section should have the equation
+        bool found = false;
+        for (auto& s : sys.sections_)
+            if (s.name == "sq" && s.lines.size() >= 1) found = true;
+        ASSERT(found, "semicolon section: [sq] has lines");
+    }
+
+    // 3. Inline section header: [f(x) -> result] result = x^2 (no separator needed)
+    {
+        FormulaSystem sys;
+        sys.load_string("[cube(x) -> result] result = x^3\n");
+        bool found = false;
+        for (auto& s : sys.sections_)
+            if (s.name == "cube" && s.lines.size() >= 1) found = true;
+        ASSERT(found, "inline section: [cube] has lines");
+    }
+
+    // 4. Single-line function def works end-to-end
+    {
+        auto write_fw = [](const std::string& path, const std::string& content) {
+            std::ofstream f(path);
+            f << content;
+        };
+        write_fw("/tmp/tpa_oneline.fw",
+            "[oneline(x) -> result] result = x * 10\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_oneline(5)\n");
+        try {
+            double r = sys.resolve("y", {});
+            ASSERT(std::abs(r - 50) < 1e-9,
+                "oneline: oneline(5) = 50 (got " + std::to_string(r) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "oneline threw: " + std::string(e.what()));
+        }
+    }
+}
+
 void test_commutative_matching() {
     SECTION("Commutative Pattern Matching");
 
@@ -9347,6 +9437,8 @@ int main() {
     test_undefined();
     test_context_aware_simplification();
     test_positional_args();
+    test_register_function();
+    test_semicolon_separator();
     test_commutative_matching();
     test_quadratic_formula();
 

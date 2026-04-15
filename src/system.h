@@ -138,6 +138,10 @@ public:
     std::vector<RewriteRuleGroup> rewrite_rule_groups_;
     std::vector<bool> rewrite_exhaustive_flags_;  // indexed by group_index
 
+    // Custom function registry (per-system, for C++ API)
+    std::map<std::string, double(*)(double)> custom_functions_;
+    std::map<std::string, std::string> custom_function_defs_;  // name → .fw definition
+
     std::string base_dir;
     Trace trace;
     mutable int max_formula_depth = 1000;
@@ -215,14 +219,22 @@ public:
         result.push_back({"", {}, {}, {}, {}}); // top-level (unnamed)
         for (auto& line : all_lines) {
             auto trimmed = trim(line);
-            // Section header
-            if (trimmed.size() >= 3 && trimmed.front() == '[' && trimmed.back() == ']'
-                && trimmed.find('=') == std::string::npos) {
-                auto sec = parse_section_header(trimmed);
-                if (!sec.name.empty()) {
-                    sec.lines = {};
-                    result.push_back(std::move(sec));
-                    continue;
+            // Section header: [name(args) -> return] optional_first_line
+            if (trimmed.size() >= 3 && trimmed.front() == '[') {
+                auto rbracket = trimmed.find(']');
+                if (rbracket != std::string::npos) {
+                    auto header = trimmed.substr(0, rbracket + 1);
+                    auto rest = trim(trimmed.substr(rbracket + 1));
+                    // Only treat as section if the [...] part has no '=' (not an equation)
+                    if (header.find('=') == std::string::npos) {
+                        auto sec = parse_section_header(header);
+                        if (!sec.name.empty()) {
+                            sec.lines = {};
+                            if (!rest.empty()) sec.lines.push_back(rest);
+                            result.push_back(std::move(sec));
+                            continue;
+                        }
+                    }
                 }
             }
             // Annotation: @name value
@@ -321,14 +333,25 @@ public:
             trace.step("  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var + ")");
     }
 
-    // Read all lines from a stream, stripping BOM from first line
+    // Read all lines from a stream, stripping BOM and splitting on semicolons
     static std::vector<std::string> read_all_lines(std::istream& in) {
         std::vector<std::string> lines;
         std::string line;
         bool first = true;
         while (std::getline(in, line)) {
             if (first) { first = false; strip_bom(line); }
-            lines.push_back(line);
+            // Split on semicolons (as line separator)
+            size_t pos = 0;
+            while (pos < line.size()) {
+                size_t semi = line.find(';', pos);
+                if (semi == std::string::npos) {
+                    lines.push_back(line.substr(pos));
+                    break;
+                }
+                lines.push_back(line.substr(pos, semi - pos));
+                pos = semi + 1;
+            }
+            if (pos == 0 && line.empty()) lines.push_back("");
         }
         return lines;
     }
@@ -468,7 +491,9 @@ x^0.5 = sqrt(x)
     ExprPtr extract_positional_calls(const ExprPtr& e, const std::string& eq_lhs,
                                      std::vector<FormulaCall>& calls) {
         if (!e) return e;
-        if (e->type == ExprType::FUNC_CALL && !builtin_functions().count(e->name)) {
+        if (e->type == ExprType::FUNC_CALL
+            && !builtin_functions().count(e->name)
+            && !custom_functions_.count(e->name)) {
             // Not a builtin — try loading as sub-system formula
             std::string file_stem = e->name;
             try {
@@ -568,6 +593,16 @@ x^0.5 = sqrt(x)
         trace.step("loading " + label);
         std::istringstream ss(source);
         load_with_sections(read_all_lines(ss), section);
+    }
+
+    // Register a custom C++ function with optional .fw definition for inverse solving.
+    // The .fw definition should include a section header and equations, e.g.:
+    //   "[sigmoid(x) -> result]\n@extern sigmoid\nx = -log(1/result - 1)\n"
+    void register_function(const std::string& name, double(*fn)(double),
+                           const std::string& fw_def = "") {
+        custom_functions_[name] = fn;
+        if (!fw_def.empty())
+            custom_function_defs_[name] = fw_def;
     }
 
     void load_file(const std::string& path, const std::string& section = "") {
@@ -711,7 +746,7 @@ x^0.5 = sqrt(x)
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
@@ -965,7 +1000,7 @@ x^0.5 = sqrt(x)
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         auto prepared = prepare_bindings(target, bindings);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         return solve_recursive(target, prepared, {}, 0);
@@ -975,7 +1010,7 @@ x^0.5 = sqrt(x)
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         auto prepared = prepare_bindings(target, bindings);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
+        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
@@ -1569,9 +1604,19 @@ private:
             section = file_stem.substr(dot + 1);
         }
 
-        // Check builtin function definitions first
+        // Check custom and builtin function definitions
         auto& builtins = builtin_function_defs();
-        auto blt = builtins.find(file_part);
+        auto blt = custom_function_defs_.find(file_part);
+        if (blt == custom_function_defs_.end()) {
+            auto bit = builtins.find(file_part);
+            if (bit != builtins.end()) blt = custom_function_defs_.end(); // use builtins below
+        }
+        // Check builtins if not in custom
+        const std::string* def_source = nullptr;
+        if (blt != custom_function_defs_.end())
+            def_source = &blt->second;
+        else if (auto bit = builtins.find(file_part); bit != builtins.end())
+            def_source = &bit->second;
 
         std::string path = base_dir + "/" + file_part;
         if (path.find('.') == std::string::npos) path += ".fw";
@@ -1579,9 +1624,9 @@ private:
         try { abs_path = std::filesystem::weakly_canonical(path).string(); }
         catch (...) { abs_path = path; }
 
-        // Cache key: builtin functions use name directly, files use abs path
-        std::string cache_key = (blt != builtins.end())
-            ? ("@builtin:" + file_part)
+        // Cache key: defined functions use name directly, files use abs path
+        std::string cache_key = def_source
+            ? ("@def:" + file_part)
             : (abs_path + (section.empty() ? "" : "#" + section));
         auto it = sub_systems.find(cache_key);
         if (it != sub_systems.end()) return *it->second;
@@ -1589,14 +1634,15 @@ private:
         auto sub = std::make_shared<FormulaSystem>();
         sub->trace = trace;
         sub->numeric_mode = numeric_mode;
+        sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
 
-        // Try loading from file first; fall back to builtin definition
+        // Try loading from file first; fall back to embedded definition
         bool loaded = false;
-        if (blt == builtins.end()) {
+        if (!def_source) {
             sub->load_file(abs_path, section);
             loaded = true;
         } else {
-            // Try file first (user can override builtins)
+            // Try file first (user can override definitions)
             try {
                 std::ifstream f(abs_path);
                 if (f.is_open()) {
@@ -1605,8 +1651,7 @@ private:
                 }
             } catch (...) {}
             if (!loaded) {
-                // Load from embedded definition
-                sub->load_string(blt->second, "@builtin:" + file_part);
+                sub->load_string(*def_source, "@def:" + file_part);
                 loaded = true;
             }
         }
@@ -1624,8 +1669,9 @@ private:
                 sub = std::make_shared<FormulaSystem>();
                 sub->trace = trace;
                 sub->numeric_mode = numeric_mode;
-                if (blt != builtins.end())
-                    sub->load_string(blt->second, "@builtin:" + file_part, auto_section);
+                sub->custom_functions_ = custom_functions_;
+                if (def_source)
+                    sub->load_string(*def_source, "@def:" + file_part, auto_section);
                 else
                     sub->load_file(abs_path, auto_section);
             }
