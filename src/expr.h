@@ -1299,22 +1299,14 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 case BinOp::MUL: return simplify_mul(l, r);
                 case BinOp::DIV: return simplify_div(l, r);
                 case BinOp::POW:
-                    if (is_zero(r)) return Expr::Num(1);
-                    if (is_one(r)) return l;
-                    // x^0.5 → sqrt(x)
-                    if (is_num(r) && r->num == 0.5)
-                        return Expr::Call("sqrt", {l});
-                    // x^(-1) → 1/x, x^(-n) → 1/x^n
+                    // x^(-n) → 1/x^n — stays in C++ (needs numeric check)
                     if (is_num(r) && r->num < 0) {
                         if (r->num == -1.0)
                             return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), l);
                         return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
                             Expr::BinOpExpr(BinOp::POW, l, Expr::Num(-r->num)));
                     }
-                    // (x^a)^b → x^(a*b)
-                    if (l->type == ExprType::BINOP && l->op == BinOp::POW)
-                        return Expr::BinOpExpr(BinOp::POW, l->left,
-                            simplify_once(Expr::BinOpExpr(BinOp::MUL, l->right, r)));
+                    // x^0, x^1, x^0.5, (x^a)^b now in BUILTIN_REWRITE_RULES
                     return Expr::BinOpExpr(BinOp::POW, l, r);
         case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }

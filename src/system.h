@@ -353,6 +353,10 @@ e^log(x) = x
 log(x^n) = n * log(x) iff x != 0
 x/x = 1 iff x != 0
 x/x = undefined iff x = 0
+x^0 = 1
+x^1 = x
+x^0.5 = sqrt(x)
+(x^a)^b = x^(a*b)
 )";
 
     void load_builtins() {
