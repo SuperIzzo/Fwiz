@@ -712,6 +712,7 @@ x^0.5 = sqrt(x)
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings);
+        FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Collect ALL results from enumerate_candidates
@@ -917,11 +918,55 @@ x^0.5 = sqrt(x)
         return out;
     }
 
+    // Build a function inverter that resolves via .fw sub-system definitions.
+    // Given f(inner) = rhs, loads f's sub-system and solves for the input variable.
+    FuncInverter make_func_inverter() const {
+        return [this](const std::string& func_name, const ExprPtr& rhs) -> ExprPtr {
+            try {
+                auto& sub = load_sub_system(func_name);
+                // Find the section with positional args (the function definition)
+                for (auto& sec : sub.sections_) {
+                    if (sec.positional_args.empty()) continue;
+                    // The input variable is the first positional arg
+                    // The return variable is sec.return_var (or "result")
+                    std::string input_var = sec.positional_args[0];
+                    std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
+                    // Solve: given return_var = rhs, find input_var
+                    // Look through the sub-system's equations for one that has input_var on the LHS
+                    for (auto& eq : sub.equations) {
+                        if (eq.lhs_var == input_var) {
+                            // eq: input_var = f(return_var)
+                            // Substitute return_var → rhs
+                            return simplify(substitute(eq.rhs, return_var, rhs));
+                        }
+                    }
+                    // Try solving algebraically: return_var = g(input_var) → input_var = g⁻¹(rhs)
+                    for (auto& eq : sub.equations) {
+                        if (eq.lhs_var == return_var && contains_var(eq.rhs, input_var)) {
+                            auto result = solve_for(Expr::Var(return_var), eq.rhs, input_var);
+                            if (result)
+                                return simplify(substitute(result, return_var, rhs));
+                        }
+                    }
+                    break;  // only check first section with positional args
+                }
+            } catch (...) {}
+            return nullptr;  // no inverse found
+        };
+    }
+
+    // RAII guard for function inverter thread-local
+    struct FuncInverterGuard {
+        FuncInverterGuard(FuncInverter fn) { solve_set_func_inverter(std::move(fn)); }
+        ~FuncInverterGuard() { solve_set_func_inverter(nullptr); }
+    };
+
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
+        FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         return solve_recursive(target, prepared, {}, 0);
     }
@@ -931,6 +976,7 @@ x^0.5 = sqrt(x)
         ExprArena::Scope scope(arena);
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared);
+        FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
 
@@ -1578,7 +1624,10 @@ private:
                 sub = std::make_shared<FormulaSystem>();
                 sub->trace = trace;
                 sub->numeric_mode = numeric_mode;
-                sub->load_file(abs_path, auto_section);
+                if (blt != builtins.end())
+                    sub->load_string(blt->second, "@builtin:" + file_part, auto_section);
+                else
+                    sub->load_file(abs_path, auto_section);
             }
         }
         sub_systems[cache_key] = sub;
