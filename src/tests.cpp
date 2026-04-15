@@ -8846,6 +8846,161 @@ void test_context_aware_simplification() {
     }
 }
 
+void test_commutative_matching() {
+    SECTION("Commutative Pattern Matching");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // --- Binary commutativity ---
+
+    // 1. a + b should match b + a
+    {
+        auto pattern = parse("a + b");
+        auto target = parse("y + x");
+        auto fwd = match_pattern(pattern, target);  // a→y, b→x (structural)
+        ASSERT(fwd.has_value(), "a+b matches y+x (structural)");
+
+        auto rev = match_pattern(pattern, parse("x + y"));
+        // With commutativity: a→y, b→x OR a→x, b→y — either is fine
+        ASSERT(rev.has_value(), "a+b matches x+y (commutative)");
+    }
+
+    // 2. a * b should match b * a
+    {
+        auto pattern = parse("a * b");
+        auto result = match_pattern(pattern, parse("3 * z"));
+        ASSERT(result.has_value(), "a*b matches 3*z");
+        auto result2 = match_pattern(pattern, parse("z * 3"));
+        ASSERT(result2.has_value(), "a*b matches z*3 (commutative)");
+    }
+
+    // --- N-term additive permutations ---
+
+    // 3. a + b + c should match c + b + a
+    {
+        auto pattern = parse("a + b + c");
+        auto target = parse("3 + 2 + 1");
+        auto result = match_pattern(pattern, target);
+        // Structural: (a+b)+c matches (3+2)+1 → a=3, b=2, c=1
+        ASSERT(result.has_value(), "a+b+c matches 3+2+1 (structural)");
+
+        // Permuted: should match 1+2+3 (any ordering)
+        auto perm = match_pattern(pattern, parse("1 + 2 + 3"));
+        ASSERT(perm.has_value(), "a+b+c matches 1+2+3 (permuted)");
+    }
+
+    // 4. Different permutation: a + b + c matches b + c + a
+    {
+        auto pattern = parse("a + b + c");
+        auto target = parse("7 + 8 + 9");
+        auto result = match_pattern(pattern, target);
+        ASSERT(result.has_value(), "a+b+c matches 7+8+9");
+        // Verify all 3 values are captured (in some order)
+        if (result) {
+            std::set<double> vals;
+            for (auto& [k, v] : *result)
+                if (is_num(v)) vals.insert(v->num);
+            ASSERT(vals.count(7) && vals.count(8) && vals.count(9),
+                "a+b+c captures all three values");
+        }
+    }
+
+    // --- Coefficient extraction (the quadratic use case) ---
+
+    // 5. a*x^2 + b*x + c should match x^2 - 7*x + 12
+    {
+        auto pattern = parse("a*x^2 + b*x + c");
+        auto target = parse("t^2 - 7*t + 12");
+        auto result = match_pattern(pattern, target);
+        ASSERT(result.has_value(),
+            "a*x^2+b*x+c matches t^2-7*t+12 (quadratic extraction)");
+        if (result) {
+            auto& r = *result;
+            bool x_is_t = is_var(r["x"]) && r["x"]->name == "t";
+            ASSERT(x_is_t, "quadratic: x binds to t");
+            bool a_is_1 = is_num(r["a"]) && std::abs(r["a"]->num - 1) < 1e-9;
+            ASSERT(a_is_1, "quadratic: a = 1");
+            bool b_is_neg7 = is_num(r["b"]) && std::abs(r["b"]->num - (-7)) < 1e-9;
+            ASSERT(b_is_neg7, "quadratic: b = -7");
+            bool c_is_12 = is_num(r["c"]) && std::abs(r["c"]->num - 12) < 1e-9;
+            ASSERT(c_is_12, "quadratic: c = 12");
+        }
+    }
+
+    // 6. a*x + b should match 3 + 5*x (swapped terms)
+    {
+        auto pattern = parse("a*x + b");
+        auto target = parse("3 + 5*t");
+        auto result = match_pattern(pattern, target);
+        ASSERT(result.has_value(), "a*x+b matches 3+5*t (swapped)");
+        if (result) {
+            auto& r = *result;
+            bool x_is_t = is_var(r["x"]) && r["x"]->name == "t";
+            ASSERT(x_is_t, "linear swap: x binds to t");
+            bool a_is_5 = is_num(r["a"]) && std::abs(r["a"]->num - 5) < 1e-9;
+            ASSERT(a_is_5, "linear swap: a = 5");
+            bool b_is_3 = is_num(r["b"]) && std::abs(r["b"]->num - 3) < 1e-9;
+            ASSERT(b_is_3, "linear swap: b = 3");
+        }
+    }
+}
+
+void test_quadratic_formula() {
+    SECTION("Quadratic Formula");
+
+    // Helper: test quadratic solving (wraps in try-catch for clean failure)
+    auto test_quad = [](const std::string& eq, std::map<std::string, double> bindings,
+                        const std::string& target, std::vector<double> expected,
+                        const std::string& name) {
+        FormulaSystem sys;
+        sys.numeric_mode = false;  // algebraic only
+        sys.load_string(eq + "\n");
+        try {
+            auto result = sys.resolve_all(target, bindings);
+            auto& d = result.discrete();
+            ASSERT(d.size() == expected.size(),
+                name + ": " + std::to_string(expected.size()) + " roots (got "
+                + std::to_string(d.size()) + ")");
+            for (double exp_val : expected) {
+                bool found = false;
+                for (auto v : d)
+                    if (std::abs(v - exp_val) < 0.01) found = true;
+                ASSERT(found, name + ": root " + std::to_string(exp_val) + " found");
+            }
+        } catch (const std::exception& e) {
+            ASSERT(false, name + ": should not throw (got: " + std::string(e.what()) + ")");
+        }
+    };
+
+    // 7. x^2 - 7x + 12 = 0 → x = 3, x = 4 (algebraic)
+    test_quad("y = x^2 - 7*x + 12", {{"y", 0}}, "x", {3, 4}, "x^2-7x+12=0");
+
+    // 8. 2x^2 - 4x - 6 = 0 → x = 3, x = -1 (algebraic)
+    test_quad("y = 2*x^2 - 4*x - 6", {{"y", 0}}, "x", {3, -1}, "2x^2-4x-6=0");
+
+    // 9. x^2 + 1 = 0 → no real roots
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = false;
+        sys.load_string("y = x^2 + 1\n");
+        bool threw = false;
+        try {
+            auto result = sys.resolve_all("x", {{"y", 0}});
+            threw = result.discrete().empty();
+        } catch (...) { threw = true; }
+        ASSERT(threw, "x^2+1=0: no real roots");
+    }
+
+    // 10. x^2 + 2x - 3 = 0 → x = 1, x = -3 (algebraic)
+    test_quad("y = x^2 + 2*x - 3", {{"y", 0}}, "x", {1, -3}, "x^2+2x-3=0");
+
+    // 11. From KNOWN_ISSUES #3: y = a*x^2 + b*x + c (algebraic)
+    test_quad("y = a*x^2 + b*x + c",
+        {{"y", 0}, {"a", 1}, {"b", 2}, {"c", -10}}, "x",
+        {-1 + std::sqrt(11), -1 - std::sqrt(11)}, "KNOWN_ISSUES#3");
+}
+
 // ---- Main ----
 
 int main() {
@@ -9065,6 +9220,8 @@ int main() {
     test_rewrite_rules();
     test_undefined();
     test_context_aware_simplification();
+    test_commutative_matching();
+    test_quadratic_formula();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
