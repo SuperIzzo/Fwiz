@@ -227,6 +227,11 @@ void test_evaluate() {
 void test_simplify() {
     SECTION("Simplifier");
 
+    // Load builtin rewrite rules for power/trig/etc.
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
+
     // Constant folding
     ASSERT_EQ(ss("2 + 3"), "5", "fold add");
     ASSERT_EQ(ss("10 - 4"), "6", "fold sub");
@@ -441,6 +446,11 @@ void test_decompose() {
 
 void test_solve_for() {
     SECTION("Algebraic Solver (solve_for)");
+
+    // Load builtin rewrite rules (power rules needed for x^0.5 → sqrt)
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
 
     // x = y + 5 => y = x - 5
     {
@@ -920,6 +930,11 @@ void test_evaluate_edge() {
 
 void test_simplify_edge() {
     SECTION("Simplifier Edge Cases");
+
+    // Load builtin rewrite rules (power rules)
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
 
     // x - x: simplifier does NOT reduce this (no term cancellation yet)
     // This documents current behavior
