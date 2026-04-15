@@ -307,7 +307,18 @@ public:
             bool found = false;
             for (auto& s : sections_) {
                 if (s.name == ancestor) {
-                    load_lines(s.lines);
+                    // Apply return_var sugar: lines starting with "=" get return_var prepended
+                    if (!s.return_var.empty()) {
+                        auto sugared = s.lines;
+                        for (auto& ln : sugared) {
+                            auto t = trim(ln);
+                            if (!t.empty() && t[0] == '=')
+                                ln = s.return_var + " " + t;
+                        }
+                        load_lines(sugared);
+                    } else {
+                        load_lines(s.lines);
+                    }
                     found = true;
                     break;
                 }
@@ -391,15 +402,15 @@ x^0.5 = sqrt(x)
     // Each maps a function name to its .fw section content.
     static const std::map<std::string, std::string>& builtin_function_defs() {
         static const std::map<std::string, std::string> defs = {
-            {"sin",  "[sin(x) -> result]\n@extern sin\nx = asin(result)\n"},
-            {"cos",  "[cos(x) -> result]\n@extern cos\nx = acos(result)\n"},
-            {"tan",  "[tan(x) -> result]\n@extern tan\nx = atan(result)\n"},
-            {"asin", "[asin(x) -> result]\n@extern asin\nx = sin(result)\n"},
-            {"acos", "[acos(x) -> result]\n@extern acos\nx = cos(result)\n"},
-            {"atan", "[atan(x) -> result]\n@extern atan\nx = tan(result)\n"},
-            {"sqrt", "[sqrt(x) -> result]\n@extern sqrt\nx = result^2\nresult >= 0\n"},
-            {"log",  "[log(x) -> result]\n@extern log\nx = e^result\n"},
-            {"abs",  "[abs(x) -> result]\n@extern abs\nresult = x iff x >= 0\nresult = -x iff x < 0\n"},
+            {"sin",  "[sin(x) -> result] @extern sin; x = asin(result)"},
+            {"cos",  "[cos(x) -> result] @extern cos; x = acos(result)"},
+            {"tan",  "[tan(x) -> result] @extern tan; x = atan(result)"},
+            {"asin", "[asin(x) -> result] @extern asin; x = sin(result)"},
+            {"acos", "[acos(x) -> result] @extern acos; x = cos(result)"},
+            {"atan", "[atan(x) -> result] @extern atan; x = tan(result)"},
+            {"sqrt", "[sqrt(x) -> result] @extern sqrt; x = result^2; result >= 0"},
+            {"log",  "[log(x) -> result] @extern log; x = e^result"},
+            {"abs",  "[abs(x) -> result] @extern abs; = x iff x >= 0; = -x iff x < 0"},
         };
         return defs;
     }

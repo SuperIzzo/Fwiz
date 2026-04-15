@@ -9079,6 +9079,42 @@ void test_semicolon_separator() {
             ASSERT(false, "sugar threw: " + std::string(e.what()));
         }
     }
+
+    // 6. Multi-line = sugar (piecewise)
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "[myabs(x) -> result]\n"
+            "= x iff x >= 0\n"
+            "= -x iff x < 0\n",
+            "<test>", "myabs");
+        double r1 = sys.resolve("result", {{"x", 5}});
+        ASSERT(std::abs(r1 - 5) < 1e-9,
+            "multiline sugar: myabs(5) = 5 (got " + std::to_string(r1) + ")");
+        double r2 = sys.resolve("result", {{"x", -3}});
+        ASSERT(std::abs(r2 - 3) < 1e-9,
+            "multiline sugar: myabs(-3) = 3 (got " + std::to_string(r2) + ")");
+    }
+
+    // 7. Inline header + semicolons with = sugar
+    {
+        auto write_fw = [](const std::string& path, const std::string& content) {
+            std::ofstream f(path);
+            f << content;
+        };
+        write_fw("/tmp/tpa_sugar2.fw",
+            "[sugar2(x) -> result] = x^2 iff x >= 0; = -x^2 iff x < 0\n");
+        FormulaSystem sys;
+        sys.base_dir = "/tmp";
+        sys.load_string("y = tpa_sugar2(3)\n");
+        try {
+            double r = sys.resolve("y", {});
+            ASSERT(std::abs(r - 9) < 1e-9,
+                "inline+semi sugar: sugar2(3) = 9 (got " + std::to_string(r) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, "inline+semi sugar threw: " + std::string(e.what()));
+        }
+    }
 }
 
 void test_commutative_matching() {
