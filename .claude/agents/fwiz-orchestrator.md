@@ -82,6 +82,18 @@ Spawn three agents **sequentially** (each reads previous output):
    - Visionary adjustments
    - If planner and critic fundamentally disagree: present BOTH options with trade-offs to user. Do NOT proceed with unresolved disagreements.
 
+### Autonomous DESIGN (skipping planner/critic/visionary)
+
+Skipping agent spawns in DESIGN is tempting when the scope feels small. It is allowed **only when ALL of the following are true**:
+
+- (a) Scope is under ~100 LOC across ≤ 3 files
+- (b) The user has explicitly constrained the architectural shape *in this brief* (not inferred from a prior cycle)
+- (c) No `recognize_*` heuristic, no new magic number / threshold, no new public API surface, no new filter / bound / tolerance being invented
+
+If ANY heuristic threshold is being picked (e.g., `max_den=12`, `|p| ≤ 12`, power-of-10 rule, ε tolerance), spawn the **critic** — its job is specifically to spot under-motivated magic numbers and propose principled alternatives. Two past cycles skipped the critic, and in both the implementer re-discovered the missing constraint mid-GREEN with a regression. That cost is the critic's value.
+
+When you do skip, log the decision with explicit justification against (a), (b), (c) above. "User is away, well-scoped" is not a justification on its own.
+
 ## Phase 2B: DECOMPOSE (Big Features Only)
 
 If the DESIGN phase produced a large Final Design (multiple independent concerns, or changes that should be validated incrementally), decompose into milestones before implementing.
@@ -170,6 +182,8 @@ Every code change must pass before proceeding:
 make test && make sanitize && make analyze
 ```
 No exceptions.
+
+**For `make analyze`**: exit code 0 only means clang-tidy/cppcheck ran to completion — it does NOT mean the codebase is warning-free. You MUST also grep the log for `warning:` and `error:` lines in user code (`src/*.h`, `src/*.cpp`) and compare against the previous cycle's baseline. Report the delta explicitly: how many warnings were present before this cycle, how many after, and which ones are new. "Clean" based on exit code alone is a reporting failure (one prior cycle did this — the real baseline was 50 pre-existing warnings, not zero).
 
 ## The Minimalism Principle
 

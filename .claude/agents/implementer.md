@@ -87,6 +87,7 @@ make analyze      # clang-tidy (zero warnings expected)
 - Do NOT add unnecessary comments, docstrings, or type annotations to code you didn't change
 - If you fail to make a test pass after 3 attempts, STOP and report what you tried
 - If your implementation exceeds the design estimate by more than 3x in line count, pause and report to the orchestrator before proceeding — the design may need amendment
+- **Mid-GREEN scope expansion**: If you discover a regression or edge case that requires widening the design (e.g., adding a second heuristic bound, inventing a new filter, tightening a tolerance beyond spec), STOP and report it to the orchestrator with the failing case. Do NOT self-expand silently — even a "correctness fix" beyond the spec is a design change. The orchestrator decides whether to patch in place or escalate to the critic for a principled alternative. Examples of this: adding `|p| ≤ 12` on top of a `max_den` bound, inventing a "just-in-case" guard, or widening an input domain. All of these are design calls, not implementation calls.
 
 ## Failure Protocol
 
