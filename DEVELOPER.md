@@ -136,7 +136,9 @@ The core of the system. Contains:
 
 **expr_to_string()** — Pretty printer with precedence-aware parenthesization. Only adds parens where needed for correctness.
 
-**evaluate()** — Evaluates a fully numeric expression tree. Throws on unresolved variables or division by zero. Built-in functions are dispatched via a static lookup table.
+**evaluate()** — Evaluates a fully numeric expression tree. Throws on unresolved variables or division by zero. Built-in functions are dispatched via a static lookup table. Stays real-valued permanently — do not extend for complex or matrix types.
+
+**evaluate_symbolic()** — Exact sibling of `evaluate()`. Returns an `ExprPtr` that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by the simplifier's constant-folding paths (`simplify_once_impl` BINOP num/num and FUNC_CALL all-numeric folds). This is the extension point for new number types — add complex or matrix dispatch here, not in `evaluate()`.
 
 **substitute()** — Replaces a named variable with an expression throughout the tree.
 
