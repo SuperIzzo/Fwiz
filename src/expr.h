@@ -20,10 +20,12 @@
 constexpr double EPSILON_ZERO = 1e-12;   // treat |x| < this as zero (coefficient guard, like-term combining)
 constexpr double EPSILON_REL  = 1e-9;    // relative tolerance for verify mode (approx_equal)
 constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
+constexpr int    RATIONAL_POW_MAX_EXP = 20; // max integer exponent for (p/q)^n structural expansion — larger exponents fall back to double POW (int64 overflow risk for non-tiny bases)
 
 static_assert(EPSILON_ZERO > 0 && EPSILON_ZERO < 1e-6, "EPSILON_ZERO must be a small positive value");
 static_assert(EPSILON_REL > 0 && EPSILON_REL < 1e-3, "EPSILON_REL must be a small positive value");
 static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_ITER must be reasonable");
+static_assert(RATIONAL_POW_MAX_EXP > 0 && RATIONAL_POW_MAX_EXP < 64, "RATIONAL_POW_MAX_EXP must fit comfortably within int64 iteration");
 
 // ============================================================================
 //  Formatting (needed by ValueSet::to_string)
@@ -1498,7 +1500,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 case BinOp::POW:
                     // Rational base ^ integer exponent: (a/b)^n = a^n / b^n
                     if (is_int_frac(l) && is_num(r) && is_integer_value(r->num)
-                        && r->num > 0 && r->num <= 20) {
+                        && r->num > 0 && r->num <= RATIONAL_POW_MAX_EXP) {
                         auto [n, d] = to_rational(l);
                         int64_t exp = static_cast<int64_t>(r->num);
                         int64_t rn = 1, rd = 1;

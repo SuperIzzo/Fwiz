@@ -215,7 +215,8 @@ inline FitResult fit_polynomial_auto(
 
 struct Fraction { int p, q; }; // numerator, denominator
 
-// Try to express x as p/q for small integers (|p| ≤ max_num, q ≤ max_den)
+// Try to express x as p/q with denominator q ≤ max_den (numerator bound is implicit: |p| ≈ |x| * max_den).
+// Callers that need a separate numerator bound must apply it after the call.
 inline std::optional<Fraction> recognize_fraction(double x,
         int max_den = 12, double tol = 1e-9) {
     if (!std::isfinite(x)) return std::nullopt;
