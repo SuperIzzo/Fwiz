@@ -252,6 +252,10 @@ inline std::optional<ConstantForm> recognize_constant(double x,
     all_constants["sqrt(2)"] = std::sqrt(2.0);
     all_constants["sqrt(3)"] = std::sqrt(3.0);
     all_constants["sqrt(5)"] = std::sqrt(5.0);
+    // Common logarithms (output as log(N) via constant_form_to_expr)
+    all_constants["log(2)"] = std::log(2.0);
+    all_constants["log(3)"] = std::log(3.0);
+    all_constants["log(10)"] = std::log(10.0);
     for (auto& [k, v] : extra_constants)
         if (!all_constants.count(k)) all_constants[k] = v;
 
@@ -270,19 +274,29 @@ inline std::optional<ConstantForm> recognize_constant(double x,
 
 // Build an ExprPtr from a ConstantForm: (p/q) * constant^power
 inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
-    // Build constant expression — handle sqrt(N) names as function calls
+    // Build constant expression — handle func(N) names as function calls
     ExprPtr cexpr;
-    if (cf.constant.substr(0, 5) == "sqrt(" && cf.constant.back() == ')') {
-        // Parse "sqrt(N)" → Expr::Call("sqrt", {Expr::Num(N)})
-        double n = std::stod(cf.constant.substr(5, cf.constant.size() - 6));
-        cexpr = Expr::Call("sqrt", {Expr::Num(n)});
+    auto paren = cf.constant.find('(');
+    if (paren != std::string::npos && cf.constant.back() == ')') {
+        // Parse "func(N)" → Expr::Call("func", {Expr::Num(N)})
+        std::string func = cf.constant.substr(0, paren);
+        double n = std::stod(cf.constant.substr(paren + 1, cf.constant.size() - paren - 2));
+        cexpr = Expr::Call(func, {Expr::Num(n)});
     } else {
         cexpr = Expr::Var(cf.constant);
     }
     if (cf.power == 2)
         cexpr = Expr::BinOpExpr(BinOp::POW, cexpr, Expr::Num(2));
-    else if (cf.power == -1)
-        cexpr = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), cexpr);
+    else if (cf.power == -1) {
+        // For p/q * constant^(-1): emit (p/q) / constant directly
+        if (cf.p == 1 && cf.q == 1) return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), cexpr);
+        if (cf.p == -1 && cf.q == 1) return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), cexpr));
+        ExprPtr numer = (cf.q == 1) ? Expr::Num(static_cast<double>(cf.p))
+            : Expr::BinOpExpr(BinOp::DIV,
+                Expr::Num(static_cast<double>(cf.p)),
+                Expr::Num(static_cast<double>(cf.q)));
+        return Expr::BinOpExpr(BinOp::DIV, numer, cexpr);
+    }
 
     // Build rational multiplier
     if (cf.p == 1 && cf.q == 1) return cexpr;
@@ -298,6 +312,47 @@ inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
 
     // Don't simplify — simplifier would evaluate sqrt(3)*5 → 8.66...
     return Expr::BinOpExpr(BinOp::MUL, coeff, cexpr);
+}
+
+// ============================================================================
+//  Expression tree: recognize constants in NUM nodes
+// ============================================================================
+
+// Walk an expression tree and replace floating-point NUM nodes with recognized
+// symbolic forms (fractions, constants like log(2), pi, etc.).
+// Used by derive output to produce clean symbolic expressions.
+inline ExprPtr expr_recognize_constants(const ExprPtr& e,
+        const std::map<std::string, double>& extra_constants = {}) {
+    if (!e) return e;
+    switch (e->type) {
+        case ExprType::NUM: {
+            if (is_integer_value(e->num)) return e; // already clean
+            if (is_zero(*e)) return e;
+            // Try fraction first
+            auto frac = recognize_fraction(e->num);
+            if (frac) return make_rational(frac->p, frac->q);
+            // Try constant recognition
+            auto cf = recognize_constant(e->num, extra_constants);
+            if (cf) return constant_form_to_expr(*cf);
+            return e;
+        }
+        case ExprType::VAR: return e;
+        case ExprType::UNARY_NEG:
+            return Expr::Neg(expr_recognize_constants(e->child, extra_constants));
+        case ExprType::BINOP: {
+            auto l = expr_recognize_constants(e->left, extra_constants);
+            auto r = expr_recognize_constants(e->right, extra_constants);
+            return Expr::BinOpExpr(e->op, l, r);
+        }
+        case ExprType::FUNC_CALL: {
+            std::vector<ExprPtr> args;
+            for (auto& a : e->args)
+                args.push_back(expr_recognize_constants(a, extra_constants));
+            return Expr::Call(e->name, std::move(args));
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); return e;
+    }
+    return e;
 }
 
 // ============================================================================

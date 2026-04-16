@@ -6203,8 +6203,8 @@ void test_simplify_self_division() {
     // (2*x) / x → 2
     ASSERT_EQ(expr_to_string(simplify(parse("2 * x / x"))), "2", "2x/x → 2");
 
-    // x / (2*x) → 1/2 = 0.5
-    ASSERT_EQ(expr_to_string(simplify(parse("x / (2 * x)"))), "0.5", "x/(2x) → 0.5");
+    // x / (2*x) → 1/2
+    ASSERT_EQ(expr_to_string(simplify(parse("x / (2 * x)"))), "1 / 2", "x/(2x) → 1/2");
 
     // (3*x) / x → 3
     ASSERT_EQ(expr_to_string(simplify(parse("3 * x / x"))), "3", "3x/x → 3");
@@ -9498,6 +9498,128 @@ void test_numeric_skip() {
 
 // ---- Main ----
 
+// ---- Rational arithmetic (structural fractions) ----
+
+void test_rational_fractions() {
+    SECTION("Rational fractions: structural preservation");
+
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
+
+    // Non-integer division should stay as structural fraction
+    ASSERT_EQ(ss("1 / 3"), "1 / 3", "1/3 preserved");
+    ASSERT_EQ(ss("2 / 5"), "2 / 5", "2/5 preserved");
+    ASSERT_EQ(ss("1 / 7"), "1 / 7", "1/7 preserved");
+
+    // Integer division should fold
+    ASSERT_EQ(ss("6 / 3"), "2", "6/3 folds to 2");
+    ASSERT_EQ(ss("20 / 4"), "5", "20/4 folds to 5");
+    ASSERT_EQ(ss("0 / 5"), "0", "0/5 folds to 0");
+
+    // GCD normalization
+    ASSERT_EQ(ss("2 / 6"), "1 / 3", "2/6 normalized to 1/3");
+    ASSERT_EQ(ss("4 / 8"), "1 / 2", "4/8 normalized to 1/2");
+    ASSERT_EQ(ss("6 / 9"), "2 / 3", "6/9 normalized to 2/3");
+    ASSERT_EQ(ss("15 / 10"), "3 / 2", "15/10 normalized to 3/2");
+
+    // Sign normalization: negative in numerator only
+    ASSERT_EQ(ss("(-1) / 3"), "(-1) / 3", "-1/3 sign in numer");
+    // Note: parser handles "1 / (-3)" as DIV(1, NEG(3)), simplifier normalizes
+    {
+        auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(-3));
+        auto s = simplify(e);
+        ASSERT_EQ(expr_to_string(s), "(-1) / 3", "1/(-3) → (-1)/3 sign normalized");
+    }
+
+    // Evaluation still works correctly
+    ASSERT_NUM(ev("1 / 3"), 1.0/3.0, "1/3 evaluates to 0.333...");
+    ASSERT_NUM(ev("2 / 5"), 0.4, "2/5 evaluates to 0.4");
+
+    // Structural fraction in larger expression
+    ASSERT_EQ(ss("x * (1 / 3)"), "x / 3", "x * (1/3) → x/3");
+}
+
+void test_rational_arithmetic() {
+    SECTION("Rational arithmetic");
+
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
+
+    // Fraction + Fraction
+    ASSERT_EQ(ss("1/3 + 1/6"), "1 / 2", "1/3 + 1/6 = 1/2");
+    ASSERT_EQ(ss("1/3 + 2/3"), "1", "1/3 + 2/3 = 1");
+    ASSERT_EQ(ss("1/4 + 1/4"), "1 / 2", "1/4 + 1/4 = 1/2");
+
+    // Fraction - Fraction
+    ASSERT_EQ(ss("2/3 - 1/3"), "1 / 3", "2/3 - 1/3 = 1/3");
+    ASSERT_EQ(ss("1/2 - 1/3"), "1 / 6", "1/2 - 1/3 = 1/6");
+
+    // Fraction * Fraction
+    ASSERT_EQ(ss("(1/3) * (1/4)"), "1 / 12", "1/3 * 1/4 = 1/12");
+    ASSERT_EQ(ss("(2/3) * (3/4)"), "1 / 2", "2/3 * 3/4 = 1/2");
+    ASSERT_EQ(ss("(1/3) * 3"), "1", "1/3 * 3 = 1");
+
+    // Fraction / Fraction
+    ASSERT_EQ(ss("(1/3) / (2/3)"), "1 / 2", "1/3 ÷ 2/3 = 1/2");
+
+    // Fraction ^ Integer
+    ASSERT_EQ(ss("(1/2) ^ 2"), "1 / 4", "(1/2)^2 = 1/4");
+    ASSERT_EQ(ss("(1/3) ^ 2"), "1 / 9", "(1/3)^2 = 1/9");
+
+    // Integer + Fraction
+    ASSERT_EQ(ss("1 + 1/3"), "4 / 3", "1 + 1/3 = 4/3");
+    ASSERT_EQ(ss("2 + 1/2"), "5 / 2", "2 + 1/2 = 5/2");
+}
+
+void test_rational_derive() {
+    SECTION("Rational fractions in derive output");
+
+    // y = x^3 → x = y^(1/3)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x ^ 3");
+        auto result = sys.derive("x", {}, {{"y", "y"}});
+        ASSERT_EQ(result, "y^(1 / 3)", "x^3 derives x = y^(1/3)");
+    }
+
+    // y = x^2 → x = y^(1/2) or sqrt(y)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x ^ 2");
+        auto results = sys.derive_all("x", {}, {{"y", "y"}});
+        bool found_sqrt = false;
+        for (auto& r : results) {
+            if (r.find("1 / 2") != std::string::npos || r.find("sqrt") != std::string::npos)
+                found_sqrt = true;
+        }
+        ASSERT(found_sqrt, "x^2 derives x = y^(1/2) or sqrt(y)");
+    }
+}
+
+void test_constant_recognition_derive() {
+    SECTION("Constant recognition in derive output");
+
+    // y = 2^x → x = log(y) / log(2)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2 ^ x");
+        auto result = sys.derive("x", {}, {{"y", "y"}});
+        ASSERT(result.find("log(2)") != std::string::npos,
+               "2^x derives x with log(2) not 0.6931... (got: " + result + ")");
+    }
+
+    // y = 3^x → x = log(y) / log(3)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 3 ^ x");
+        auto result = sys.derive("x", {}, {{"y", "y"}});
+        ASSERT(result.find("log(3)") != std::string::npos,
+               "3^x derives x with log(3) not 1.0986... (got: " + result + ")");
+    }
+}
+
 int main() {
     ExprArena test_arena;
     ExprArena::Scope arena_scope(test_arena);
@@ -9723,6 +9845,12 @@ int main() {
     test_quadratic_formula();
     test_simultaneous_equations();
     test_numeric_skip();
+
+    // Rational arithmetic (structural fractions)
+    test_rational_fractions();
+    test_rational_arithmetic();
+    test_rational_derive();
+    test_constant_recognition_derive();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

@@ -164,19 +164,14 @@ fwiz --latex --derive triangle(C=?, a=a, b=b, c=c)
 
 Useful for documentation, papers, and reports. The expression tree already has all the structure needed — just a different printer.
 
-## 10. Fraction Representation
+## 10. Fraction Representation — ✅ DONE
 
-### Problem
+Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer. GCD normalization, sign normalization, rational arithmetic (add/sub/mul/div/pow). Constant recognition in derive output (`log(2)`, `log(3)`, `sqrt(N)`, `pi`, `e`). No Expr struct changes — sizeof(Expr) unchanged.
 
-`x / 2` becomes `0.5 * x` during simplification. Users prefer the fraction form, especially in derived equations.
-
-### Approach
-
-Keep rational numbers as `(numerator, denominator)` pairs internally. Only convert to decimal at output time (or when the fraction is irrational). This preserves `1/3` instead of `0.333...`, enables exact arithmetic, and produces cleaner derived equations.
-
-### Key insight
-
-Most engineering formulas use small integer fractions (1/2, 1/3, 1/4). Keeping them exact avoids floating point drift in long derivation chains.
+**Remaining enhancements:**
+- Rational display in non-derive solve output (currently uses `fmt_num(double)`)
+- Extended constant table (configurable extra constants)
+- Rational propagation in evaluate() for exact intermediate results
 
 ## 11. Curve Fitting — ✅ DONE
 
@@ -185,7 +180,7 @@ Implemented as `--fit [N]` flag. Templates: polynomial, power law, exponential (
 **Remaining enhancements:**
 - Rational (Padé) approximation: `p(x)/q(x)` for better convergence near singularities
 - Sum-of-products inners: `a*f(x) + b*g(x)` for Stirling-type approximations
-- Canonical number representation: keep fractions and irrational constants in expression tree
+- Canonical number representation: ✅ structural fractions preserved; constant recognition in derive output
 
 ## 12. Periodicity Detection
 

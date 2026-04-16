@@ -394,7 +394,7 @@ x/x = 1 iff x != 0
 x/x = undefined iff x = 0
 x^0 = 1
 x^1 = x
-x^0.5 = sqrt(x)
+x^(1/2) = sqrt(x)
 (x^a)^b = x^(a*b)
 )";
 
@@ -743,7 +743,9 @@ x^0.5 = sqrt(x)
         } catch (const std::exception& ex) {
             trace.calc("derive: symbolic result (cannot evaluate: " + std::string(ex.what()) + ")");
         }
-        return expr_to_string(result);
+        // Recognize constants and fractions in the expression tree
+        auto recognized = expr_recognize_constants(result);
+        return expr_to_string(recognized);
     }
 
     // Derive single result (backwards compatible)

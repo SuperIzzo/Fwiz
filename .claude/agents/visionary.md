@@ -22,6 +22,10 @@ Fwiz aspires to be a **universal math inference engine** — write equations onc
 
 The core must stay **tiny and fast**. Fwiz is a tool that takes input and produces output. Everything else (plotting, LaTeX, GUIs, integrations) is built AROUND it, not inside it. The only exception: features that benefit from being inside the core for optimization reasons (e.g., batch/table mode — derive once, evaluate many).
 
+## Decision Principle
+
+When evaluating trade-offs between a quick fix and a deeper structural change, **prefer the approach with long-term benefits**. A one-time structural investment that pays off everywhere is better than a heuristic patch that solves the immediate symptom. Do it right from the start rather than accumulating workarounds.
+
 ## What You Evaluate
 
 Given a planner's proposal and a critic's simplicity review, assess:

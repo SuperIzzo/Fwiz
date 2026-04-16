@@ -34,19 +34,21 @@ Two fixes: (1) `solve_all()` skips NUMERIC candidates for multi-variable equatio
 $ fwiz --steps 'rect.fw(w=?, area=12, perimeter=14)'  # 26 lines, not 24,000
 ```
 
-## 4. Fraction display in exponents
+## 4. Fraction display in exponents — RESOLVED
 
-```
-y = x^3, solve for x → x = y^0.3333333333
-```
+Structural fractions: the simplifier now preserves `DIV(Num(a), Num(b))` when the result is non-integer, instead of folding to a decimal. GCD normalization and sign normalization applied. Rational arithmetic (add, subtract, multiply, divide, power) implemented for structural fractions.
 
-Should display as `x = y^(1/3)`. The rational recognizer exists in the fitter but isn't applied to derive output.
-
-## 5. Constant recognition in derive output
-
-```
-y = 2^x, solve for x → x = log(y) / 0.6931471806
+```bash
+$ fwiz --derive '(x=?, y=y) y = x^3'
+x = y^(1 / 3)
 ```
 
-Should display as `x = log(y) / log(2)`. The constant recognizer exists in the fitter but isn't applied to derive output.
+## 5. Constant recognition in derive output — RESOLVED
+
+`expr_recognize_constants()` walks derive output trees and replaces floating-point NUM nodes with recognized symbolic forms (fractions, known constants). Extended constant table includes `log(2)`, `log(3)`, `log(10)`, `sqrt(2)`, `sqrt(3)`, `sqrt(5)`, `pi`, `e`, `phi`.
+
+```bash
+$ fwiz --derive '(x=?, y=y) y = 2^x'
+x = log(y) / log(2)
+```
 

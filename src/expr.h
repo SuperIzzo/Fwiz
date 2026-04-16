@@ -373,6 +373,62 @@ constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == Bi
 constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
 
 // ============================================================================
+//  Rational number helpers (structural fractions)
+// ============================================================================
+// Rational numbers are represented as DIV(Num(a), Num(b)) in the expression tree.
+// This avoids adding fields to Expr and preserves sizeof(Expr).
+
+// Is this a double value that's an exact integer?
+inline bool is_integer_value(double v) {
+    return std::abs(v) < 1e15 && v == std::floor(v);
+}
+
+// Is this a structural fraction: DIV(Num(int), Num(int))?
+inline bool is_int_frac(const Expr& e) {
+    return e.type == ExprType::BINOP && e.op == BinOp::DIV
+        && is_num(*e.left) && is_num(*e.right)
+        && is_integer_value(e.left->num) && is_integer_value(e.right->num)
+        && e.right->num != 0;
+}
+inline bool is_int_frac(const ExprPtr e) { return e && is_int_frac(*e); }
+
+// Extract rational (numer, denom) from a Num or structural fraction.
+// Returns {n, 1} for plain integers, {p, q} for DIV(Num(p), Num(q)).
+inline std::pair<int64_t, int64_t> to_rational(const Expr& e) {
+    if (is_int_frac(e))
+        return {static_cast<int64_t>(e.left->num), static_cast<int64_t>(e.right->num)};
+    if (is_num(e) && is_integer_value(e.num))
+        return {static_cast<int64_t>(e.num), 1};
+    return {0, 0}; // not rational
+}
+inline std::pair<int64_t, int64_t> to_rational(const ExprPtr e) {
+    return e ? to_rational(*e) : std::pair<int64_t, int64_t>{0, 0};
+}
+
+// GCD for normalization
+inline int64_t gcd_abs(int64_t a, int64_t b) {
+    a = std::abs(a); b = std::abs(b);
+    while (b) { a %= b; std::swap(a, b); }
+    return a;
+}
+
+// Build a normalized rational expression: GCD-reduced, sign in numerator.
+// Returns Num(n) if denominator is 1 after reduction.
+inline ExprPtr make_rational(int64_t numer, int64_t denom) {
+    assert(denom != 0 && "make_rational: zero denominator");
+    if (numer == 0) return Expr::Num(0);
+    // Sign normalization: negative in numerator only
+    if (denom < 0) { numer = -numer; denom = -denom; }
+    // GCD reduction
+    int64_t g = gcd_abs(numer, denom);
+    numer /= g; denom /= g;
+    if (denom == 1) return Expr::Num(static_cast<double>(numer));
+    return Expr::BinOpExpr(BinOp::DIV,
+        Expr::Num(static_cast<double>(numer)),
+        Expr::Num(static_cast<double>(denom)));
+}
+
+// ============================================================================
 //  BinOp metadata
 // ============================================================================
 
@@ -978,6 +1034,9 @@ inline void flatten_multiplicative(ExprPtr e,
     } else if (e->type == ExprType::BINOP && e->op == BinOp::MUL) {
         flatten_multiplicative(e->left, coeff, factors);
         flatten_multiplicative(e->right, coeff, factors);
+    } else if (is_int_frac(e)) {
+        // Structural fraction: keep as opaque factor to preserve rational form
+        factors.push_back({e, 1.0});
     } else if (e->type == ExprType::BINOP && e->op == BinOp::DIV
                && e->right->type == ExprType::NUM && e->right->num != 0) {
         coeff /= e->right->num;
@@ -1168,18 +1227,68 @@ inline ExprPtr simplify_additive(const ExprPtr& combined) {
     flatten_additive(combined, 1.0, terms);
     double constant = 0;
     std::vector<std::pair<double, ExprPtr>> symbolic;
+    // Rational accumulator: combine integers and structural fractions
+    int64_t rat_num = 0, rat_den = 1;
+    bool has_rational = false;
     for (auto& [c, b] : terms) {
-        if (!b) constant += c;
-        else    symbolic.push_back({c, b});
+        if (!b) {
+            // Pure constant — try to add as rational
+            if (is_integer_value(c)) {
+                int64_t n = static_cast<int64_t>(c);
+                rat_num = rat_num * 1 + n * rat_den; // rat += n/1
+                // (no GCD yet — normalize at end)
+                has_rational = true;
+            } else {
+                constant += c;
+            }
+        } else if (is_int_frac(b) && is_integer_value(c)) {
+            // Structural fraction with integer coefficient: c * (p/q)
+            auto [p, q] = to_rational(b);
+            int64_t ic = static_cast<int64_t>(c);
+            rat_num = rat_num * q + ic * p * rat_den;
+            rat_den *= q;
+            // Prevent overflow by intermediate GCD
+            int64_t g = gcd_abs(rat_num, rat_den);
+            if (g > 1) { rat_num /= g; rat_den /= g; }
+            has_rational = true;
+        } else {
+            symbolic.push_back({c, b});
+        }
     }
     group_additive(symbolic);
+    // Emit rational accumulator
+    if (has_rational && (rat_num != 0 || symbolic.empty())) {
+        if (rat_den == 1 || rat_num == 0) {
+            // Integer or zero — add as floating constant
+            constant += static_cast<double>(rat_num);
+        } else {
+            symbolic.push_back({1.0, make_rational(rat_num, rat_den)});
+        }
+    }
     if (std::abs(constant) >= EPSILON_ZERO)
         symbolic.push_back({constant, nullptr});
     return rebuild_additive(symbolic);
 }
 
+inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r); // forward decl
+
 inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
     if (is_zero(l) || is_zero(r)) return Expr::Num(0);
+    // Rational * Rational: exact arithmetic
+    auto [ln, ld] = to_rational(l);
+    auto [rn, rd] = to_rational(r);
+    if (ld != 0 && rd != 0)
+        return make_rational(ln * rn, ld * rd);
+    // Rational * symbolic: emit as (n * sym) / d
+    if (ld != 0 && ld != 1 && rd == 0) {
+        // (ln/ld) * r → simplify_mul(Num(ln), r) then wrap with /ld
+        auto top = simplify_mul(Expr::Num(static_cast<double>(ln)), r);
+        return simplify_div(top, Expr::Num(static_cast<double>(ld)));
+    }
+    if (rd != 0 && rd != 1 && ld == 0) {
+        auto top = simplify_mul(l, Expr::Num(static_cast<double>(rn)));
+        return simplify_div(top, Expr::Num(static_cast<double>(rd)));
+    }
     auto combined = Expr::BinOpExpr(BinOp::MUL, l, r);
     double coeff = 1.0;
     std::vector<std::pair<ExprPtr, double>> factors;
@@ -1192,6 +1301,13 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
     if (is_zero(l)) return Expr::Num(0);
     if (is_one(r)) return l;
     if (is_neg_one(r)) return Expr::Neg(l);
+    // Rational division: (a/b) / (c/d) = (a*d) / (b*c)
+    {
+        auto [ln, ld] = to_rational(l);
+        auto [rn, rd] = to_rational(r);
+        if (ld != 0 && rd != 0 && rn != 0)
+            return make_rational(ln * rd, ld * rn);
+    }
     if (is_neg_num(r))
         return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
     if (is_neg(l) && is_neg(r))
@@ -1202,10 +1318,25 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
         return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
     // Constant reassociation: (K * a) / K2 or (a * K) / K2
     if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
-        if (is_num(l->right))
+        if (is_num(l->right)) {
+            if (is_integer_value(l->right->num) && is_integer_value(r->num)) {
+                auto rat = make_rational(
+                    static_cast<int64_t>(l->right->num), static_cast<int64_t>(r->num));
+                // Don't recurse into simplify_mul — just emit MUL(sym, fraction)
+                if (is_one(rat)) return l->left;
+                return Expr::BinOpExpr(BinOp::MUL, l->left, rat);
+            }
             return Expr::BinOpExpr(BinOp::MUL, l->left, Expr::Num(l->right->num / r->num));
-        if (is_num(l->left))
+        }
+        if (is_num(l->left)) {
+            if (is_integer_value(l->left->num) && is_integer_value(r->num)) {
+                auto rat = make_rational(
+                    static_cast<int64_t>(l->left->num), static_cast<int64_t>(r->num));
+                if (is_one(rat)) return l->right;
+                return Expr::BinOpExpr(BinOp::MUL, rat, l->right);
+            }
             return Expr::BinOpExpr(BinOp::MUL, Expr::Num(l->left->num / r->num), l->right);
+        }
     }
     if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::DIV && is_num(l->right))
         return Expr::BinOpExpr(BinOp::DIV, l->left, Expr::Num(l->right->num * r->num));
@@ -1318,8 +1449,15 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             auto l = simplify_once(e->left);
             auto r = simplify_once(e->right);
             if (is_undefined(l) || is_undefined(r)) return Expr::Var("undefined");
-            if (is_num(l) && is_num(r))
+            if (is_num(l) && is_num(r)) {
+                // For DIV: preserve structural fractions when result is non-integer
+                if (e->op == BinOp::DIV && r->num != 0
+                    && is_integer_value(l->num) && is_integer_value(r->num)) {
+                    return make_rational(static_cast<int64_t>(l->num),
+                                         static_cast<int64_t>(r->num));
+                }
                 return Expr::Num(binop_info(e->op).eval(l->num, r->num));
+            }
 
             switch (e->op) {
                 case BinOp::ADD: case BinOp::SUB:
@@ -1327,6 +1465,15 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 case BinOp::MUL: return simplify_mul(l, r);
                 case BinOp::DIV: return simplify_div(l, r);
                 case BinOp::POW:
+                    // Rational base ^ integer exponent: (a/b)^n = a^n / b^n
+                    if (is_int_frac(l) && is_num(r) && is_integer_value(r->num)
+                        && r->num > 0 && r->num <= 20) {
+                        auto [n, d] = to_rational(l);
+                        int64_t exp = static_cast<int64_t>(r->num);
+                        int64_t rn = 1, rd = 1;
+                        for (int64_t i = 0; i < exp; i++) { rn *= n; rd *= d; }
+                        return make_rational(rn, rd);
+                    }
                     // x^(-n) → 1/x^n — stays in C++ (needs numeric check)
                     if (is_num(r) && r->num < 0) {
                         if (r->num == -1.0)
