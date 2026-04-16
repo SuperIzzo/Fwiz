@@ -5025,6 +5025,24 @@ void test_valueset_operations() {
     }
 }
 
+void test_valueset_display() {
+    SECTION("ValueSet Display");
+
+    // Basic interval display
+    {
+        auto s = ValueSet::lt(3);
+        ASSERT(s.to_string() == "(-inf, 3)", "lt(3) display");
+    }
+    {
+        auto s = ValueSet::le(3);
+        ASSERT(s.to_string() == "(-inf, 3]", "le(3) display");
+    }
+    {
+        auto s = ValueSet::between(0, 5, true, true);
+        ASSERT(s.to_string() == "[0, 5]", "closed interval display");
+    }
+}
+
 // ---- Condition tests ----
 
 void test_condition_parsing() {
@@ -9272,6 +9290,158 @@ void test_quadratic_formula() {
         {-1 + std::sqrt(11), -1 - std::sqrt(11)}, "KNOWN_ISSUES#3");
 }
 
+// ---- Simultaneous equations ----
+
+void test_simultaneous_equations() {
+    SECTION("Simultaneous Equations");
+
+    // 1. Linear system: s = x + y, d = x - y → x = (s+d)/2
+    {
+        FormulaSystem sys;
+        sys.load_string("s = x + y\nd = x - y\n");
+        try {
+            double r = sys.resolve("x", {{"s", 10}, {"d", 4}});
+            ASSERT_NUM(r, 7, "linear system: x = (10+4)/2 = 7");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("linear system: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 2. Rectangle puzzle: area = w*h, perimeter = 2w+2h → w has two solutions
+    {
+        FormulaSystem sys;
+        sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
+        try {
+            auto result = sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
+            auto& d = result.discrete();
+            bool has_3 = false, has_4 = false;
+            for (auto v : d) {
+                if (std::abs(v - 3) < 1e-6) has_3 = true;
+                if (std::abs(v - 4) < 1e-6) has_4 = true;
+            }
+            ASSERT(has_3, "rectangle puzzle: w=3 found");
+            ASSERT(has_4, "rectangle puzzle: w=4 found");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("rectangle puzzle: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 3. Overdetermined consistent: y=2x+1, y=x+3 → x=2 (regression guard)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2*x + 1\ny = x + 3\n");
+        try {
+            auto result = sys.resolve_all("x", {{"y", 5}});
+            auto& d = result.discrete();
+            ASSERT(d.size() == 1, "overdetermined consistent: exactly one x (got "
+                + std::to_string(d.size()) + ")");
+            if (!d.empty()) ASSERT_NUM(d[0], 2, "overdetermined consistent: x = 2");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("overdetermined consistent: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 4. Overdetermined inconsistent: y=2x+1, y=x+3 with y=4 → no valid x
+    {
+        FormulaSystem sys;
+        sys.load_string("y = 2*x + 1\ny = x + 3\n");
+        try {
+            auto result = sys.resolve_all("x", {{"y", 4}});
+            auto& d = result.discrete();
+            ASSERT(d.empty(), "overdetermined inconsistent: no valid x for y=4 (got "
+                + std::to_string(d.size()) + ")");
+        } catch (const std::exception&) {
+            ASSERT(true, "overdetermined inconsistent: correctly throws (no valid x for y=4)");
+        }
+    }
+
+    // 5. Derive mode: s = x + y, d = x - y → derive x symbolically
+    {
+        FormulaSystem sys;
+        sys.load_string("s = x + y\nd = x - y\n");
+        try {
+            auto results = sys.derive_all("x", {}, {{"s", "s"}, {"d", "d"}});
+            bool found = false;
+            for (auto& r : results) {
+                // Should produce something like (s + d) / 2 or (s + d) * 0.5
+                if (r.find("s") != std::string::npos && r.find("d") != std::string::npos)
+                    found = true;
+            }
+            ASSERT(found, "derive simultaneous: x in terms of s and d (got "
+                + (results.empty() ? std::string("nothing") : results[0]) + ")");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("derive simultaneous: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 6. Numeric no-crash: rectangle puzzle with numeric mode (must not stack overflow)
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
+        bool crashed = false;
+        try {
+            auto result = sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
+            // May or may not find the answer — but must not crash
+            ASSERT(true, "numeric no-crash: did not crash");
+        } catch (const std::exception&) {
+            ASSERT(true, "numeric no-crash: threw but did not crash");
+        }
+    }
+
+    // 7. Conditions: y = x^2 iff x >= 0, z = x + 1 iff x >= 0 → x=3
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x^2 iff x >= 0\nz = x + 1 iff x >= 0\n");
+        try {
+            double r = sys.resolve("x", {{"y", 9}, {"z", 4}});
+            ASSERT_NUM(r, 3, "conditions: x = 3 (y=9, z=4)");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("conditions: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 8. Three-variable chain: p=xy, q=yz, r=xz → x=3
+    {
+        FormulaSystem sys;
+        sys.load_string("p = x * y\nq = y * z\nr = x * z\n");
+        try {
+            double r = sys.resolve("x", {{"p", 6}, {"q", 10}, {"r", 15}});
+            ASSERT_NUM(r, 3, "three-variable chain: x = 3 (p=6, q=10, r=15)");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("three-variable chain: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 9. Disjoint system: a = x + 1, b = y + 2 → x = 4 (regression guard)
+    {
+        FormulaSystem sys;
+        sys.load_string("a = x + 1\nb = y + 2\n");
+        try {
+            double r = sys.resolve("x", {{"a", 5}});
+            ASSERT_NUM(r, 4, "disjoint system: x = 4 (a=5)");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("disjoint system: should not throw (got: ") + e.what() + ")");
+        }
+    }
+
+    // 10. Self-referencing: y = x^2 + x, z = y - 1 → z=5 means y=6, x^2+x=6, x=2
+    {
+        FormulaSystem sys;
+        sys.load_string("y = x^2 + x\nz = y - 1\n");
+        try {
+            auto result = sys.resolve_all("x", {{"z", 5}});
+            auto& d = result.discrete();
+            bool has_2 = false;
+            for (auto v : d)
+                if (std::abs(v - 2) < 1e-6) has_2 = true;
+            ASSERT(has_2, "self-referencing: x=2 found (z=5 → y=6 → x^2+x=6)");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("self-referencing: should not throw (got: ") + e.what() + ")");
+        }
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -9418,6 +9588,7 @@ int main() {
     // ValueSet
     test_valueset_basic();
     test_valueset_operations();
+    test_valueset_display();
 
     // Conditions
     test_condition_parsing();
@@ -9496,6 +9667,7 @@ int main() {
     test_semicolon_separator();
     test_commutative_matching();
     test_quadratic_formula();
+    test_simultaneous_equations();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

@@ -982,6 +982,16 @@ inline void flatten_multiplicative(ExprPtr e,
                && e->right->type == ExprType::NUM && e->right->num != 0) {
         coeff /= e->right->num;
         flatten_multiplicative(e->left, coeff, factors);
+    } else if (e->type == ExprType::BINOP && e->op == BinOp::DIV
+               && e->right->type != ExprType::NUM) {
+        // a / b → flatten a, then flatten b with negated exponents
+        flatten_multiplicative(e->left, coeff, factors);
+        double denom_coeff = 1.0;
+        std::vector<std::pair<ExprPtr, double>> denom_factors;
+        flatten_multiplicative(e->right, denom_coeff, denom_factors);
+        if (std::abs(denom_coeff) > EPSILON_ZERO) coeff /= denom_coeff;
+        for (auto& [base, exp] : denom_factors)
+            factors.push_back({base, -exp});
     } else if (e->type == ExprType::BINOP && e->op == BinOp::POW
                && e->right->type == ExprType::NUM) {
         factors.push_back({e->left, e->right->num});
@@ -1675,6 +1685,42 @@ inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
 }
 
 
+// Expand products a*(b+c) -> a*b+a*c when target variable spans both factors.
+// Enables quadratic decomposition for substituted expressions like w*(p-2w).
+inline ExprPtr expand_for_var(const ExprPtr& e, const std::string& var) {
+    if (!e || !contains_var(e, var)) return e;
+    if (e->type == ExprType::BINOP) {
+        auto l = expand_for_var(e->left, var);
+        auto r = expand_for_var(e->right, var);
+        if (e->op == BinOp::MUL) {
+            bool l_sum = l->type == ExprType::BINOP &&
+                (l->op == BinOp::ADD || l->op == BinOp::SUB);
+            bool r_sum = r->type == ExprType::BINOP &&
+                (r->op == BinOp::ADD || r->op == BinOp::SUB);
+            if (r_sum && contains_var(l, var) && contains_var(r, var)) {
+                // a * (b +/- c) -> a*b +/- a*c
+                auto op = r->op;
+                return simplify(Expr::BinOpExpr(op,
+                    expand_for_var(Expr::BinOpExpr(BinOp::MUL, l, r->left), var),
+                    expand_for_var(Expr::BinOpExpr(BinOp::MUL, l, r->right), var)));
+            }
+            if (l_sum && contains_var(l, var) && contains_var(r, var)) {
+                auto op = l->op;
+                return simplify(Expr::BinOpExpr(op,
+                    expand_for_var(Expr::BinOpExpr(BinOp::MUL, l->left, r), var),
+                    expand_for_var(Expr::BinOpExpr(BinOp::MUL, l->right, r), var)));
+            }
+        }
+        if (l != e->left || r != e->right)
+            return Expr::BinOpExpr(e->op, l, r);
+    }
+    if (e->type == ExprType::UNARY_NEG) {
+        auto inner = expand_for_var(e->child, var);
+        return inner != e->child ? Expr::Neg(inner) : e;
+    }
+    return e;
+}
+
 // Return ALL solutions (multiple for abs, quadratic, etc.)
 inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rhs,
         const std::string& target) {
@@ -1702,6 +1748,9 @@ inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rh
             inv_results = solve_by_inversion(rhs, lhs, target);
         if (!inv_results.empty()) return inv_results;
     }
+
+    // Expand products involving target to enable quadratic decomposition
+    combined = simplify(expand_for_var(combined, target));
 
     // Try quadratic decomposition: ax² + bx + c = 0
     // Flatten into additive terms, classify each by degree in target variable
