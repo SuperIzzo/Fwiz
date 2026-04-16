@@ -52,6 +52,8 @@ Current capabilities:
 - Curve fitting (`--fit`) with template matching and recursive composition
 - Built-in constants (`pi`, `e`, `phi`)
 - Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
+- Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
+- Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
 
 Planned (see FUTURE.md):
 - **Symbolic differentiation** — sensitivity analysis
@@ -145,6 +147,7 @@ The core of the system. Contains:
 - Zero absorption: `x * 0 → 0`, `0/x → 0`
 - Negation cancellation: `--x → x`, `x - (-y) → x + y`, `-(a - b) → b - a`
 - Negation factoring via `simplify_neg_pair()`: handles `(-a)⊗(-b) → a⊗b`, `(-a)⊗b → -(a⊗b)`, `a⊗(-b) → -(a⊗b)` for both MUL and DIV in a single shared function
+- Structural fractions: `Num(a) / Num(b)` preserved as `DIV(Num(a), Num(b))` when result is non-integer; GCD-normalized, sign in numerator. Rational arithmetic via `to_rational()` and `make_rational()` helpers. `flatten_multiplicative()` treats structural fractions as opaque factors.
 
 **decompose_linear()** — The key insight for solving. Decomposes an expression into `coeff * target + rest` where `coeff` and `rest` are free of the target variable. This works by walking the expression tree:
 - `VAR(target)` → coeff=1, rest=0
