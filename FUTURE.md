@@ -166,12 +166,57 @@ Useful for documentation, papers, and reports. The expression tree already has a
 
 ## 10. Fraction Representation — ✅ DONE
 
-Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer. GCD normalization, sign normalization, rational arithmetic (add/sub/mul/div/pow). Constant recognition in derive output (`log(2)`, `log(3)`, `sqrt(N)`, `pi`, `e`). No Expr struct changes — sizeof(Expr) unchanged.
+Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer. GCD normalization, sign normalization, rational arithmetic (add/sub/mul/div/pow). Constant recognition in derive output (`log(2)`, `log(3)`, `sqrt(N)`, `pi`, `e`). Rational display in solve output via `fmt_solve_result` (main.cpp) when the result is exact. No Expr struct changes — sizeof(Expr) unchanged.
 
 **Remaining enhancements:**
-- Rational display in non-derive solve output (currently uses `fmt_num(double)`)
 - Extended constant table (configurable extra constants)
 - Rational propagation in evaluate() for exact intermediate results
+
+## 10a. Extending `evaluate_symbolic` for new number types
+
+`expr.h` now has two evaluators in sibling roles:
+
+- **`double evaluate(const Expr&)`** — numeric projection. Collapses the whole tree to a real `double`. Stays real-valued forever. Used by: Newton/bisection grid scan, condition comparisons, verify-mode equality, CLI arg parsing, `solve_recursive` bindings commit.
+- **`ExprPtr evaluate_symbolic(const Expr&)`** — exact projection. Returns a tree that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by: simplifier constant-folding paths (`simplify_once_impl` BINOP num/num, FUNC_CALL all-numeric).
+
+The split is the extension point for new non-real number types. Callers choose the projection; `evaluate_symbolic`'s dispatch grows without touching call sites.
+
+### Complex numbers checklist
+
+Attack in this order; stop at the level that passes the user's profile:
+
+1. **Prefer rewrite-rule route first**: `i` as a symbolic builtin constant + `.fw` rules `i * i = -1`, `i^2 = -1`, `(a + b*i) * (c + d*i) = (a*c - b*d) + (a*d + b*c)*i`. Minimalist — no new `ExprType`. Escalate to a leaf only if profile shows dense complex arithmetic as a hot path.
+2. **`ExprType::COMPLEX` leaf** (fallback): adds `real, imag` doubles to `Expr`. Preserve `sizeof(Expr)` — overlay onto existing `num` + auxiliary field, or tag via `op`. Add `is_complex(e)` predicate next to `is_num(e)`.
+3. **`evaluate_symbolic` BINOP dispatch** (expr.h): when one operand is complex (leaf or symbolic tree containing `i`), implement add/sub/mul/div using closed-form formulas. `pow` needs a documented branch-cut convention (principal value; log of negative reals = `i*pi`).
+4. **`expr_to_string`**: render `COMPLEX(a, b)` as `a + b*i`, with sign handling for `b < 0`.
+5. **`double evaluate()` rejection**: complex operands throw. Conditions `x > 0` remain real-only (complex has no total ordering). Numeric solver rejects complex systems at the outer boundary.
+6. **Tests**: `simplify(i*i) == -1`, `simplify((1+i)*(1-i)) == 2`, `simplify(sqrt(-1))` propagates through compound expressions, condition on complex throws.
+
+### Matrices / vectors checklist
+
+Attack after complex numbers (the bindings-map extension below is shared):
+
+1. **`ExprType::MATRIX` leaf**: shape (rows, cols) + element storage. Start with `vector<double>` for scalar entries; promote to `vector<ExprPtr>` only when symbolic entries arrive.
+2. **`evaluate_symbolic` BINOP dispatch**: shape-checked add/sub (element-wise), mul (matrix product), scalar-matrix multiply. Shape mismatch → `undefined` (existing symbolic-undefined propagation).
+3. **Prefer `matmul(A, B)` function call** over a new `BinOp::MATMUL`. Keeps the binop table small — data-driven principle (see DEVELOPER.md). Same for `det(A)`, `inv(A)`, `transpose(A)`.
+4. **`double evaluate()` rejection**: matrix operands throw ("cannot reduce matrix to scalar").
+5. **Solver bindings extension**: `bindings` is `map<string, double>` today. Matrix-valued variables require a parallel `map<string, ExprPtr>` track or promotion of the existing map to `ExprPtr`. Scope that when the first matrix use case lands — don't pre-generalize.
+
+### Migration candidates inside the simplifier
+
+These rational-aware sites could centralize through `evaluate_symbolic` once it gains symbolic×rational dispatch (today it only handles pure-numeric folding):
+
+- `simplify_additive` fraction coalescing (expr.h ~line 1265)
+- `simplify_mul` rational × rational (expr.h ~line 1278)
+- `simplify_div` rational / rational (expr.h ~line 1306)
+- `simplify_div` constant × symbolic reassociation (expr.h ~lines 1323, 1333)
+- `POW` rational-base folding (expr.h ~line 1469)
+
+Each is a future minimalism target — remove duplicated logic, single source of truth for numeric folding.
+
+### Bindings-parameter extension
+
+When `double evaluate()` gains a `bindings` parameter (symbolic substitution during evaluation), extend `evaluate_symbolic` with the same signature. Keep them twin APIs — every numeric projection has an exact sibling.
 
 ## 11. Curve Fitting — ✅ DONE
 
@@ -197,6 +242,56 @@ Post-process the roots array from `find_numeric_roots`:
 4. Output pattern: `x = 0.5236 + 2kπ | x = 2.618 + 2kπ`
 
 This extends naturally from the existing numeric solver — same scan data, just pattern recognition on top.
+
+## 13. Complex / Imaginary Numbers
+
+Support `i` as a builtin constant. Complex arithmetic in the expression tree — enables solving polynomials with no real roots, AC circuit analysis, signal processing. Structural representation as `a + b*i` pairs, similar to how rationals use structural fractions.
+
+Implementation plan and extension point: see **#10a — Extending `evaluate_symbolic` for new number types** (Complex numbers checklist).
+
+## 14. Vectors, Quaternions, and Matrix Math
+
+Vector literals (`[1, 2, 3]`), dot product, cross product, magnitude. Quaternions for rotation math. Matrix operations (multiply, inverse, determinant, eigenvalues). Key question: how to represent multi-dimensional values in the expression tree without breaking the scalar pipeline.
+
+Implementation plan and extension point: see **#10a — Extending `evaluate_symbolic` for new number types** (Matrices / vectors checklist).
+
+## 15. Structs / Dot Access
+
+Hierarchical variable namespacing: `car.velocity.x`, `beam.load.max`. Enables modeling complex systems with nested properties. Could be syntactic sugar over flattened variable names (`car_velocity_x`) or a real structural feature.
+
+## 16. Integrals and Differentials
+
+Symbolic integration (`integral(f, x)`) alongside differentiation (#6). Definite integrals with bounds. Standard integration rules (power, trig, substitution, parts). Falls back to numeric quadrature when symbolic fails.
+
+## 17. Big Numbers / Arbitrary Precision
+
+Arbitrary-precision integers and rationals for exact computation beyond double range. Natural extension of structural fractions (#10). Useful for combinatorics, cryptography, number theory problems.
+
+## 18. Bitwise / Programming Operators
+
+`xor`, `and`, `or`, `nand`, `nor`, `not`, bit shifts, modulo. Enables digital logic, cryptographic formulas, CS-oriented problem solving. Integer-only operations — error on non-integer inputs.
+
+## Standard Library Ideas
+
+Beyond the collections in #8:
+
+```
+stdlib/
+  number_theory/
+    primes.fw           # primality, factorization, sieve
+    divisibility.fw     # GCD, LCM, modular arithmetic
+  combinatorics/
+    permutations.fw     # nPr, nCr, factorial
+    partitions.fw       # integer partitions
+  probability/
+    distributions.fw    # normal, binomial, poisson, uniform
+    bayesian.fw         # Bayes' theorem, prior/posterior/likelihood
+    expected_value.fw   # E[X], variance, standard deviation
+  statistics/
+    descriptive.fw      # mean, median, mode, percentiles
+    regression.fw       # linear, polynomial (ties into --fit)
+    hypothesis.fw       # t-test, chi-squared, p-values
+```
 
 ## Interaction with existing features
 

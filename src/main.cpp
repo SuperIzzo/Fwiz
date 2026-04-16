@@ -1,6 +1,41 @@
 #include "system.h"
 #include <iostream>
-#include <iomanip>
+
+// Render a solve result. Exact results (algebraic or Newton-verified) attempt
+// structural-fraction display (e.g. 1/3 → "1 / 3") for consistency with derive/
+// simplify output. Approximate results always fall through to decimal via
+// fmt_num, since a fraction under '~' would lie about exactness.
+//
+// Display rule: if the reconstructed fraction has a power-of-10 denominator
+// (10, 100, 1000, ...), render as decimal — "98.1" reads more naturally than
+// "981 / 10". All other denominators render as fractions, including large
+// numerators: "100 / 7" is more informative than "14.285714".
+//
+// This is a pragmatic stopgap. Fwiz's solver loses provenance (bindings are
+// map<string, double>), so we reconstruct rationality heuristically. Every
+// major CAS tracks exactness natively via the type system — see KNOWN_ISSUES
+// #6. Once that architectural fix lands, this rule becomes unnecessary: the
+// output follows the input's type directly.
+static bool is_power_of_10(int q) {
+    if (q < 10) return false;
+    while (q > 1) {
+        if (q % 10 != 0) return false;
+        q /= 10;
+    }
+    return true;
+}
+
+static std::string fmt_solve_result(double v, bool is_exact) {
+    constexpr int RECOGNIZE_MAX_DEN = 12;
+    if (is_exact) {
+        if (auto f = recognize_fraction(v, RECOGNIZE_MAX_DEN)) {
+            if (f->q == 1) return std::to_string(f->p);
+            if (!is_power_of_10(f->q))
+                return std::to_string(f->p) + " / " + std::to_string(f->q);
+        }
+    }
+    return fmt_num(v);
+}
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -209,11 +244,11 @@ int main(int argc, char* argv[]) {
 
             for (auto& [var, alias] : vars) {
                 if (solved.count(var)) {
-                    std::cout << alias << " = " << fmt_num(solved.at(var)) << '\n';
+                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), true) << '\n';
                 } else {
                     try {
                         double result = sys.resolve(var, query.bindings);
-                        std::cout << alias << " = " << fmt_num(result) << '\n';
+                        std::cout << alias << " = " << fmt_solve_result(result, true) << '\n';
                         solved[var] = result;
                     } catch (...) {
                         std::cout << alias << " = ?\n";
@@ -223,20 +258,26 @@ int main(int argc, char* argv[]) {
         } else if (!query.queries.empty()) {
             for (auto& q : query.queries) {
                 try {
-                    auto eq_sign = [&](const std::string& var) {
+                    // Exactness drives both the '=' vs '~' sign AND whether
+                    // structural-fraction display is attempted. Source of truth:
+                    // numeric_results_ — absent OR true means exact.
+                    auto is_exact_result = [&](const std::string& var) {
                         auto it = sys.numeric_results_.find(var);
-                        if (it == sys.numeric_results_.end()) return " = ";
-                        return it->second ? " = " : " ~ ";
+                        return it == sys.numeric_results_.end() || it->second;
                     };
                     if (q.strict) {
                         double result = sys.resolve_one(q.variable, query.bindings);
-                        std::cout << q.alias << eq_sign(q.variable) << fmt_num(result) << '\n';
+                        bool exact = is_exact_result(q.variable);
+                        std::cout << q.alias << (exact ? " = " : " ~ ")
+                                  << fmt_solve_result(result, exact) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
                         if (result.is_discrete()) {
+                            bool exact = is_exact_result(q.variable);
                             for (auto r : result.discrete())
-                                std::cout << q.alias << eq_sign(q.variable) << fmt_num(r) << '\n';
+                                std::cout << q.alias << (exact ? " = " : " ~ ")
+                                          << fmt_solve_result(r, exact) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
                         } else {

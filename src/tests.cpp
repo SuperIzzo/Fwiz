@@ -9598,6 +9598,166 @@ void test_rational_derive() {
     }
 }
 
+void test_rational_solve_output() {
+    SECTION("Rational fractions in solve output");
+
+    // Solve output: x = 1/3 should render as structural fraction "1 / 3"
+    {
+        write_fw("/tmp/trso_1_3.fw", "a = b + 1/3\n");
+        int rc = system("./bin/fwiz '/tmp/trso_1_3(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 1 / 3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 1/3 displays as '1 / 3'");
+    }
+
+    // Solve output: 2/7 preserved as fraction
+    {
+        write_fw("/tmp/trso_2_7.fw", "a = b + 2/7\n");
+        int rc = system("./bin/fwiz '/tmp/trso_2_7(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 2 / 7'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 2/7 displays as '2 / 7'");
+    }
+
+    // Solve output: -3/4 preserved with sign in numerator
+    {
+        write_fw("/tmp/trso_m3_4.fw", "a = b + (-3)/4\n");
+        int rc = system("./bin/fwiz '/tmp/trso_m3_4(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = -3 / 4'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: -3/4 displays as '-3 / 4'");
+    }
+
+    // Integer-valued fraction: 10/5 must render as '2', not '2 / 1'
+    {
+        write_fw("/tmp/trso_int.fw", "a = b + 10/5\n");
+        // Must match 'a = 2' followed by end-of-line (not '2 / 1')
+        int rc = system("./bin/fwiz '/tmp/trso_int(a=?, b=0)' 2>/dev/null "
+                        "| grep -qE 'a = 2$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 10/5 displays as '2' (no / 1)");
+        // Confirm no spurious '/ 1' appears
+        int rc2 = system("./bin/fwiz '/tmp/trso_int(a=?, b=0)' 2>/dev/null "
+                         "| grep -q '/ 1'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 10/5 does not emit '/ 1'");
+    }
+
+    // Non-recognizable decimal falls back to decimal rendering
+    {
+        write_fw("/tmp/trso_dec.fw", "a = b + 0.37\n");
+        int rc = system("./bin/fwiz '/tmp/trso_dec(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 0.37'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.37 displays as decimal");
+    }
+
+    // Numeric-approximate result must use '~' AND NOT render a fraction
+    {
+        write_fw("/tmp/trso_cubic.fw", "y = x^3 + x\n");
+        int rc = system("./bin/fwiz '/tmp/trso_cubic(x=?, y=1)' 2>/dev/null "
+                        "| grep -q 'x ~ '");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: cubic uses '~' (approximate)");
+        int rc2 = system("./bin/fwiz '/tmp/trso_cubic(x=?, y=1)' 2>/dev/null "
+                         "| grep -q ' / '");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: approximate result has no fraction");
+    }
+
+    // --explore path (Path A) also renders fractions
+    {
+        write_fw("/tmp/trso_exp.fw", "a = b + 1/3\n");
+        int rc = system("./bin/fwiz --explore '/tmp/trso_exp(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 1 / 3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: --explore path renders fraction");
+    }
+
+    // Power-of-10 denominators render as decimal (principled rule — supersedes
+    // the earlier ad-hoc |p| <= 12 cap). 98.1 = 981/10 exactly in IEEE 754;
+    // recognize_fraction matches (981, 10), but denom=10 is a power of 10 so
+    // we emit the decimal "98.1" instead of the jarring "981 / 10".
+    {
+        write_fw("/tmp/trso_981.fw", "a = b + 98.1\n");
+        int rc = system("./bin/fwiz '/tmp/trso_981(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 98.1'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 98.1 stays decimal (no 981/10)");
+        int rc2 = system("./bin/fwiz '/tmp/trso_981(a=?, b=0)' 2>/dev/null "
+                         "| grep -q '981 / 10'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 98.1 does not emit '981 / 10'");
+    }
+
+    // Power-of-10 rule applies to 1/10 directly: 0.1 stays decimal, never
+    // renders as "1 / 10". Regression guard for the is_power_of_10 filter.
+    {
+        write_fw("/tmp/trso_01.fw", "a = b + 0.1\n");
+        int rc = system("./bin/fwiz '/tmp/trso_01(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 0.1'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.1 stays decimal (not '1 / 10')");
+        int rc2 = system("./bin/fwiz '/tmp/trso_01(a=?, b=0)' 2>/dev/null "
+                         "| grep -q '1 / 10'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 0.1 does not emit '1 / 10'");
+    }
+
+    // Non-power-of-10 denominators render as fraction regardless of numerator
+    // size. Value 100/7 (≈ 14.2857) was previously rejected by the |p| <= 12
+    // cap; now correctly displays as the informative "100 / 7".
+    {
+        write_fw("/tmp/trso_1007.fw", "a = b + 100/7\n");
+        int rc = system("./bin/fwiz '/tmp/trso_1007(a=?, b=0)' 2>/dev/null "
+                        "| grep -q 'a = 100 / 7'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 100/7 displays as fraction");
+    }
+}
+
+void test_evaluate_symbolic() {
+    SECTION("evaluate_symbolic: exact arithmetic projection");
+
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
+
+    // DIV of two integers: preserved as structural fraction, NOT folded to double
+    {
+        auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(3));
+        auto r = evaluate_symbolic(*e);
+        ASSERT_EQ(expr_to_string(r), "1 / 3",
+                  "evaluate_symbolic: 1/3 preserved as fraction");
+    }
+
+    // MUL of two integers: folded to Num
+    {
+        auto e = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Num(3));
+        auto r = evaluate_symbolic(*e);
+        ASSERT_EQ(expr_to_string(r), "6", "evaluate_symbolic: 2 * 3 = 6");
+    }
+
+    // ADD(Num, Var): symbolic RHS — tree returned unchanged
+    {
+        auto e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Var("x"));
+        auto r = evaluate_symbolic(*e);
+        ASSERT_EQ(expr_to_string(r), "1 + x",
+                  "evaluate_symbolic: Num + Var returned as-is");
+    }
+
+    // FUNC_CALL with a non-numeric argument: must fall through to tree-as-is,
+    // not attempt to fold. Guards the extension-point contract.
+    {
+        auto e = Expr::Call("sin", {Expr::Var("x")});
+        auto r = evaluate_symbolic(*e);
+        ASSERT_EQ(expr_to_string(r), "sin(x)",
+                  "evaluate_symbolic: FUNC_CALL with symbolic arg returned as-is");
+    }
+
+    // simplify(1/3 + 0) must preserve 1/3 as fraction (not 0.333...)
+    ASSERT_EQ(ss("1/3 + 0"), "1 / 3",
+              "simplify: 1/3 + 0 preserves fraction (evaluate_symbolic path)");
+
+    // simplify(sin(0) + 1/3) — FUNC_CALL fold must produce Num(0), not harm neighbor
+    ASSERT_EQ(ss("sin(0) + 1/3"), "1 / 3",
+              "simplify: sin(0) + 1/3 = 1/3 (FUNC_CALL fold preserves neighbor)");
+
+    // Regression: 7/2 preserved via the migrated BINOP path
+    ASSERT_EQ(ss("7 / 2"), "7 / 2",
+              "simplify: 7/2 preserved (migrated BINOP path)");
+
+    // Regression: 2 * 3 still folds to 6 via the migrated BINOP path
+    ASSERT_EQ(ss("2 * 3"), "6",
+              "simplify: 2 * 3 = 6 (migrated BINOP path)");
+}
+
 void test_constant_recognition_derive() {
     SECTION("Constant recognition in derive output");
 
@@ -9850,6 +10010,8 @@ int main() {
     test_rational_fractions();
     test_rational_arithmetic();
     test_rational_derive();
+    test_rational_solve_output();
+    test_evaluate_symbolic();
     test_constant_recognition_derive();
 
     std::cout << "\n===============\n";

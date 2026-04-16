@@ -952,6 +952,44 @@ inline double evaluate(ExprPtr e) {
     return evaluate(*e);
 }
 
+// Symbolic sibling of evaluate(): preserves exact arithmetic in the returned
+// tree (e.g. 1/3 stays as DIV(Num(1), Num(3))) instead of collapsing to a
+// double. Used by the simplifier's constant-folding paths to centralize the
+// rational-preservation guard.
+//
+// Rationals are the only non-real case handled today. Complex numbers,
+// matrices, and other number types will extend the dispatch here without
+// touching call sites. See FUTURE.md "Extending evaluate_symbolic".
+//
+// Numeric callers (Newton/bisection grid scan, condition comparisons,
+// verify-mode equality, CLI arg parsing, solve_recursive bindings commit)
+// must keep using `double evaluate()` — they intrinsically need real values
+// with ordering.
+inline ExprPtr evaluate_symbolic(const Expr& e) {
+    if (e.type == ExprType::BINOP && is_num(e.left) && is_num(e.right)) {
+        if (e.op == BinOp::DIV && e.right->num != 0
+            && is_integer_value(e.left->num)
+            && is_integer_value(e.right->num)) {
+            return make_rational(static_cast<int64_t>(e.left->num),
+                                 static_cast<int64_t>(e.right->num));
+        }
+        return Expr::Num(binop_info(e.op).eval(e.left->num, e.right->num));
+    }
+    if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
+        bool all_num = true;
+        for (auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
+        if (all_num) return Expr::Num(evaluate(e));
+    }
+    // Fall-through: not fully numeric-foldable — return the tree as-is
+    // (arena-allocated copy so the caller can treat the result uniformly).
+    // Unreachable from current simplifier call sites, which pre-guard on the
+    // same predicates (is_num(l) && is_num(r) for BINOP, all_num for FUNC_CALL).
+    // Reachable from direct callers exercising the public contract.
+    auto out = ExprArena::current()->alloc();
+    *out = e;
+    return out;
+}
+
 // ============================================================================
 //  Simplify
 // ============================================================================
@@ -1439,7 +1477,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 if (!is_num(sa.back())) all_num = false;
             }
             auto s = Expr::Call(e->name, sa);
-            if (all_num && lookup_function(e->name)) return Expr::Num(evaluate(s));
+            if (all_num && lookup_function(e->name)) return evaluate_symbolic(*s);
 
             // Function-specific rules migrated to BUILTIN_REWRITE_RULES
             return s;
@@ -1449,15 +1487,8 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             auto l = simplify_once(e->left);
             auto r = simplify_once(e->right);
             if (is_undefined(l) || is_undefined(r)) return Expr::Var("undefined");
-            if (is_num(l) && is_num(r)) {
-                // For DIV: preserve structural fractions when result is non-integer
-                if (e->op == BinOp::DIV && r->num != 0
-                    && is_integer_value(l->num) && is_integer_value(r->num)) {
-                    return make_rational(static_cast<int64_t>(l->num),
-                                         static_cast<int64_t>(r->num));
-                }
-                return Expr::Num(binop_info(e->op).eval(l->num, r->num));
-            }
+            if (is_num(l) && is_num(r))
+                return evaluate_symbolic(*Expr::BinOpExpr(e->op, l, r));
 
             switch (e->op) {
                 case BinOp::ADD: case BinOp::SUB:
