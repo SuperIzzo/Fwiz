@@ -26,13 +26,13 @@ x = 3
 x = 4
 ```
 
-## 3. Numeric solver explosion on multi-equation systems
+## 3. Numeric solver explosion on multi-equation systems — ✅ RESOLVED
 
-When the numeric solver's system-probe runs on systems with many equations, it can scan thousands of values through recursive evaluation chains, making `--steps` output enormous and sometimes crashing.
+Two fixes: (1) `solve_all()` skips NUMERIC candidates for multi-variable equations when algebraic strategies already found results. (2) Trace output suppressed during numeric system-probe scans — the 200+ `resolve_memoized` calls per probe no longer emit full `solve_recursive` traces. Rectangle puzzle `--steps` went from 24,000 lines to 26.
 
-**Example:** The temperature chain (`F = C*9/5+32; K = C+273.15; R = F+459.67`) — the algebraic solver finds the answer instantly, but the numeric solver still tries additional paths through unused equations.
-
-**What's needed:** Skip numeric probing when the algebraic solver already found a clean result for all queries. Or limit numeric to only equations that the algebraic solver failed on.
+```bash
+$ fwiz --steps 'rect.fw(w=?, area=12, perimeter=14)'  # 26 lines, not 24,000
+```
 
 ## 4. Fraction display in exponents
 

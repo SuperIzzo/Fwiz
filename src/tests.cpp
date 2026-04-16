@@ -9442,6 +9442,60 @@ void test_simultaneous_equations() {
     }
 }
 
+void test_numeric_skip() {
+    SECTION("Numeric Skip When Algebraic Succeeds");
+
+    // Numeric solver should not run when algebraic strategies already found results.
+    // We verify by checking that resolve_all with numeric_mode=true produces the same
+    // results as without, and doesn't take excessively long on multi-equation systems.
+
+    // 1. Rectangle puzzle: algebraic finds both roots, numeric should be skipped
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
+        auto result = sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
+        auto& d = result.discrete();
+        bool has_3 = false, has_4 = false;
+        for (auto v : d) {
+            if (std::abs(v - 3) < 1e-6) has_3 = true;
+            if (std::abs(v - 4) < 1e-6) has_4 = true;
+        }
+        ASSERT(has_3 && has_4, "numeric skip: algebraic results preserved with numeric on");
+        // Should have exactly 2 results (not duplicated by numeric)
+        ASSERT(d.size() == 2, "numeric skip: no duplicate results from numeric (got "
+            + std::to_string(d.size()) + ")");
+    }
+
+    // 2. Temperature chain: algebraic succeeds, numeric should not explode
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("F = C * 9 / 5 + 32\nK = C + 273.15\nR = F + 459.67\n");
+        auto start = std::chrono::steady_clock::now();
+        auto result = sys.resolve_all("C", {{"F", 212}});
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        auto& d = result.discrete();
+        ASSERT(!d.empty() && std::abs(d[0] - 100) < 1e-6,
+            "temp chain: C = 100 for F = 212");
+        // Should complete quickly (algebraic), not take tens of seconds (numeric probing)
+        // Use generous timeout to account for sanitizer overhead
+        ASSERT(elapsed < 10000, "temp chain: completed in < 10s (took "
+            + std::to_string(elapsed) + "ms)");
+    }
+
+    // 3. Pure numeric case: no algebraic solution, numeric should still run
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = sin(x) + x\n");
+        auto result = sys.resolve_all("x", {{"y", 1}});
+        auto& d = result.discrete();
+        ASSERT(!d.empty(), "pure numeric: sin(x)+x=1 finds a root");
+    }
+}
+
 // ---- Main ----
 
 int main() {
@@ -9668,6 +9722,7 @@ int main() {
     test_commutative_matching();
     test_quadratic_formula();
     test_simultaneous_equations();
+    test_numeric_skip();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

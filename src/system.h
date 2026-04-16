@@ -143,7 +143,7 @@ public:
     std::map<std::string, std::string> custom_function_defs_;  // name → .fw definition
 
     std::string base_dir;
-    Trace trace;
+    mutable Trace trace;
     mutable int max_formula_depth = 1000;
     mutable bool numeric_mode = false;
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
@@ -1214,6 +1214,17 @@ private:
                     }
                 } catch (...) {}
             } else if (c.type == CandidateType::NUMERIC) {
+                // Skip numeric for multi-variable equations when algebraic already
+                // found results — the system-probe fallback is expensive and redundant.
+                // Keep numeric for single-variable equations (fast 1D scan, finds extra roots).
+                if (!results.empty()) {
+                    std::set<std::string> cvars;
+                    collect_vars(c.expr, cvars);
+                    cvars.erase(target);
+                    for (auto& [k, v] : bindings) cvars.erase(k);
+                    for (auto& [k, v] : builtin_constants()) cvars.erase(k);
+                    if (!cvars.empty()) return false; // multi-variable → skip
+                }
                 // Cap numeric contributions to prevent explosion with trig equations
                 constexpr size_t MAX_NUMERIC_RESULTS = 50;
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
@@ -2316,6 +2327,13 @@ private:
                 for (auto& pv : probe_vars) if (pv == bvar) { found = true; break; }
                 if (!found) probe_vars.push_back(bvar);
             }
+
+            // Suppress trace during probe scans — each probe point calls
+            // resolve_memoized which triggers full solve_recursive traces.
+            // With 200+ scan points this produces enormous --steps output.
+            auto saved_trace = trace.level;
+            trace.level = TraceLevel::NONE;
+            struct TraceGuard { Trace& t; TraceLevel l; ~TraceGuard() { t.level = l; } } tg_{trace, saved_trace};
 
             for (auto& probe_var : probe_vars) {
                 if (!bindings.count(probe_var)) continue;
