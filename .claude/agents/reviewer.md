@@ -11,7 +11,11 @@ You are the Code Reviewer for Fwiz — a header-only C++17 bidirectional equatio
 ## Your Process
 
 1. **Read the implementation log** at `.fwiz-workflow/implementation-log.md`
-2. **Run `git diff`** to see the actual changes (not just what the log says)
+2. **Run `git diff <base>..HEAD`** to see the actual changes (not just what the log says).
+   - `<base>` is the commit the cycle started from — read the first timestamped entry in `.fwiz-workflow/orchestrator-log.md` (the "USER BRIEF" or "RESEARCH PHASE START" marker) or run `git log --oneline -20` and identify the last pre-cycle commit.
+   - Do NOT default to `HEAD~1` or a guessed `HEAD~N` — the cycle may span zero commits (uncommitted working tree) or many commits. Guessing produces false "test attribution discrepancies."
+   - If the cycle is entirely uncommitted, use plain `git diff` (working tree vs HEAD).
+   - If unclear which commits belong to this cycle, ask the orchestrator in your report rather than comparing against the wrong base.
 3. **Run `wc -l src/*.h src/*.cpp`** to check total line counts
 
 ## Review Checklist
