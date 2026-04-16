@@ -27,9 +27,11 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
-**Solver:** `enumerate_candidates()` generates candidates (6 strategies), shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results. Algebraic solver includes quadratic formula (`decompose_quadratic` detects `ax²+bx+c` form).
+**Solver:** `enumerate_candidates()` generates candidates (7 strategies), shared by solve/derive/verify modes. `resolve()` returns first valid result. `resolve_all()` returns `ValueSet` (all solutions or range). `resolve_one()` errors on multiple results. Algebraic solver includes quadratic formula (`decompose_quadratic` detects `ax²+bx+c` form).
 
-**Numeric solver:** Strategy 6 — adaptive grid scan with Newton/bisection refinement. Enabled by default. `try_resolve_numeric()` handles equation-based root-finding and system-probe fallback (for recursive formulas). Memoization via `numeric_memo_`. Results classified as exact (`=`) or approximate (`~`) via forward verification.
+**Numeric solver:** Strategy 6 — adaptive grid scan with Newton/bisection refinement. Enabled by default. `try_resolve_numeric()` handles equation-based root-finding and system-probe fallback (for recursive formulas). Re-entrance guard (thread-local set) prevents stack overflow when numeric solver is called recursively. Memoization via `numeric_memo_`. Results classified as exact (`=`) or approximate (`~`) via forward verification.
+
+**Cross-equation elimination:** Strategy 7 — for target T in equation E1 with unknown U, finds equation E2 that can express U, substitutes into E1, solves the reduced single-variable expression. Two-level elimination handles 3-variable chains. `expand_for_var()` in `expr.h` distributes MUL over ADD/SUB to enable quadratic decomposition of substituted expressions. `flatten_multiplicative()` handles non-numeric denominators (`a / expr`).
 
 **Derive unfolding:** Formula call bodies are inlined into parent expressions when possible, enabling algebraic solving through formula calls. Detects self-referencing calls and falls back to direct sub-system derivation.
 
@@ -145,3 +147,19 @@ Read `DEVELOPER.md` for the full guide. Summary:
 - **No empty catch blocks** — return, log, or handle
 - **Write failing tests first**, commit tests before refactoring
 - `make test && make sanitize && make analyze` must all pass before committing
+
+## Orchestrated Development Workflow
+
+Activate with `claude --agent fwiz-orchestrator` for multi-phase development:
+
+```
+USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → repeat
+```
+
+**Agents** (in `.claude/agents/`): orchestrator, researcher, planner, critic, visionary, implementer, reviewer, doc-updater, perf-auditor. Each has focused context and restricted tools — separation of concerns.
+
+**Artifacts** (in `.fwiz-workflow/`, gitignored): research-brief.md, design-proposal.md, implementation-log.md, review-notes.md, next-priorities.md.
+
+**Quality bar**: `make test && make sanitize && make analyze` + periodic data locality / disassembly audits on hot paths.
+
+**Core principle**: least code, least features, maximum flexibility, tiny fast core, infinite extendability via .fw rules.

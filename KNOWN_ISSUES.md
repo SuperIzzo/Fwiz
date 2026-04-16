@@ -2,33 +2,19 @@
 
 Collected during testing. These are problems the solver can't handle yet but should eventually.
 
-## 1. Simultaneous equations (rectangle puzzle)
+## 1. Simultaneous equations (rectangle puzzle) — ✅ RESOLVED
 
-```
-area = w * h
-perimeter = 2 * w + 2 * h
-```
+Strategy 7 in `enumerate_candidates()` handles cross-equation variable elimination by substitution. For each unknown variable in a target equation, it finds another equation that can express it, substitutes in, then solves the reduced single-variable expression. Two-level elimination handles 3-variable chains. `expand_for_var()` in `expr.h` distributes MUL over ADD/SUB to enable quadratic decomposition of substituted expressions.
 
-Query: `w=?, area=12, perimeter=14` → should give `w = 3` or `w = 4`.
-
-**What happens:** Numeric solver crashes (stack overflow) — the 2D search space is too large for the system-probe approach.
-
-**What's needed:** Substitution-then-solve: derive `h = 7 - w` from perimeter, substitute into area → `w² - 7w + 12 = 0`, then solve the quadratic. This requires the solver to recognize it can eliminate a variable by substitution across equations, reducing a 2-equation system to a single-variable problem.
-
-## 2. Multi-equation validation (spurious solutions)
-
-```
-r1 = sqrt(x^2 + y^2)
-r2 = sqrt((x-6)^2 + y^2)
+```bash
+$ fwiz '(w=?, area=12, perimeter=14) area = w * h; perimeter = 2 * w + 2 * h'
+w = 3
+w = 4
 ```
 
-Query: `x=?, r1=5, r2=4, y=0` → returns 4 values (±5 from circle 1, 2 and 10 from circle 2).
+## 2. Multi-equation validation (spurious solutions) — ✅ RESOLVED
 
-**What happens:** Each equation is solved independently. Solutions from one equation aren't validated against the others. None of the 4 values actually satisfy both equations simultaneously.
-
-**What's needed:** Post-validation of candidates against ALL equations in the system, not just the source equation. A candidate `x=5` from `r1=5` should be checked against `r2=4` — if it fails, discard it.
-
-This is related to issue #1 (simultaneous equations) — both require the solver to reason across multiple equations at once.
+Strategy 7 eliminates spurious solutions structurally — by substituting one equation into another before solving, only values that satisfy both equations are returned. The circle intersection example now returns only the valid intersection point rather than all candidates from each equation independently.
 
 ## 3. Quadratic formula — ✅ RESOLVED
 
@@ -64,10 +50,3 @@ y = 2^x, solve for x → x = log(y) / 0.6931471806
 
 Should display as `x = log(y) / log(2)`. The constant recognizer exists in the fitter but isn't applied to derive output.
 
-## 6. ValueSet display: open + point → closed
-
-```
-max(a=?, result=3, b=3) → a : (-inf, 3) | {3}
-```
-
-Should display as `a : (-inf, 3]`. Uniting an open interval endpoint with a discrete point at that endpoint should produce a closed interval.

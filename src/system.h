@@ -1842,6 +1842,91 @@ private:
                         &call, sub_var, nullptr}))
                         return;
 
+        // Strategy 7: cross-equation variable elimination
+        // For target T in equation E1 with unknown U, find E2 that can express U.
+        // Substitute U into E1, then solve for T. If the result still contains
+        // another unknown V, try a second elimination from remaining equations.
+        if (equations.size() >= 2) {
+        for (size_t i = 0; i < equations.size(); i++) {
+            auto& e1 = equations[i];
+            if (!contains_var(e1.rhs, target)) continue;
+            std::set<std::string> e1_vars;
+            collect_vars(e1.rhs, e1_vars);
+            for (auto& u : e1_vars) {
+                if (u == target) continue;
+                if (sub_bindings && sub_bindings->count(u)) continue;
+                if (is_active_builtin(u)) continue;
+                for (size_t j = 0; j < equations.size(); j++) {
+                    if (j == i) continue;
+                    auto& e2 = equations[j];
+                    std::vector<ExprPtr> u_exprs;
+                    if (e2.lhs_var == u) {
+                        u_exprs.push_back(e2.rhs);
+                    } else if (contains_var(e2.rhs, u)) {
+                        auto sols = solve_for_all(Expr::Var(e2.lhs_var), e2.rhs, u);
+                        for (auto& s : sols) if (s.expr) u_exprs.push_back(s.expr);
+                    } else continue;
+                    for (auto& u_expr : u_exprs) {
+                        if (contains_var(u_expr, u)) continue; // circular
+                        auto subst_rhs = simplify(substitute(e1.rhs, u, u_expr));
+                        // Collect remaining unknowns (exclude target, known, builtins)
+                        std::set<std::string> remaining;
+                        collect_vars(subst_rhs, remaining);
+                        remaining.erase(target);
+                        remaining.erase(e1.lhs_var);
+                        if (sub_bindings) for (auto& [k,v] : *sub_bindings) remaining.erase(k);
+                        for (auto it = remaining.begin(); it != remaining.end();)
+                            if (is_active_builtin(*it)) it = remaining.erase(it); else ++it;
+                        // Remove equation LHS vars — they have defining equations and will
+                        // be resolved by try_resolve/try_derive; if resolution fails,
+                        // the candidate is discarded naturally by the handler.
+                        for (auto& eq : equations)
+                            remaining.erase(eq.lhs_var);
+                        // Try solving directly
+                        auto try_solve_and_emit = [&](const ExprPtr& rhs, const std::string& desc) -> bool {
+                            auto tsols = solve_for_all(Expr::Var(e1.lhs_var), rhs, target);
+                            for (auto& ts : tsols) {
+                                if (!ts.expr) continue;
+                                const Condition* cond = e1.condition ? &*e1.condition : nullptr;
+                                if (!cond && e2.condition) cond = &*e2.condition;
+                                if (handler(Candidate{CandidateType::EXPR, ts.expr, desc,
+                                    nullptr, "", cond}))
+                                    return true;
+                            }
+                            return false;
+                        };
+                        if (remaining.empty()) {
+                            if (try_solve_and_emit(subst_rhs,
+                                target + " = ...  (elim " + u + " via " + e2.lhs_var + ")"))
+                                return;
+                        }
+                        // Second-level elimination for each remaining unknown V
+                        for (auto& v : remaining) {
+                            for (size_t k = 0; k < equations.size(); k++) {
+                                if (k == i) continue;
+                                auto& e3 = equations[k];
+                                std::vector<ExprPtr> v_exprs;
+                                if (e3.lhs_var == v) {
+                                    v_exprs.push_back(e3.rhs);
+                                } else if (contains_var(e3.rhs, v)) {
+                                    auto vs = solve_for_all(Expr::Var(e3.lhs_var), e3.rhs, v);
+                                    for (auto& s : vs) if (s.expr) v_exprs.push_back(s.expr);
+                                } else continue;
+                                for (auto& v_expr : v_exprs) {
+                                    if (contains_var(v_expr, v)) continue;
+                                    auto subst2 = simplify(substitute(subst_rhs, v, v_expr));
+                                    if (try_solve_and_emit(subst2,
+                                        target + " = ...  (elim " + u + "," + v + ")"))
+                                        return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        } // equations.size() >= 2
+
         // Strategy 6: numeric root-finding (--numeric only)
         if (numeric_mode) {
             for (auto& eq : equations) {
@@ -2146,6 +2231,13 @@ private:
             std::map<std::string, double>& bindings,
             std::set<std::string> visited, int depth,
             const Condition* eq_condition = nullptr) const {
+
+        // Re-entrance guard: prevent infinite recursion on coupled systems
+        static thread_local std::set<std::string> numeric_active_;
+        if (numeric_active_.count(target)) return {};
+        numeric_active_.insert(target);
+        struct NumericGuard { const std::string& t; std::set<std::string>& s;
+            ~NumericGuard() { s.erase(t); } } ng_{target, numeric_active_};
 
         // Build set of formula call output vars (may depend on target circularly)
         std::set<std::string> formula_outputs;

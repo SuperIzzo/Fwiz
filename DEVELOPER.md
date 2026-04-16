@@ -187,6 +187,8 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 3. **Forward formula call**: target is formula call output_var
 4. **Substitute**: two equations share LHS → equate RHS
 5. **Reverse formula call**: target maps through a binding
+6. **Numeric**: adaptive grid scan + Newton/bisection refinement
+7. **Cross-equation elimination**: for target T in equation E1 with unknown U, find E2 expressing U, substitute into E1, solve the reduced expression. Two-level elimination handles 3-variable chains (e.g. `p=xy, q=yz, r=xz`). `expand_for_var()` in `expr.h` distributes MUL over ADD/SUB to enable quadratic decomposition of substituted results.
 
 Conditions are checked before solving (if vars known) and after (to validate). Global conditions checked after every result. Formula call depth tracked via thread-local counter with configurable max (default 1000).
 
