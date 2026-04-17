@@ -63,7 +63,7 @@ std::string ss(const std::string& s) {
 }
 
 double ev(const std::string& s) {
-    return evaluate(simplify(parse(s)));
+    return evaluate(simplify(parse(s))).value();
 }
 
 // ---- Lexer tests ----
@@ -208,11 +208,10 @@ void test_evaluate() {
     // Roundtrip: asin(sin(0.5)) = 0.5
     ASSERT(std::abs(ev("asin(sin(0.5))") - 0.5) < 1e-10, "asin(sin(0.5)) roundtrip");
 
-    // Division by zero
+    // Division by zero — IEEE 754: 1/0 yields inf, not throw
     {
-        bool threw = false;
-        try { ev("1/0"); } catch (...) { threw = true; }
-        ASSERT(threw, "division by zero throws");
+        double r = ev("1/0");
+        ASSERT(!std::isfinite(r), "division by zero yields non-finite");
     }
     // Unresolved variable
     {
@@ -341,7 +340,7 @@ void test_substitute() {
     auto e2 = parse("sqrt(x^2 + y^2)");
     auto r4 = substitute(e2, "x", Expr::Num(3));
     auto r5 = substitute(r4, "y", Expr::Num(4));
-    ASSERT_NUM(evaluate(simplify(r5)), 5, "sub in sqrt(3^2+4^2)=5");
+    ASSERT_NUM((*evaluate(simplify(r5))), 5, "sub in sqrt(3^2+4^2)=5");
 
     // No-op substitute (var not present)
     auto r6 = substitute(parse("a + b"), "z", Expr::Num(99));
@@ -374,24 +373,24 @@ void test_decompose() {
     {
         auto lf = decompose_linear(parse("y + 5"), "y");
         ASSERT(lf.has_value(), "y+5 is linear in y");
-        ASSERT_NUM(evaluate(lf->coeff), 1, "y+5 coeff=1");
-        ASSERT_NUM(evaluate(lf->rest), 5, "y+5 rest=5");
+        ASSERT_NUM((*evaluate(lf->coeff)), 1, "y+5 coeff=1");
+        ASSERT_NUM((*evaluate(lf->rest)), 5, "y+5 rest=5");
     }
 
     // y * 2 - 5: coeff=2, rest=-5
     {
         auto lf = decompose_linear(parse("y * 2 - 5"), "y");
         ASSERT(lf.has_value(), "y*2-5 is linear in y");
-        ASSERT_NUM(evaluate(lf->coeff), 2, "y*2-5 coeff=2");
-        ASSERT_NUM(evaluate(lf->rest), -5, "y*2-5 rest=-5");
+        ASSERT_NUM((*evaluate(lf->coeff)), 2, "y*2-5 coeff=2");
+        ASSERT_NUM((*evaluate(lf->rest)), -5, "y*2-5 rest=-5");
     }
 
     // y + 3 * y: coeff=4, rest=0
     {
         auto lf = decompose_linear(parse("y + 3 * y"), "y");
         ASSERT(lf.has_value(), "y+3*y is linear in y");
-        ASSERT_NUM(evaluate(lf->coeff), 4, "y+3*y coeff=4");
-        ASSERT_NUM(evaluate(lf->rest), 0, "y+3*y rest=0");
+        ASSERT_NUM((*evaluate(lf->coeff)), 4, "y+3*y coeff=4");
+        ASSERT_NUM((*evaluate(lf->rest)), 0, "y+3*y rest=0");
     }
 
     // speed * time: linear in time (coeff=speed), but speed is a var
@@ -399,7 +398,7 @@ void test_decompose() {
         auto lf = decompose_linear(parse("speed * time"), "time");
         ASSERT(lf.has_value(), "speed*time is linear in time");
         ASSERT_EQ(expr_to_string(lf->coeff), "speed", "coeff=speed");
-        ASSERT_NUM(evaluate(lf->rest), 0, "rest=0");
+        ASSERT_NUM((*evaluate(lf->rest)), 0, "rest=0");
     }
 
     // y * y is nonlinear
@@ -418,21 +417,21 @@ void test_decompose() {
     {
         auto lf = decompose_linear(parse("a + b"), "z");
         ASSERT(lf.has_value(), "a+b linear in z (trivially)");
-        ASSERT_NUM(evaluate(lf->coeff), 0, "coeff=0");
+        ASSERT_NUM((*evaluate(lf->coeff)), 0, "coeff=0");
     }
 
     // Negated variable: -y => coeff=-1
     {
         auto lf = decompose_linear(parse("-y"), "y");
         ASSERT(lf.has_value(), "-y is linear");
-        ASSERT_NUM(evaluate(lf->coeff), -1, "-y coeff=-1");
+        ASSERT_NUM((*evaluate(lf->coeff)), -1, "-y coeff=-1");
     }
 
     // Division: y / 3 => coeff=1/3
     {
         auto lf = decompose_linear(parse("y / 3"), "y");
         ASSERT(lf.has_value(), "y/3 is linear");
-        ASSERT_NUM(evaluate(lf->coeff), 1.0/3.0, "y/3 coeff=1/3");
+        ASSERT_NUM((*evaluate(lf->coeff)), 1.0/3.0, "y/3 coeff=1/3");
     }
 
     // Target in denominator is nonlinear
@@ -848,7 +847,7 @@ void test_parser_edge() {
         ASSERT(p.at_end(), "x^2^3 no trailing tokens");
         // Verify: x=2, should be 2^(2^3) = 2^8 = 256
         auto v = substitute(e, "x", Expr::Num(2));
-        ASSERT_NUM(evaluate(v), 256, "2^2^3 = 2^8 = 256");
+        ASSERT_NUM((*evaluate(v)), 256, "2^2^3 = 2^8 = 256");
     }
 
     // Error: missing close paren
@@ -1023,21 +1022,21 @@ void test_decompose_edge() {
     {
         auto lf = decompose_linear(parse("a + b + 1"), "z");
         ASSERT(lf.has_value(), "no z present: ok");
-        ASSERT_NUM(evaluate(lf->coeff), 0, "no z: coeff=0");
+        ASSERT_NUM((*evaluate(lf->coeff)), 0, "no z: coeff=0");
     }
 
     // 0 * y => coeff=0 (zero coefficient)
     {
         auto lf = decompose_linear(parse("0 * y"), "y");
         ASSERT(lf.has_value(), "0*y is linear");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 0, "0*y coeff=0");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 0, "0*y coeff=0");
     }
 
     // Subtraction of same var: y - y => coeff=0
     {
         auto lf = decompose_linear(parse("y - y"), "y");
         ASSERT(lf.has_value(), "y-y is linear");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 0, "y-y coeff=0");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 0, "y-y coeff=0");
     }
 
     // Complex coefficient: (a + b) * y
@@ -1051,23 +1050,23 @@ void test_decompose_edge() {
     {
         auto lf = decompose_linear(parse("2*y + 3*y + y"), "y");
         ASSERT(lf.has_value(), "2y+3y+y is linear");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 6, "2y+3y+y coeff=6");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 6, "2y+3y+y coeff=6");
     }
 
     // y in nested linear: (y + 1) * 2 - y => coeff=1, rest=2
     {
         auto lf = decompose_linear(parse("(y + 1) * 2 - y"), "y");
         ASSERT(lf.has_value(), "(y+1)*2-y is linear");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "(y+1)*2-y coeff=1");
-        ASSERT_NUM(evaluate(simplify(lf->rest)), 2, "(y+1)*2-y rest=2");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 1, "(y+1)*2-y coeff=1");
+        ASSERT_NUM((*evaluate(simplify(lf->rest))), 2, "(y+1)*2-y rest=2");
     }
 
     // Negative coefficient: 5 - 3*y => coeff=-3, rest=5
     {
         auto lf = decompose_linear(parse("5 - 3*y"), "y");
         ASSERT(lf.has_value(), "5-3y is linear");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), -3, "5-3y coeff=-3");
-        ASSERT_NUM(evaluate(simplify(lf->rest)), 5, "5-3y rest=5");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), -3, "5-3y coeff=-3");
+        ASSERT_NUM((*evaluate(simplify(lf->rest))), 5, "5-3y rest=5");
     }
 
     // y in exponent is nonlinear
@@ -1086,8 +1085,8 @@ void test_decompose_edge() {
     {
         auto lf = decompose_linear(Expr::Num(42), "y");
         ASSERT(lf.has_value(), "constant is linear (trivially)");
-        ASSERT_NUM(evaluate(lf->coeff), 0, "constant coeff=0");
-        ASSERT_NUM(evaluate(lf->rest), 42, "constant rest=42");
+        ASSERT_NUM((*evaluate(lf->coeff)), 0, "constant coeff=0");
+        ASSERT_NUM((*evaluate(lf->rest)), 42, "constant rest=42");
     }
 }
 
@@ -1110,7 +1109,7 @@ void test_solve_for_edge() {
     {
         auto sol = solve_for(Expr::Var("x"), Expr::Num(5), "x");
         ASSERT(sol != nullptr, "x = 5 solvable for x");
-        ASSERT_NUM(evaluate(simplify(sol)), 5, "x = 5 => x = 5");
+        ASSERT_NUM((*evaluate(simplify(sol))), 5, "x = 5 => x = 5");
     }
 
     // Solve with nested expressions: x = (2*y + 3) / (y - something)
@@ -1132,7 +1131,7 @@ void test_solve_for_edge() {
         ASSERT(sol != nullptr, "y/3+2 solvable for y");
         // Substitute to verify: if x=8, y should be (8-2)*3 = 18
         auto val = substitute(sol, "x", Expr::Num(8));
-        ASSERT_NUM(evaluate(simplify(val)), 18, "y/3+2: x=8 => y=18");
+        ASSERT_NUM((*evaluate(simplify(val))), 18, "y/3+2: x=8 => y=18");
     }
 }
 
@@ -1836,12 +1835,12 @@ void test_numeric_extremes() {
     {
         auto e = Expr::BinOpExpr(BinOp::ADD,
             Expr::Num(std::numeric_limits<double>::infinity()), Expr::Num(1));
-        ASSERT(std::isinf(evaluate(e)), "inf + 1 = inf");
+        ASSERT(std::isinf((*evaluate(e))), "inf + 1 = inf");
     }
     {
         auto e = Expr::BinOpExpr(BinOp::MUL,
             Expr::Num(std::numeric_limits<double>::infinity()), Expr::Num(0));
-        ASSERT(std::isnan(evaluate(e)), "inf * 0 = NaN");
+        ASSERT(std::isnan((*evaluate(e))), "inf * 0 = NaN");
     }
 
     // Inf in system: equation produces inf — system rejects and throws
@@ -1873,7 +1872,7 @@ void test_numeric_extremes() {
         // Parser reads this as -(1^0.5) = -1, not (-1)^0.5
         // Build it manually
         auto e = Expr::BinOpExpr(BinOp::POW, Expr::Num(-1), Expr::Num(0.5));
-        ASSERT(std::isnan(evaluate(e)), "(-1)^0.5 = NaN");
+        ASSERT(std::isnan((*evaluate(e))), "(-1)^0.5 = NaN");
     }
 
     // NaN in equation chain — system rejects and throws
@@ -1890,23 +1889,21 @@ void test_numeric_extremes() {
     {
         double nan = std::numeric_limits<double>::quiet_NaN();
         auto e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(nan), Expr::Num(5));
-        ASSERT(std::isnan(evaluate(e)), "NaN + 5 = NaN");
+        ASSERT(std::isnan((*evaluate(e))), "NaN + 5 = NaN");
     }
 
     // --- Division by zero ---
 
-    // 0/0 throws
+    // 0/0 yields non-finite (NaN per eval_div semantics)
     {
-        bool threw = false;
-        try { ev("0 / 0"); } catch (...) { threw = true; }
-        ASSERT(threw, "0/0 throws division by zero");
+        double r = ev("0 / 0");
+        ASSERT(!std::isfinite(r), "0/0 yields non-finite");
     }
 
-    // 1/0 throws
+    // 1/0 yields non-finite (NaN per eval_div semantics)
     {
-        bool threw = false;
-        try { ev("1 / 0"); } catch (...) { threw = true; }
-        ASSERT(threw, "1/0 throws division by zero");
+        double r = ev("1 / 0");
+        ASSERT(!std::isfinite(r), "1/0 yields non-finite");
     }
 
     // --- Negative zero ---
@@ -2130,21 +2127,21 @@ void test_depth_evaluate() {
     // Moderate depth: correct result
     {
         auto e = substitute(build_deep_add(100), "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(e), 100, "depth 100: evaluate = 100");
+        ASSERT_NUM((*evaluate(e)), 100, "depth 100: evaluate = 100");
     }
     {
         auto e = substitute(build_deep_add(1000), "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(e), 1000, "depth 1000: evaluate = 1000");
+        ASSERT_NUM((*evaluate(e)), 1000, "depth 1000: evaluate = 1000");
     }
     {
         auto e = substitute(build_deep_add(DEPTH_HIGH), "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(e), DEPTH_HIGH, "depth HIGH: evaluate");
+        ASSERT_NUM((*evaluate(e)), DEPTH_HIGH, "depth HIGH: evaluate");
     }
 
     // With a non-zero base value
     {
         auto e = substitute(build_deep_add(DEPTH_MED), "x", Expr::Num(42));
-        ASSERT_NUM(evaluate(e), DEPTH_MED + 42, "depth MED: x=42, evaluate");
+        ASSERT_NUM((*evaluate(e)), DEPTH_MED + 42, "depth MED: x=42, evaluate");
     }
 }
 
@@ -2173,7 +2170,7 @@ void test_depth_simplify() {
         auto e = build_deep_add(1000);
         auto s = simplify(e);
         auto v = substitute(s, "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(simplify(v)), 1000, "depth 1000: simplify then eval = 1000");
+        ASSERT_NUM((*evaluate(simplify(v))), 1000, "depth 1000: simplify then eval = 1000");
     }
 }
 
@@ -2184,12 +2181,12 @@ void test_depth_substitute() {
     {
         auto e = build_deep_add(1000);
         auto s = substitute(e, "x", Expr::Num(7));
-        ASSERT_NUM(evaluate(s), 1007, "depth 1000: sub x=7, eval = 1007");
+        ASSERT_NUM((*evaluate(s)), 1007, "depth 1000: sub x=7, eval = 1007");
     }
     {
         auto e = build_deep_add(DEPTH_HIGH);
         auto s = substitute(e, "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(s), DEPTH_HIGH, "depth HIGH: sub and eval");
+        ASSERT_NUM((*evaluate(s)), DEPTH_HIGH, "depth HIGH: sub and eval");
     }
 
     // Substitute with expression (not just number)
@@ -2240,14 +2237,14 @@ void test_depth_decompose() {
         auto e = build_deep_add(1000);
         auto lf = decompose_linear(e, "x");
         ASSERT(lf.has_value(), "depth 1000: linear in x");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "depth 1000: coeff=1");
-        ASSERT_NUM(evaluate(simplify(lf->rest)), 1000, "depth 1000: rest=1000");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 1, "depth 1000: coeff=1");
+        ASSERT_NUM((*evaluate(simplify(lf->rest))), 1000, "depth 1000: rest=1000");
     }
     {
         auto e = build_deep_add(DEPTH_MED);
         auto lf = decompose_linear(e, "x");
         ASSERT(lf.has_value(), "depth MED: linear in x");
-        ASSERT_NUM(evaluate(simplify(lf->coeff)), 1, "depth MED: coeff=1");
+        ASSERT_NUM((*evaluate(simplify(lf->coeff))), 1, "depth MED: coeff=1");
     }
 }
 
@@ -2262,7 +2259,7 @@ void test_depth_solve() {
         ASSERT(sol != nullptr, "depth 1000: solvable for x");
         // Verify: if y=1500, x should be 500
         auto val = substitute(sol, "y", Expr::Num(1500));
-        ASSERT_NUM(evaluate(simplify(val)), 500, "depth 1000: y=1500 => x=500");
+        ASSERT_NUM((*evaluate(simplify(val))), 500, "depth 1000: y=1500 => x=500");
     }
 }
 
@@ -2274,20 +2271,20 @@ void test_deep_functions() {
         auto e = build_deep_func(10);
         auto s = substitute(e, "x", Expr::Num(1));
         // sqrt^10(1) = 1
-        ASSERT_NUM(evaluate(s), 1, "sqrt^10(1) = 1");
+        ASSERT_NUM((*evaluate(s)), 1, "sqrt^10(1) = 1");
     }
     {
         // sqrt^20(1e300) — repeated sqrt of a large number converges to 1
         auto e = build_deep_func(100);
         auto s = substitute(e, "x", Expr::Num(1e300));
-        double r = evaluate(s);
+        double r = (*evaluate(s));
         ASSERT(r > 0.99 && r < 1.01, "sqrt^100(1e300) converges near 1");
     }
     {
         // Deep nested functions at depth 1000
         auto e = build_deep_func(DEPTH_MED);
         auto s = substitute(e, "x", Expr::Num(1));
-        ASSERT_NUM(evaluate(s), 1, "sqrt^1000(1) = 1");
+        ASSERT_NUM((*evaluate(s)), 1, "sqrt^1000(1) = 1");
     }
 
     // collect_vars through deep func nesting
@@ -2324,7 +2321,7 @@ void test_wide_expressions() {
             e = Expr::BinOpExpr(BinOp::ADD, e, Expr::Var("v" + std::to_string(i)));
         for (int i = 0; i < n; i++)
             e = substitute(e, "v" + std::to_string(i), Expr::Num(1));
-        ASSERT_NUM(evaluate(simplify(e)), n, "500 vars substituted and summed");
+        ASSERT_NUM((*evaluate(simplify(e))), n, "500 vars substituted and summed");
     }
 
     // Wide expression to_string
@@ -2343,13 +2340,13 @@ void test_parse_deep_string() {
         auto s = build_deep_parse_string(100);
         auto e = parse(s);
         auto v = substitute(e, "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(v), 100, "parse depth 100: eval = 100");
+        ASSERT_NUM((*evaluate(v)), 100, "parse depth 100: eval = 100");
     }
     {
         auto s = build_deep_parse_string(1000);
         auto e = parse(s);
         auto v = substitute(e, "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(v), 1000, "parse depth 1000: eval = 1000");
+        ASSERT_NUM((*evaluate(v)), 1000, "parse depth 1000: eval = 1000");
     }
     {
         // Parse depth 5000 — stress the parser's recursion
@@ -2364,7 +2361,7 @@ void test_parse_deep_string() {
         for (int i = 0; i < 1000; i++) s += " + 1";
         auto e = parse(s);
         auto v = substitute(e, "x", Expr::Num(0));
-        ASSERT_NUM(evaluate(v), 1000, "parse flat 1000 terms: eval = 1000");
+        ASSERT_NUM((*evaluate(v)), 1000, "parse flat 1000 terms: eval = 1000");
     }
 }
 
@@ -3844,7 +3841,7 @@ void test_roundtrip_parse_print() {
             v1 = substitute(v1, n, Expr::Num(val));
             v2 = substitute(v2, n, Expr::Num(val));
         }
-        double r1 = evaluate(simplify(v1)), r2 = evaluate(simplify(v2));
+        double r1 = (*evaluate(simplify(v1))), r2 = (*evaluate(simplify(v2)));
         ASSERT(std::abs(r1 - r2) < 1e-10,
             std::string(label) + " roundtrip: '" + input + "' -> '" + printed + "'");
     };
@@ -4030,7 +4027,7 @@ void test_precedence_exhaustive() {
         auto e = parse(expr);
         for (auto& [n, v] : std::map<std::string,double>{{"a",2},{"b",3},{"c",4},{"d",5}})
             e = substitute(e, n, Expr::Num(v));
-        double r = evaluate(simplify(e));
+        double r = (*evaluate(simplify(e)));
         ASSERT(std::abs(r - expected) < 1e-10,
             std::string(label) + " = " + std::to_string(r));
     };
@@ -4118,16 +4115,15 @@ void test_edge_arithmetic() {
     {
         auto e = parse("x / x");
         e = substitute(e, "x", Expr::Num(0));
-        bool threw = false;
-        try { evaluate(e); } catch (...) { threw = true; }
-        ASSERT(threw, "x/x with x=0: division by zero");
+        auto r = evaluate(e);
+        ASSERT(r && !std::isfinite(*r), "x/x with x=0: non-finite result");
     }
 
     // x/x with x=5 evaluates to 1
     {
         auto e = parse("x / x");
         e = substitute(e, "x", Expr::Num(5));
-        ASSERT_NUM(evaluate(e), 1, "x/x with x=5 = 1");
+        ASSERT_NUM(*evaluate(e), 1, "x/x with x=5 = 1");
     }
 
     // 0*x + 0*y simplifies to 0
@@ -4138,7 +4134,7 @@ void test_edge_arithmetic() {
         auto e = parse("x - y");
         e = substitute(e, "x", Expr::Num(1.0000000001));
         e = substitute(e, "y", Expr::Num(1.0));
-        double r = evaluate(simplify(e));
+        double r = (*evaluate(simplify(e)));
         ASSERT(std::abs(r - 1e-10) < 1e-15, "tiny difference preserved");
     }
 
@@ -4333,21 +4329,19 @@ void test_audit_switch_safety() {
     // Verify evaluate() handles all expression types correctly
     // (no silent return 0 from fallthrough)
     {
-        ASSERT_NUM(evaluate(Expr::Num(42)), 42, "evaluate NUM");
-        ASSERT_NUM(evaluate(Expr::Neg(Expr::Num(5))), -5, "evaluate NEG");
-        ASSERT_NUM(evaluate(Expr::BinOpExpr(BinOp::ADD, Expr::Num(2), Expr::Num(3))), 5, "evaluate ADD");
-        ASSERT_NUM(evaluate(Expr::BinOpExpr(BinOp::SUB, Expr::Num(5), Expr::Num(3))), 2, "evaluate SUB");
-        ASSERT_NUM(evaluate(Expr::BinOpExpr(BinOp::MUL, Expr::Num(4), Expr::Num(3))), 12, "evaluate MUL");
-        ASSERT_NUM(evaluate(Expr::BinOpExpr(BinOp::DIV, Expr::Num(6), Expr::Num(2))), 3, "evaluate DIV");
-        ASSERT_NUM(evaluate(Expr::BinOpExpr(BinOp::POW, Expr::Num(2), Expr::Num(3))), 8, "evaluate POW");
-        ASSERT_NUM(evaluate(Expr::Call("sqrt", {Expr::Num(16)})), 4, "evaluate FUNC");
+        ASSERT_NUM(*evaluate(Expr::Num(42)), 42, "evaluate NUM");
+        ASSERT_NUM(*evaluate(Expr::Neg(Expr::Num(5))), -5, "evaluate NEG");
+        ASSERT_NUM(*evaluate(Expr::BinOpExpr(BinOp::ADD, Expr::Num(2), Expr::Num(3))), 5, "evaluate ADD");
+        ASSERT_NUM(*evaluate(Expr::BinOpExpr(BinOp::SUB, Expr::Num(5), Expr::Num(3))), 2, "evaluate SUB");
+        ASSERT_NUM(*evaluate(Expr::BinOpExpr(BinOp::MUL, Expr::Num(4), Expr::Num(3))), 12, "evaluate MUL");
+        ASSERT_NUM(*evaluate(Expr::BinOpExpr(BinOp::DIV, Expr::Num(6), Expr::Num(2))), 3, "evaluate DIV");
+        ASSERT_NUM(*evaluate(Expr::BinOpExpr(BinOp::POW, Expr::Num(2), Expr::Num(3))), 8, "evaluate POW");
+        ASSERT_NUM(*evaluate(Expr::Call("sqrt", {Expr::Num(16)})), 4, "evaluate FUNC");
     }
 
-    // Verify unresolved variable throws (not silent 0)
+    // Verify unresolved variable returns nullopt (not silent 0)
     {
-        bool threw = false;
-        try { evaluate(Expr::Var("x")); } catch (...) { threw = true; }
-        ASSERT(threw, "evaluate VAR throws (not silent 0)");
+        ASSERT(!evaluate(Expr::Var("x")), "evaluate VAR returns nullopt");
     }
 }
 
@@ -5787,7 +5781,7 @@ void test_solve_for_zero_guard() {
         auto rhs = Expr::Num(0);
         auto sol = solve_for(lhs, rhs, "c");
         ASSERT(sol != nullptr, "concrete coeff: solution found");
-        double val = evaluate(sol);
+        double val = (*evaluate(sol));
         ASSERT_NUM(val, 0, "concrete coeff: c=0");
     }
 
@@ -5816,7 +5810,7 @@ void test_solve_for_zero_guard() {
         auto rhs = Expr::Num(0);
         auto sol = solve_for(lhs, rhs, "c");
         ASSERT(sol != nullptr, "numeric coeff nonzero rest: found");
-        double val = evaluate(sol);
+        double val = (*evaluate(sol));
         ASSERT_NUM(val, -3, "numeric coeff nonzero rest: c=-3");
     }
 }
@@ -5903,7 +5897,7 @@ void test_strategy_coverage() {
 void test_builtin_exhaustive() {
     SECTION("Builtin Functions Exhaustive");
 
-    auto ev = [](const char* s) { return evaluate(parse(s)); };
+    auto ev = [](const char* s) { return evaluate(parse(s)).value(); };
 
     // All 9 builtins
     ASSERT_NUM(ev("sqrt(16)"), 4, "sqrt(16)=4");
@@ -5953,7 +5947,7 @@ void test_builtin_exhaustive() {
 void test_operator_metadata() {
     SECTION("Operator Metadata");
 
-    auto ev = [](const char* s) { return evaluate(parse(s)); };
+    auto ev = [](const char* s) { return evaluate(parse(s)).value(); };
 
     // All 5 operators evaluate correctly
     ASSERT_NUM(ev("3 + 4"), 7, "ADD eval");
@@ -6005,7 +5999,7 @@ void test_simplify_rule_interactions() {
     // x/2*3 → x*1.5, (x*1.5 - 4)*2 → 2*x*1.5 - 8 → x*3 - 8, +5 → x*3 - 3
     {
         auto e = simplify(parse("((x / 2) * 3 - 4) * 2 + 5"));
-        double val = evaluate(substitute(e, "x", Expr::Num(10)));
+        double val = (*evaluate(substitute(e, "x", Expr::Num(10))));
         ASSERT_NUM(val, 27, "deep chain: ((10/2)*3-4)*2+5 = 27");
     }
 
@@ -6026,7 +6020,7 @@ void test_simplify_rule_interactions() {
     // Should eventually reach 6*x^4
     {
         auto e = simplify(parse("x^2 * 2 * x^2 * 3"));
-        double val = evaluate(substitute(e, "x", Expr::Num(2)));
+        double val = (*evaluate(substitute(e, "x", Expr::Num(2))));
         ASSERT_NUM(val, 96, "x^2*2*x^2*3 at x=2 → 96 (6*16)");
     }
 
@@ -6063,7 +6057,7 @@ void test_simplify_flatten_targets() {
     {
         auto e = simplify(parse("3 + x + 2 + y + 1"));
         // Must evaluate to 36 at x=10,y=20 AND have no more than 3 terms
-        double val = evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(20)));
+        double val = (*evaluate(substitute(substitute(e, "x", Expr::Num(10)), "y", Expr::Num(20))));
         ASSERT_NUM(val, 36, "scattered constants: correct value");
         // Check constants were collected (shouldn't have 3 separate numbers)
         auto str = expr_to_string(e);
@@ -6229,7 +6223,7 @@ void test_simplify_constant_collection() {
     // This tests: 16 + c^2 - 9 → c^2 + 7 (from derive: mixed triangle)
     auto e = simplify(parse("16 + x - 9"));
     // Should have x and 7, in some form
-    double val = evaluate(substitute(e, "x", Expr::Num(0)));
+    double val = (*evaluate(substitute(e, "x", Expr::Num(0))));
     ASSERT_NUM(val, 7, "16 + x - 9 with x=0 → 7");
 }
 
@@ -7151,7 +7145,7 @@ void test_fit_polynomial() {
         auto expr = poly_to_expr(coeffs, "x");
         auto str = expr_to_string(expr);
         // Should evaluate correctly
-        double val = evaluate(*substitute(expr, "x", Expr::Num(4)));
+        double val = (*evaluate(*substitute(expr, "x", Expr::Num(4))));
         ASSERT_NUM(val, 19, "fit expr: 3 + 4^2 = 19");
     }
 
@@ -7265,26 +7259,26 @@ void test_builtin_constants() {
     // pi evaluates correctly
     {
         auto expr = parse("pi");
-        ASSERT_NUM(evaluate(*expr), M_PI, "constant: pi evaluates to M_PI");
+        ASSERT_NUM((*evaluate(*expr)), M_PI, "constant: pi evaluates to M_PI");
     }
 
     // e evaluates correctly
     {
         auto expr = parse("e");
-        ASSERT_NUM(evaluate(*expr), M_E, "constant: e evaluates to M_E");
+        ASSERT_NUM((*evaluate(*expr)), M_E, "constant: e evaluates to M_E");
     }
 
     // phi evaluates correctly
     {
         auto expr = parse("phi");
         double expected = (1.0 + std::sqrt(5.0)) / 2.0;
-        ASSERT_NUM(evaluate(*expr), expected, "constant: phi evaluates to golden ratio");
+        ASSERT_NUM((*evaluate(*expr)), expected, "constant: phi evaluates to golden ratio");
     }
 
     // Constants in expressions
     {
         auto expr = parse("2 * pi");
-        ASSERT_NUM(evaluate(*expr), 2 * M_PI, "constant: 2*pi");
+        ASSERT_NUM((*evaluate(*expr)), 2 * M_PI, "constant: 2*pi");
     }
 
     // Constants in equations
@@ -8138,11 +8132,11 @@ void test_simplify_exp_log() {
     // Numeric evaluation still works
     {
         auto expr = simplify(parse("e^(log(5))"));
-        ASSERT_NUM(evaluate(*expr), 5.0, "simplify: e^log(5) = 5");
+        ASSERT_NUM((*evaluate(*expr)), 5.0, "simplify: e^log(5) = 5");
     }
     {
         auto expr = simplify(parse("log(e^3)"));
-        ASSERT_NUM(evaluate(*expr), 3.0, "simplify: log(e^3) = 3");
+        ASSERT_NUM((*evaluate(*expr)), 3.0, "simplify: log(e^3) = 3");
     }
 }
 
@@ -8194,9 +8188,9 @@ void test_simplify_trig_abs_pow() {
         "simplify: x^(-3) → 1/x^3");
 
     // Numeric correctness
-    ASSERT_NUM(evaluate(*simplify(parse("sin(-0.5)"))), -std::sin(0.5),
+    ASSERT_NUM((*evaluate(*simplify(parse("sin(-0.5)")))), -std::sin(0.5),
         "simplify: sin(-0.5) evaluates correctly");
-    ASSERT_NUM(evaluate(*simplify(parse("2^(-3)"))), 0.125,
+    ASSERT_NUM((*evaluate(*simplify(parse("2^(-3)")))), 0.125,
         "simplify: 2^(-3) = 0.125");
 }
 
@@ -8605,16 +8599,10 @@ void test_undefined() {
         ASSERT(is_undefined(Expr::Var("undefined")), "is_undefined: Var(undefined) true");
     }
 
-    // 3. Evaluate throws
+    // 3. Evaluate returns nullopt for undefined
     {
-        bool threw = false;
-        try { evaluate(*parse("undefined")); }
-        catch (const std::runtime_error& e) {
-            threw = true;
-            ASSERT(std::string(e.what()).find("undefined") != std::string::npos,
-                "evaluate: error mentions 'undefined'");
-        }
-        ASSERT(threw, "evaluate: undefined throws");
+        auto v = evaluate(*parse("undefined"));
+        ASSERT(!v, "evaluate: undefined returns nullopt");
     }
 
     // 4. expr_to_string

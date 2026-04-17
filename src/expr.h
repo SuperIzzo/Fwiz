@@ -441,8 +441,7 @@ struct BinOpInfo {
 };
 
 inline double eval_div(double l, double r) {
-    if (r == 0) throw std::runtime_error("Division by zero");
-    return l / r;
+    return r == 0 ? std::numeric_limits<double>::quiet_NaN() : l / r;
 }
 
 inline const BinOpInfo& binop_info(BinOp op) {
@@ -924,34 +923,42 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 //  Evaluate
 // ============================================================================
 
-inline double evaluate(const Expr& e) {
+inline std::optional<double> evaluate(const Expr& e) {
     switch (e.type) {
         case ExprType::NUM: return e.num;
         case ExprType::VAR: {
-            if (e.name == "undefined")
-                throw std::runtime_error("Expression is undefined");
+            if (e.name == "undefined") return std::nullopt;
             auto& consts = builtin_constants();
             auto it = consts.find(e.name);
             if (it != consts.end()) return it->second;
-            throw std::runtime_error("Cannot evaluate: unresolved variable '" + e.name + "'");
+            return std::nullopt;
         }
-        case ExprType::UNARY_NEG:
-            return -evaluate(*e.child);
-        case ExprType::BINOP:
-            return binop_info(e.op).eval(evaluate(*e.left), evaluate(*e.right));
+        case ExprType::UNARY_NEG: {
+            auto v = evaluate(*e.child);
+            if (!v) return std::nullopt;
+            return -*v;
+        }
+        case ExprType::BINOP: {
+            auto l = evaluate(*e.left);
+            if (!l) return std::nullopt;
+            auto r = evaluate(*e.right);
+            if (!r) return std::nullopt;
+            return binop_info(e.op).eval(*l, *r);
+        }
         case ExprType::FUNC_CALL: {
-            if (e.args.size() != 1)
-                throw std::runtime_error("Unknown function: " + e.name);
+            if (e.args.size() != 1) return std::nullopt;
             auto fn = lookup_function(e.name);
-            if (!fn) throw std::runtime_error("Unknown function: " + e.name);
-            return fn(evaluate(*e.args[0]));
+            if (!fn) return std::nullopt;
+            auto v = evaluate(*e.args[0]);
+            if (!v) return std::nullopt;
+            return fn(*v);
         }
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
-    throw std::runtime_error("Cannot evaluate: unknown expression type");
+    return std::nullopt;
 }
-inline double evaluate(ExprPtr e) {
-    if (!e) throw std::runtime_error("Cannot evaluate null expression");
+inline std::optional<double> evaluate(ExprPtr e) {
+    if (!e) return std::nullopt;
     return evaluate(*e);
 }
 
@@ -981,7 +988,7 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
         bool all_num = true;
         for (auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
-        if (all_num) return Expr::Num(evaluate(e));
+        if (all_num) return Expr::Num(*evaluate(e));
     }
     // Fall-through: not fully numeric-foldable — return the tree as-is
     // (arena-allocated copy so the caller can treat the result uniformly).
@@ -1426,13 +1433,12 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
                 // Context-aware: don't cancel if the term is known to be zero
                 bool is_zero_term = false;
                 if (auto* bindings = simplify_bindings_()) {
-                    try {
-                        auto resolved = lb;
-                        for (auto& [var, val] : *bindings)
-                            resolved = substitute(resolved, var, Expr::Num(val));
-                        double v = evaluate(*resolved);
-                        if (std::abs(v) < EPSILON_ZERO) is_zero_term = true;
-                    } catch (...) {}
+                    auto resolved = lb;
+                    for (auto& [var, val] : *bindings)
+                        resolved = substitute(resolved, var, Expr::Num(val));
+                    if (auto v = evaluate(*resolved)) {
+                        if (std::abs(*v) < EPSILON_ZERO) is_zero_term = true;
+                    }
                 }
                 if (is_zero_term) continue;  // skip: would be 0/0
                 simplify_assume_nonzero(lb);
@@ -1612,7 +1618,8 @@ inline bool condition_violated(const std::string& cond,
             auto resolve = [&](const std::string& s) -> std::optional<double> {
                 auto it = numeric.find(s);
                 if (it != numeric.end()) return it->second;
-                try { return std::stod(s); } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — std::stod throws on non-numeric input; fall back to nullopt
+                try { return std::stod(s); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
                 return std::nullopt;
             };
             auto lval = resolve(lhs_s);
