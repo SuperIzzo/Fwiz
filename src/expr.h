@@ -841,6 +841,7 @@ inline ExprPtr apply_rewrite(const ExprPtr& replacement,
             apply_rewrite(replacement->right, bindings));
     if (replacement->type == ExprType::FUNC_CALL) {
         std::vector<ExprPtr> args;
+        args.reserve(replacement->args.size());
         for (auto& a : replacement->args)
             args.push_back(apply_rewrite(a, bindings));
         return Expr::Call(replacement->name, args);
@@ -1066,6 +1067,11 @@ inline void flatten_multiplicative(ExprPtr e,
                                    double& coeff,
                                    std::vector<std::pair<ExprPtr, double>>& factors) {
     assert(e && "flatten_multiplicative: null expression");
+    // Structural fraction first — must short-circuit before DIV decomposition would split it apart
+    if (is_int_frac(e)) {
+        factors.push_back({e, 1.0});
+        return;
+    }
     if (e->type == ExprType::NUM) {
         coeff *= e->num;
     } else if (e->type == ExprType::UNARY_NEG) {
@@ -1074,9 +1080,6 @@ inline void flatten_multiplicative(ExprPtr e,
     } else if (e->type == ExprType::BINOP && e->op == BinOp::MUL) {
         flatten_multiplicative(e->left, coeff, factors);
         flatten_multiplicative(e->right, coeff, factors);
-    } else if (is_int_frac(e)) {
-        // Structural fraction: keep as opaque factor to preserve rational form
-        factors.push_back({e, 1.0});
     } else if (e->type == ExprType::BINOP && e->op == BinOp::DIV
                && e->right->type == ExprType::NUM && e->right->num != 0) {
         coeff /= e->right->num;
@@ -1531,6 +1534,7 @@ inline std::string substitute_condition(const std::string& cond,
     std::string result = cond;
     // Replace longest variable names first to avoid partial matches
     std::vector<std::pair<std::string, std::string>> replacements;
+    replacements.reserve(bindings.size());
     for (auto& [var, expr] : bindings)
         replacements.push_back({var, expr_to_string(expr)});
     std::sort(replacements.begin(), replacements.end(),
@@ -2097,7 +2101,8 @@ inline std::optional<double> bisection_solve(
         if (std::isnan(fmid) || std::isinf(fmid)) return std::nullopt;
         if (std::abs(fmid) < tol || (hi - lo) < tol)
             return snap_integer(mid);
-        if (flo * fmid < 0) { hi = mid; fhi = fmid; }
+        // Note: fhi is not tracked inside the loop — only flo participates in the sign test (flo * fmid).
+        if (flo * fmid < 0) { hi = mid; }
         else                { lo = mid; flo = fmid; }
     }
     return snap_integer((lo + hi) / 2.0);
@@ -2120,7 +2125,9 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
             if (std::isfinite(fx)) samples.push_back({static_cast<double>(i), fx});
         }
     } else {
-        // Coarse pass with deterministic jitter
+        // Coarse pass with deterministic jitter — reproducibility is intentional:
+        // users must see the same numeric probe sequence every run for the solver output to be deterministic.
+        // NOLINTNEXTLINE(bugprone-random-generator-seed)
         std::mt19937_64 rng(NUMERIC_SEED);
         std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
         double step = (hi - lo) / n_samples;

@@ -573,6 +573,7 @@ x^(1/2) = sqrt(x)
                 extract_positional_calls(e->right, eq_lhs, calls));
         if (e->type == ExprType::FUNC_CALL) {
             std::vector<ExprPtr> args;
+            args.reserve(e->args.size());
             for (auto& a : e->args)
                 args.push_back(extract_positional_calls(a, eq_lhs, calls));
             return Expr::Call(e->name, args);
@@ -862,7 +863,9 @@ x^(1/2) = sqrt(x)
                 }
                 if (!matches) continue;
 
-                std::string cond_str = eq.condition->to_valueset(target, {}).to_string();
+                std::string cond_str = eq.condition
+                    ? eq.condition->to_valueset(target, {}).to_string()
+                    : std::string{};
                 bool body_is_known = false;
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
                     try { evaluate(*it->second); body_is_known = true; } catch (...) {}
@@ -930,7 +933,7 @@ x^(1/2) = sqrt(x)
         for (auto& [k, v] : symbolic_bindings) bind_key = k;
 
         // Extract bounds for the free variable
-        std::map<std::string, double> bounds_bindings = numeric_bindings;
+        const std::map<std::string, double>& bounds_bindings = numeric_bindings;
         auto [lo, hi] = extract_bounds(bind_key, bounds_bindings);
 
         // Build evaluation lambda
@@ -1669,7 +1672,6 @@ private:
         bool loaded = false;
         if (!def_source) {
             sub->load_file(abs_path, section);
-            loaded = true;
         } else {
             // Try file first (user can override definitions)
             try {
@@ -1681,7 +1683,6 @@ private:
             } catch (...) {}
             if (!loaded) {
                 sub->load_string(*def_source, "@def:" + file_part);
-                loaded = true;
             }
         }
         // Auto-select section: if no equations loaded and file has exactly one
@@ -2242,7 +2243,7 @@ private:
     std::vector<double> try_resolve_numeric(
             const ExprPtr& combined, const std::string& target,
             std::map<std::string, double>& bindings,
-            std::set<std::string> visited, int depth,
+            const std::set<std::string>& visited, int depth,
             const Condition* eq_condition = nullptr) const {
 
         // Re-entrance guard: prevent infinite recursion on coupled systems
