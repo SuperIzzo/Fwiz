@@ -45,3 +45,4 @@ For each implementation step:
 - Do NOT self-censor based on complexity — plan the most effective approach
 - Do NOT skip exploring the codebase — always grep for relevant functions before proposing new ones
 - Do NOT propose changes without identifying the specific file locations and functions involved
+- Do NOT propose multi-phase migration plans where each phase depends on a function signature that changes in a later phase. Signature-changing migrations (return type, exception contract, parameter list) break all call sites atomically and must be planned as a single merged phase covering (a) the new type, (b) the signature flip, (c) all dereference / call-site syntax updates. If you find yourself writing "P1: add type, P2: change signature," check whether P1 delivers a green build — if not, merge them.
