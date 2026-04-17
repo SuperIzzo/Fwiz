@@ -992,7 +992,9 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
         bool all_num = true;
         for (auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
-        if (all_num) return Expr::Num(*evaluate(e));
+        // evaluate() can still return nullopt here (e.g. multi-arg function
+        // with args.size() != 1) — fall through to tree-as-is on failure.
+        if (all_num) if (auto v = evaluate(e)) return Expr::Num(*v);
     }
     // Fall-through: not fully numeric-foldable — return the tree as-is
     // (arena-allocated copy so the caller can treat the result uniformly).
