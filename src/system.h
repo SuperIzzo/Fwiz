@@ -2717,9 +2717,8 @@ inline CLIQuery parse_cli_query(const std::string& input,
                         v = *val_opt;
                         ok = true;
                     }
-                } catch (const std::runtime_error&) {
-                    // Parser failure (malformed expression) — handled below
-                }
+                // NOLINTNEXTLINE(bugprone-empty-catch) — parser failure (malformed expression) handled by the !ok branch below
+                } catch (const std::runtime_error&) {}
                 if (!ok) {
                     if (allow_symbolic) {
                         q.symbolic[name] = val;

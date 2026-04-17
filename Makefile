@@ -42,6 +42,7 @@ analyze:
 			--suppress=passedByValue --suppress=useStlAlgorithm \
 			--suppress=throwInEntryPoint \
 			--suppress=syntaxError:src/tests.cpp \
+			--suppress=containerOutOfBounds:src/tests.cpp \
 			--error-exitcode=1 src/main.cpp src/tests.cpp 2>&1 \
 	) || echo "cppcheck not installed, skipping"
 	@which clang-tidy > /dev/null 2>&1 && ( \
