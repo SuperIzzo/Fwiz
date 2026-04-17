@@ -136,7 +136,7 @@ The core of the system. Contains:
 
 **expr_to_string()** — Pretty printer with precedence-aware parenthesization. Only adds parens where needed for correctness.
 
-**evaluate()** — Evaluates a fully numeric expression tree. Throws on unresolved variables or division by zero. Built-in functions are dispatched via a static lookup table. Stays real-valued permanently — do not extend for complex or matrix types.
+**evaluate()** — Evaluates a fully numeric expression tree. Returns `std::optional<double>`: `nullopt` for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined` sentinel, null pointer). Division by zero returns `NaN` via IEEE 754 propagation — not `nullopt`. Built-in functions are dispatched via a static lookup table. Stays real-valued permanently — do not extend for complex or matrix types.
 
 **evaluate_symbolic()** — Exact sibling of `evaluate()`. Returns an `ExprPtr` that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by the simplifier's constant-folding paths (`simplify_once_impl` BINOP num/num and FUNC_CALL all-numeric folds). This is the extension point for new number types — add complex or matrix dispatch here, not in `evaluate()`.
 
@@ -307,7 +307,7 @@ The architecture makes several classes of bugs structurally impossible:
 
 **Guarded casts.** The `fmt_num` function casts `double` to `long long` for display, but only when `abs(v) < 1e12` — well within `long long` range. UBSan confirms this never overflows.
 
-**Division by zero handled in two places.** The evaluator throws on `x / 0`. The solver checks for zero/near-zero coefficients before dividing. UBSan confirms no unchecked division reaches the hardware.
+**Division by zero handled in two places.** The evaluator returns `NaN` on `x / 0` (IEEE 754 propagation; `NaN` results are filtered as non-finite at result boundaries). The solver checks for zero/near-zero coefficients before dividing. UBSan confirms no unchecked integer division reaches the hardware.
 
 ### Sanitizer-aware test depths
 
@@ -474,9 +474,13 @@ Prefer data tables and registries over switch statements and if-else chains:
 
 ### Error handling
 
-- Empty `catch` blocks are not allowed (flagged by clang-tidy). Use `return false;`, `return;`, or add trace logging.
-- Solver strategy failures are expected — catch and try the next strategy. Only throw when all strategies have been exhausted.
+- **Exceptions for exceptional cases only.** Failure during normal flow (numeric probing, candidate enumeration, best-effort parsing) is expected — those paths use `std::optional`, not `try/catch`. Division by zero, unresolved variables, and failed probes are normal flow. True exceptions are unrecoverable conditions (`std::bad_alloc`, programmer errors).
+- Empty `catch` blocks are not allowed (flagged by clang-tidy `bugprone-empty-catch`). Empty catches that must exist for correctness (best-effort sub-system load, `std::stoi` on user input, etc.) MUST be narrowed to a specific type (`std::runtime_error`, `std::invalid_argument`, `std::out_of_range`, `std::filesystem::filesystem_error`) and carry `NOLINTNEXTLINE(bugprone-empty-catch)` with a one-line rationale directly above the `catch` line. Untyped `catch (...)` is reserved for `main.cpp` CLI top-level and test code that deliberately exercises exception paths.
+- Use `if (auto v = evaluate(e))` idiom at call sites — do not wrap `evaluate()` calls in try/catch.
+- Solver strategy failures are expected — try the next strategy. Only throw when all strategies have been exhausted.
 - Validate results: reject NaN, infinity, and near-zero coefficients (`|coeff| < EPSILON_ZERO`).
+- Use `std::ptrdiff_t` cast at iterator-arithmetic sites where the RHS is `size_t` (keep indices as `size_t` for natural vector access; cast only at the signed/unsigned boundary).
+- `reserve()` vectors when the push_back count is statically known.
 
 ### Testing strategy
 

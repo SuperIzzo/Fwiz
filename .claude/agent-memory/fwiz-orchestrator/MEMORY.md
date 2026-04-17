@@ -1,0 +1,1 @@
+- [Exceptions only for truly exceptional cases](feedback_exceptions_for_exceptional.md) — try/catch is reserved for unrecoverable/exceptional conditions, not for expected failure paths (e.g. fwiz's numeric probing). Use std::optional or sentinels for expected failures.

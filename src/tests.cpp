@@ -208,10 +208,10 @@ void test_evaluate() {
     // Roundtrip: asin(sin(0.5)) = 0.5
     ASSERT(std::abs(ev("asin(sin(0.5))") - 0.5) < 1e-10, "asin(sin(0.5)) roundtrip");
 
-    // Division by zero — IEEE 754: 1/0 yields inf, not throw
+    // Division by zero — eval_div returns NaN (not Inf), not throw
     {
         double r = ev("1/0");
-        ASSERT(!std::isfinite(r), "division by zero yields non-finite");
+        ASSERT(std::isnan(r), "division by zero yields NaN");
     }
     // Unresolved variable
     {

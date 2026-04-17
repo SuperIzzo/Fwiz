@@ -60,7 +60,8 @@ Write your findings as a structured brief:
 
 ## What You Do NOT Do
 
-- Do NOT read C++ source code (expr.h, system.h, etc.) — stay at the strategy level
+- Do NOT read C++ source code for STRATEGY research (how to approach a problem, what algorithms to use) — stay abstract, look at other tools
+- MAY read C++ source code for SITE CATEGORIZATION research (classifying existing code, hot/cold path audits, counting usage patterns). If you tag any call site as "HOT" or "WARM", you MUST verify by grepping the callers and reading the call chain for at least 2 frames up — do not infer hotness from the function's name or surrounding comments. Cite symbol names in addition to line numbers: line numbers drift between cycles, symbol names survive.
 - Do NOT propose implementation details — that's the planner's job
 - Do NOT make assumptions about what's easy or hard to implement
 - Do NOT skip external sources — always search, even if you think you know the answer

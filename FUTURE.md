@@ -176,7 +176,7 @@ Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer
 
 `expr.h` now has two evaluators in sibling roles:
 
-- **`double evaluate(const Expr&)`** — numeric projection. Collapses the whole tree to a real `double`. Stays real-valued forever. Used by: Newton/bisection grid scan, condition comparisons, verify-mode equality, CLI arg parsing, `solve_recursive` bindings commit.
+- **`std::optional<double> evaluate(const Expr&)`** — numeric projection. Collapses the whole tree to a real `double`; `nullopt` on structural failure. Stays real-valued forever. Used by: Newton/bisection grid scan, condition comparisons, verify-mode equality, CLI arg parsing, `solve_recursive` bindings commit.
 - **`ExprPtr evaluate_symbolic(const Expr&)`** — exact projection. Returns a tree that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by: simplifier constant-folding paths (`simplify_once_impl` BINOP num/num, FUNC_CALL all-numeric).
 
 The split is the extension point for new non-real number types. Callers choose the projection; `evaluate_symbolic`'s dispatch grows without touching call sites.
@@ -216,7 +216,7 @@ Each is a future minimalism target — remove duplicated logic, single source of
 
 ### Bindings-parameter extension
 
-When `double evaluate()` gains a `bindings` parameter (symbolic substitution during evaluation), extend `evaluate_symbolic` with the same signature. Keep them twin APIs — every numeric projection has an exact sibling.
+When `evaluate()` gains a `bindings` parameter (symbolic substitution during evaluation), extend `evaluate_symbolic` with the same signature. Keep them twin APIs — every numeric projection has an exact sibling.
 
 ## 11. Curve Fitting — ✅ DONE
 

@@ -49,7 +49,8 @@ For each design item you're given:
 ### VERIFY — Full Quality Bar
 10. Run: `make test && make sanitize`
 11. Both must pass. If sanitize finds issues, fix them (they're usually real bugs).
-11b. Run `make analyze` only on the FINAL milestone — it takes ~45 minutes on this codebase and must not be duplicated. For intermediate milestones, note "analyze: deferred to final" in the log. If `make analyze` is already running (check with `pgrep -f clang-tidy`), do NOT start another one.
+11b. For INTERMEDIATE milestones: note "analyze: deferred to final" in the log. Do NOT run `make analyze` — it takes ~45 minutes.
+11c. For the FINAL milestone, OR for any milestone whose design changes a function signature / return type / exception contract: ask the orchestrator to run `make analyze` and return the warning log to you BEFORE you declare done. Grep-based self-verification is not sufficient for contract changes — it finds only the sites you remember. The tool finds the sites you forgot. Reading the analyze log is mandatory if your change propagated through >10 call sites.
 12. Log pass/fail status.
 13. **Log ALL warnings and errors** encountered during verification — even pre-existing ones unrelated to your change. Every warning is a potential future fix. Never dismiss with "not my change." Log format:
     ```
