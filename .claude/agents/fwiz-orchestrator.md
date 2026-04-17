@@ -138,7 +138,18 @@ If implementer reports 3 failed attempts, stop and present the issue to the user
 
 **Before spawning review agents**: Run `make analyze` yourself as a single background task. Do NOT let individual review agents run `make analyze` independently — it takes ~45 minutes and must not be duplicated. Check `pgrep -f clang-tidy` before starting to avoid duplicates.
 
-When implementation is complete, spawn three agents **in parallel**:
+**Agent dependency on analyze output**:
+- `doc-updater` — does NOT need analyze output. Launch immediately.
+- `perf-auditor` — does NOT need analyze output. Launch immediately.
+- `reviewer` — DOES need analyze output to audit Collected Issues. Launch AFTER analyze completes.
+
+This staggered parallelism saves ~20-30 minutes wall-clock per cycle versus blocking all three review agents until analyze finishes. Confirmed to work in the tech-debt cleanup cycle.
+
+Spawn order:
+1. IMMEDIATELY: `doc-updater` and `perf-auditor` in parallel
+2. AFTER analyze returns: `reviewer`
+
+If analyze is already complete when reaching REVIEW (e.g., multi-milestone cycle where analyze was run mid-cycle), spawn all three in parallel.
 
 1. **reviewer** — "Read `.fwiz-workflow/implementation-log.md` and run `git diff` to see changes. Check against DEVELOPER.md conventions. Minimalism audit: did line count go up? Can it go down? Dead code? New specializations that could be generalized? Sufficient tests?"
 
@@ -184,6 +195,28 @@ make test && make sanitize && make analyze
 No exceptions.
 
 **For `make analyze`**: exit code 0 only means clang-tidy/cppcheck ran to completion — it does NOT mean the codebase is warning-free. You MUST also grep the log for `warning:` and `error:` lines in user code (`src/*.h`, `src/*.cpp`) and compare against the previous cycle's baseline. Report the delta explicitly: how many warnings were present before this cycle, how many after, and which ones are new. "Clean" based on exit code alone is a reporting failure (one prior cycle did this — the real baseline was 50 pre-existing warnings, not zero).
+
+## Background Task Discipline
+
+When you spawn a long-running command with `run_in_background`, you will receive a completion notification. You MUST wait for the notification before acting on the task's output. Do NOT poll the output file.
+
+Polling anti-patterns that cost this workflow time in past cycles:
+- Running a second `make sanitize` because the first one's output file "looked empty" — it was still being flushed
+- Misreading a stale `/tmp/fwiz-analyze-*.log` from a previous background task as the current one's output
+- Starting work based on a partial/in-progress log file
+
+Discipline:
+1. **Tag every background task** in the orchestrator log with its task-id, its log path, and the launch timestamp. Before reading any `/tmp/fwiz-*.log`, check the mtime of the file vs the launch timestamp you logged — if mtime < launch timestamp, it is stale and you are looking at a prior task.
+2. **Never start a duplicate long task** (make sanitize, make analyze) while another is running. Check `pgrep -f clang-tidy` / `pgrep -f fwiz_asan` first. If one is running, WAIT for its completion notification — do not start a parallel one "just in case."
+3. **If you think a background task is hung**, wait at least 2x the expected duration before considering a restart. `make analyze` takes ~45 min; don't consider it hung before 90 minutes of silence.
+
+## Cycle-Completion Checklist
+
+Before declaring a cycle complete and moving to PLAN-NEXT / META-REVIEW:
+
+1. **No in-flight background tasks**: run `ps aux | grep -E 'clang-tidy|cppcheck|make|fwiz'` and confirm zero processes other than the orchestrator itself. A hung or zombie process from earlier in the cycle can invalidate fresh verifications.
+2. **All logs are from the final state**: for each `/tmp/fwiz-*.log` you cite in review-notes.md, confirm mtime > last source-file mtime. A log predating the last source edit is reporting the wrong state.
+3. **Residual audit of the final analyze log**: grep for `warning:` / `error:` in user-code paths, compare against the cycle's start-baseline. If delta is non-zero OR any warning is in a file/line the implementer touched, do NOT close the cycle — spawn a residual-fix pass (self-fix if trivial, implementer if not). One cycle caught 2 real bugs via residual audit — `expr.h:995` (unchecked optional access) and `system.h:2720` (missed empty-catch). Both were in files the implementer touched. Neither was caught by grep. Analyze is the oracle; grep is not.
 
 ## The Minimalism Principle
 

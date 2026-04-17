@@ -91,7 +91,9 @@ struct Condition {
                 case CondOp::COUNT_: break;
             }
 
-            if (i == 0 || (i > 0 && connectors[i-1] == CondLogic::AND))
+            // i == 0 always intersects (no prior connector); otherwise the
+            // connector at i-1 decides intersect vs unite.
+            if (i == 0 || connectors[i-1] == CondLogic::AND)
                 result = result.intersect(clause_set);
             else
                 result = result.unite(clause_set);
