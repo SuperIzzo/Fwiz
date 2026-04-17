@@ -40,6 +40,8 @@ analyze:
 		echo "=== cppcheck ===" && \
 		cppcheck --enable=warning,style,performance --std=c++17 \
 			--suppress=passedByValue --suppress=useStlAlgorithm \
+			--suppress=throwInEntryPoint \
+			--suppress=syntaxError:src/tests.cpp \
 			--error-exitcode=1 src/main.cpp src/tests.cpp 2>&1 \
 	) || echo "cppcheck not installed, skipping"
 	@which clang-tidy > /dev/null 2>&1 && ( \

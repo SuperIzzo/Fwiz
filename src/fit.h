@@ -30,6 +30,8 @@ inline std::vector<FitSample> sample_function(
     std::vector<FitSample> samples;
     if (n_points < 2 || lo >= hi) return samples;
 
+    // Deterministic seed — fit output must be reproducible across runs.
+    // NOLINTNEXTLINE(bugprone-random-generator-seed)
     std::mt19937_64 rng(NUMERIC_SEED);
     std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
     double step = (hi - lo) / n_points;
@@ -347,6 +349,7 @@ inline ExprPtr expr_recognize_constants(const ExprPtr& e,
         }
         case ExprType::FUNC_CALL: {
             std::vector<ExprPtr> args;
+            args.reserve(e->args.size());
             for (auto& a : e->args)
                 args.push_back(expr_recognize_constants(a, extra_constants));
             return Expr::Call(e->name, std::move(args));
@@ -436,6 +439,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
     result.degree = -1;
 
     std::vector<FitSample> log_samples;
+    log_samples.reserve(samples.size());
     for (auto& s : samples)
         if (s.x > 0 && s.y > 0)
             log_samples.push_back({std::log(s.x), std::log(s.y)});
@@ -443,6 +447,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
 
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
+    b.reserve(log_samples.size());
     for (auto& s : log_samples) b.push_back(s.y);
     auto coeffs = least_squares_solve(A, b);
     double a = std::exp(coeffs[0]), power = coeffs[1];
@@ -477,6 +482,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
     {
         auto A = vandermonde(log_samples, 1);
         std::vector<double> b;
+        b.reserve(log_samples.size());
         for (auto& s : log_samples) b.push_back(s.y);
         auto coeffs = least_squares_solve(A, b);
         double a = std::exp(coeffs[0]), rate = coeffs[1];
@@ -502,6 +508,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
     if (log_samples.size() >= 4) {
         auto A = vandermonde(log_samples, 2);
         std::vector<double> b;
+        b.reserve(log_samples.size());
         for (auto& s : log_samples) b.push_back(s.y);
         auto coeffs = least_squares_solve(A, b);
         double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2];
@@ -547,12 +554,14 @@ inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
     result.degree = -1;
 
     std::vector<FitSample> log_samples;
+    log_samples.reserve(samples.size());
     for (auto& s : samples)
         if (s.x > 0) log_samples.push_back({std::log(s.x), s.y});
     if (log_samples.size() < 3) return result;
 
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
+    b.reserve(log_samples.size());
     for (auto& s : log_samples) b.push_back(s.y);
     auto coeffs = least_squares_solve(A, b);
     double intercept = coeffs[0], slope = coeffs[1];
@@ -656,6 +665,7 @@ inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
 
     for (double c_try : {c_est, 0.0}) {
         std::vector<FitSample> inv_samples;
+        inv_samples.reserve(samples.size());
         for (auto& s : samples) {
             double ym = s.y - c_try;
             if (std::abs(ym) < 1e-15) continue;
@@ -665,6 +675,7 @@ inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
 
         auto A = vandermonde(inv_samples, 1);
         std::vector<double> bv;
+        bv.reserve(inv_samples.size());
         for (auto& s : inv_samples) bv.push_back(s.y);
         auto coeffs = least_squares_solve(A, bv);
         // 1/(y-c) = coeffs[0] + coeffs[1]*x = (x + coeffs[0]/coeffs[1]) / (1/coeffs[1])
