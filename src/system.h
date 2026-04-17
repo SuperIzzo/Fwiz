@@ -2308,8 +2308,7 @@ private:
             // Equation-based: f(target) = combined_expr(target) = 0
             auto f = [&, expr](double x) -> double {
                 ExprPtr subst = substitute(expr, target, Expr::Num(x));
-                auto v = evaluate(*simplify(subst));
-                return v ? v.value() : std::numeric_limits<double>::quiet_NaN();
+                return evaluate(*simplify(subst)).value_or_nan();
             };
 
             if (try_integer) {
