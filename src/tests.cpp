@@ -62,7 +62,15 @@ std::string ss(const std::string& s) {
     return expr_to_string(simplify(parse(s)));
 }
 
+// Strict evaluation — asserts (in debug) on empty. Use for tests that
+// expect a finite, computable result.
 double ev(const std::string& s) {
+    return evaluate(simplify(parse(s))).value();
+}
+
+// NaN-tolerant evaluation — returns NaN on empty (propagation or failure).
+// Use ONLY for tests that deliberately produce NaN (e.g. sqrt(-1), 0/0).
+double ev_nan(const std::string& s) {
     return evaluate(simplify(parse(s))).value_or_nan();
 }
 
@@ -886,7 +894,7 @@ void test_evaluate_edge() {
 
     // sqrt of negative => NaN
     {
-        double r = ev("sqrt(-1)");
+        double r = ev_nan("sqrt(-1)");
         ASSERT(std::isnan(r), "sqrt(-1) is NaN");
     }
 
@@ -1856,13 +1864,13 @@ void test_numeric_extremes() {
 
     // sqrt(-1) produces NaN
     {
-        double r = ev("sqrt(-1)");
+        double r = ev_nan("sqrt(-1)");
         ASSERT(std::isnan(r), "sqrt(-1) = NaN");
     }
 
     // log(-1) produces NaN
     {
-        double r = ev("log(-1)");
+        double r = ev_nan("log(-1)");
         ASSERT(std::isnan(r), "log(-1) = NaN");
     }
 
@@ -1895,13 +1903,13 @@ void test_numeric_extremes() {
 
     // 0/0 yields non-finite (NaN per eval_div semantics)
     {
-        double r = ev("0 / 0");
+        double r = ev_nan("0 / 0");
         ASSERT(!std::isfinite(r), "0/0 yields non-finite");
     }
 
     // 1/0 yields non-finite (NaN per eval_div semantics)
     {
-        double r = ev("1 / 0");
+        double r = ev_nan("1 / 0");
         ASSERT(!std::isfinite(r), "1/0 yields non-finite");
     }
 
@@ -4338,9 +4346,9 @@ void test_audit_switch_safety() {
         ASSERT_NUM(evaluate(Expr::Call("sqrt", {Expr::Num(16)})).value(), 4, "evaluate FUNC");
     }
 
-    // Verify unresolved variable returns nullopt (not silent 0)
+    // Verify unresolved variable returns empty (not silent 0)
     {
-        ASSERT(!evaluate(Expr::Var("x")), "evaluate VAR returns nullopt");
+        ASSERT(!evaluate(Expr::Var("x")), "evaluate VAR returns empty");
     }
 }
 

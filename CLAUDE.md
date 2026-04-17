@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (1700+)
+make test         # run all tests (1829+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
@@ -41,7 +41,7 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Simplifier:** Additive and multiplicative flattening. Structural fractions: `DIV(Num(a), Num(b))` preserved when non-integer, with GCD normalization and exact rational arithmetic (`to_rational()`, `make_rational()`). Most pattern-match rules migrated to `.fw` rewrite rules. Extend flattening logic for structural simplification; add new patterns as `.fw` rules. Structural fractions flow into solve output via `fmt_solve_result` in `main.cpp` (exact results only; power-of-10 denominators render as decimal — `98.1` not `981 / 10`; all other denominators render as fraction — see KNOWN_ISSUES #6 for the long-term provenance fix).
 
-**Two evaluators:** `std::optional<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; returns `nullopt` for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns `NaN` (IEEE 754 propagation), not `nullopt`. `ExprPtr evaluate_symbolic(const Expr&)` (expr.h:968) — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued.
+**Two evaluators:** `Checked<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns empty via NaN sentinel — not a separate bool. `Checked<T>` (expr.h:30-89) is a NaN-sentinel optional: `sizeof(Checked<double>) == sizeof(double)` (8 bytes vs 16 for `std::optional<double>`); `has_value()` / `operator bool` to test; `.value()` to unwrap (asserts on empty in debug); `.value_or_nan()` is the deliberate boundary escape for handing off to the pure-double numerical root-finder layer — its use is grep-worthy and should stay rare. `ExprPtr evaluate_symbolic(const Expr&)` — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued.
 
 **Pattern matcher:** `match_pattern()` with commutative flattened matching. Variables in patterns are wildcards; builtin constants match literally. Supports N-term additive permutation search and multiplicative coefficient extraction.
 

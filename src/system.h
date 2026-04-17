@@ -741,7 +741,8 @@ x^(1/2) = sqrt(x)
     // Format a derived ExprPtr as a string (evaluate if fully numeric)
     std::string format_derived(const ExprPtr& result) const {
         if (auto val = evaluate(result)) {
-            if (!std::isnan(val.value()) && !std::isinf(val.value())) return fmt_num(val.value());
+            // Checked<double> already excludes NaN; only guard against infinity.
+            if (!std::isinf(val.value())) return fmt_num(val.value());
         } else {
             trace.calc("derive: symbolic result (cannot evaluate)");
         }
@@ -2040,7 +2041,8 @@ private:
 
         // Try full evaluation — if it works, return a clean number
         if (auto val = evaluate(result)) {
-            if (!std::isnan(val.value()) && !std::isinf(val.value())) return Expr::Num(val.value());
+            // Checked<double> already excludes NaN; only guard against infinity.
+            if (!std::isinf(val.value())) return Expr::Num(val.value());
         }
         return result;
     }
