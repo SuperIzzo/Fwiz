@@ -318,6 +318,10 @@ struct Expr {
     static ExprPtr Neg(ExprPtr c);
     static ExprPtr Call(const std::string& n, std::vector<ExprPtr> a);
 };
+// Guard against accidental field additions — sizeof(Expr) is a cache/arena
+// concern. If this fails, reconsider whether the new field belongs in Expr
+// or in an auxiliary map keyed by ExprPtr. See DEVELOPER.md for the rationale.
+static_assert(sizeof(Expr) == 96, "sizeof(Expr) changed — update static_assert and audit cache/arena impact");
 
 // Arena allocation — contiguous chunks for cache locality
 inline Expr* ExprArena::alloc() {
