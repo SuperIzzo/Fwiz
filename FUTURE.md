@@ -176,7 +176,7 @@ Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer
 
 `expr.h` now has two evaluators in sibling roles:
 
-- **`std::optional<double> evaluate(const Expr&)`** — numeric projection. Collapses the whole tree to a real `double`; `nullopt` on structural failure. Stays real-valued forever. Used by: Newton/bisection grid scan, condition comparisons, verify-mode equality, CLI arg parsing, `solve_recursive` bindings commit.
+- **`Checked<double> evaluate(const Expr&)`** — numeric projection. Collapses the whole tree to a real `double`; empty on structural failure (NaN sentinel, no bool). Stays real-valued forever. Used by: Newton/bisection grid scan, condition comparisons, verify-mode equality, CLI arg parsing, `solve_recursive` bindings commit.
 - **`ExprPtr evaluate_symbolic(const Expr&)`** — exact projection. Returns a tree that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by: simplifier constant-folding paths (`simplify_once_impl` BINOP num/num, FUNC_CALL all-numeric).
 
 The split is the extension point for new non-real number types. Callers choose the projection; `evaluate_symbolic`'s dispatch grows without touching call sites.
@@ -271,19 +271,9 @@ Arbitrary-precision integers and rationals for exact computation beyond double r
 
 `xor`, `and`, `or`, `nand`, `nor`, `not`, bit shifts, modulo. Enables digital logic, cryptographic formulas, CS-oriented problem solving. Integer-only operations — error on non-integer inputs.
 
-## 19. `checked_value<double>` — zero-overhead optional alternative
+## 19. `Checked<double>` — zero-overhead optional alternative — ✅ DONE
 
-A drop-in replacement for `std::optional<double>` that uses `NaN` as the empty sentinel instead of a separate bool flag. Same compile-time unwrap discipline (`.value()`, `.has_value()`, `operator*`) — **not** implicitly convertible to `double`. An intentional speed bump with zero runtime cost.
-
-**Benefits vs `std::optional<double>`:**
-- 8 bytes vs 16 bytes — 2× array density, matters for `samples` vectors in numeric solver / curve fitter.
-- Returns in one FP register vs two — matters on hot failed-probe path.
-- Single-store construction vs flag + payload.
-- NaN propagates naturally through arithmetic — matches existing `isfinite(fx)` filtering in `try_resolve_numeric`.
-
-**Why deferred**: after Milestone E (native `evaluate() → std::optional<double>` rewrite), the dominant cost — 160 µs exception unwind per failed probe — is already gone. The optional vs NaN-sentinel delta is second-order (~2× on return path, dwarfed by `evaluate`'s tree traversal work). Introduce only if profiling shows optional-return as a measurable bottleneck *after* Milestone E ships. Speculative infrastructure otherwise.
-
-**Scope when done**: ~30 LOC header type, ~10 call-site migrations from `std::optional<double>`, unit tests.
+Implemented as `Checked<T>` (not `checked_value`). NaN-sentinel optional replacing `std::optional<double>` for `evaluate()` return type. `sizeof(Checked<double>) == sizeof(double)`; returns in one FP register; `operator*` deliberately absent — unwrap via `.value()`. Full three-file migration: `expr.h` (type definition + evaluate signature), `system.h` (~20 call sites + hot probe lambda), `fit.h` (2 probe lambdas). Commits 7095f95 (type + evaluate), 620c3d9 (hot probe), 6608bdd (fit.h). 1829/1829 tests passing post-migration.
 
 ## Standard Library Ideas
 
