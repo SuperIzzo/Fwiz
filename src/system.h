@@ -1325,7 +1325,9 @@ private:
                     else if (tok[expr_end].type == TokenType::COMMA && pd == 0) break;
                     expr_end++;
                 }
-                std::vector<Token> expr_tok(tok.begin() + expr_start, tok.begin() + expr_end);
+                std::vector<Token> expr_tok(
+                    tok.begin() + static_cast<std::ptrdiff_t>(expr_start),
+                    tok.begin() + static_cast<std::ptrdiff_t>(expr_end));
                 expr_tok.push_back({TokenType::END, "", 0});
                 call.bindings[sub_var] = Parser(expr_tok).parse_expr();
                 i = expr_end;
@@ -1584,10 +1586,14 @@ private:
 
         if (!simple_lhs) {
             // Complex LHS: this is a rewrite rule (e.g., cos(-x) = cos(x))
-            auto lhs_tok = std::vector<Token>(mod_tok.begin(), mod_tok.begin() + eq_pos);
+            auto lhs_tok = std::vector<Token>(
+                mod_tok.begin(),
+                mod_tok.begin() + static_cast<std::ptrdiff_t>(eq_pos));
             lhs_tok.push_back(Token{TokenType::END, "", 0});
             Parser lp(lhs_tok);
-            Parser rp(std::vector<Token>(mod_tok.begin() + eq_pos + 1, mod_tok.end()));
+            Parser rp(std::vector<Token>(
+                mod_tok.begin() + static_cast<std::ptrdiff_t>(eq_pos + 1),
+                mod_tok.end()));
             auto lhs_expr = lp.parse_expr();
             auto rhs_expr = rp.parse_expr();
             std::string desc = eq_part;
