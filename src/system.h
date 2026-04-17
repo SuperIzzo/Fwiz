@@ -63,9 +63,9 @@ struct Condition {
                     resolved = substitute(resolved, v, Expr::Num(it->second));
                 else return ValueSet::all(); // can't evaluate — return unconstrained
             }
-            double val;
-            try { val = evaluate(*simplify(resolved)); }
-            catch (...) { return ValueSet::all(); }
+            auto val_opt = evaluate(*simplify(resolved));
+            if (!val_opt) return ValueSet::all();
+            double val = *val_opt;
 
             // Build ValueSet from operator (flip if var is on RHS)
             CondOp op = c.op;
@@ -479,7 +479,7 @@ x^(1/2) = sqrt(x)
                         else
                             var_coverage[var] = vs;
                     }
-                } catch (...) { all_have_conditions = false; }
+                } catch (const std::runtime_error&) { all_have_conditions = false; }
             }
 
             if (group.exhaustive) continue;  // already set by unconditional rule
@@ -558,7 +558,7 @@ x^(1/2) = sqrt(x)
 
                 calls.push_back(std::move(call));
                 return Expr::Var(calls.back().output_var);
-            } catch (...) {
+            } catch (const std::runtime_error&) {
                 // Sub-system not found — leave as FUNC_CALL
                 return e;
             }
@@ -681,14 +681,14 @@ x^(1/2) = sqrt(x)
                         auto b2 = bindings;
                         double val = solve_recursive(v, b2, {target}, 0);
                         resolved = substitute(resolved, v, Expr::Num(val));
-                    } catch (...) { return; }
+                    } catch (const std::runtime_error&) { return; }
                 }
             }
-            try {
-                double computed = evaluate(simplify(resolved));
-                if (std::isnan(computed) || std::isinf(computed)) return;
-                results.push_back({desc, computed, approx_equal(computed, known_value)});
-            } catch (...) { return; }
+            auto computed_opt = evaluate(simplify(resolved));
+            if (!computed_opt) return;
+            double computed = *computed_opt;
+            if (std::isnan(computed) || std::isinf(computed)) return;
+            results.push_back({desc, computed, approx_equal(computed, known_value)});
         };
 
         auto try_verify_formula = [&](const FormulaCall& call, const std::string& resolve_var,
@@ -699,7 +699,7 @@ x^(1/2) = sqrt(x)
                 double computed = sub_sys.resolve(resolve_var, sub_binds);
                 if (!std::isnan(computed) && !std::isinf(computed))
                     results.push_back({desc, computed, approx_equal(computed, known_value)});
-            } catch (...) { return; }
+            } catch (const std::runtime_error&) { return; }
         };
 
         enumerate_candidates(target, [&](const Candidate& c) {
@@ -738,11 +738,10 @@ x^(1/2) = sqrt(x)
 
     // Format a derived ExprPtr as a string (evaluate if fully numeric)
     std::string format_derived(const ExprPtr& result) const {
-        try {
-            double val = evaluate(result);
-            if (!std::isnan(val) && !std::isinf(val)) return fmt_num(val);
-        } catch (const std::exception& ex) {
-            trace.calc("derive: symbolic result (cannot evaluate: " + std::string(ex.what()) + ")");
+        if (auto val = evaluate(result)) {
+            if (!std::isnan(*val) && !std::isinf(*val)) return fmt_num(*val);
+        } else {
+            trace.calc("derive: symbolic result (cannot evaluate)");
         }
         // Recognize constants and fractions in the expression tree
         auto recognized = expr_recognize_constants(result);
@@ -781,7 +780,7 @@ x^(1/2) = sqrt(x)
 
         std::map<std::string, double> numeric;
         for (auto& [k, v] : bindings) {
-            try { numeric[k] = evaluate(*v); } catch (...) {}
+            if (auto nv = evaluate(*v)) numeric[k] = *nv;
         }
 
         enumerate_candidates(target, [&](const Candidate& c) {
@@ -792,6 +791,7 @@ x^(1/2) = sqrt(x)
                 add_result(try_derive(c.expr, target, b, {}, 0));
             } else if (c.type == CandidateType::FORMULA_REV) {
                 // Unfold sub-system equations and collect all solutions
+                // (sub-system load failure → no reverse solutions from this candidate)
                 try {
                     auto& sub_sys = load_sub_system(c.call->file_stem);
                     std::map<std::string, ExprPtr> parent_map;
@@ -830,7 +830,8 @@ x^(1/2) = sqrt(x)
                             }
                         }
                     }
-                } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system load failure → no reverse solutions
+                } catch (const std::runtime_error&) {}
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 // Forward formula call — derive into sub-system
                 auto b = bindings;
@@ -855,11 +856,9 @@ x^(1/2) = sqrt(x)
                 ExprPtr rhs_val = substitute_bindings(eq.rhs, bindings, target);
                 bool matches = true;
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
-                    try {
-                        double lhs_num = evaluate(*it->second);
-                        double rhs_num = evaluate(*rhs_val);
-                        if (!approx_equal(lhs_num, rhs_num)) matches = false;
-                    } catch (...) {}
+                    auto lhs_num = evaluate(*it->second);
+                    auto rhs_num = evaluate(*rhs_val);
+                    if (lhs_num && rhs_num && !approx_equal(*lhs_num, *rhs_num)) matches = false;
                 }
                 if (!matches) continue;
 
@@ -868,7 +867,7 @@ x^(1/2) = sqrt(x)
                     : std::string{};
                 bool body_is_known = false;
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
-                    try { evaluate(*it->second); body_is_known = true; } catch (...) {}
+                    if (evaluate(*it->second)) body_is_known = true;
                 }
 
                 // Check if the inversion is iff (exclusive) or just if.
@@ -880,14 +879,13 @@ x^(1/2) = sqrt(x)
                     if (&other == &eq) continue;
                     if (other.lhs_var != eq.lhs_var) continue;
                     ExprPtr other_rhs = substitute_bindings(other.rhs, bindings, target);
-                    try {
-                        if (expr_equal(simplify(this_rhs), simplify(other_rhs))) {
-                            exclusive = false; break;
-                        }
-                        // Also check numeric equality
-                        double a = evaluate(*this_rhs), b = evaluate(*other_rhs);
-                        if (approx_equal(a, b)) { exclusive = false; break; }
-                    } catch (...) {}
+                    if (expr_equal(simplify(this_rhs), simplify(other_rhs))) {
+                        exclusive = false; break;
+                    }
+                    // Also check numeric equality
+                    auto a = evaluate(*this_rhs);
+                    auto b = evaluate(*other_rhs);
+                    if (a && b && approx_equal(*a, *b)) { exclusive = false; break; }
                 }
 
                 std::string link = exclusive ? " iff " : " if ";
@@ -942,7 +940,7 @@ x^(1/2) = sqrt(x)
                 auto binds = numeric_bindings;
                 binds[bind_key] = x;
                 return resolve(target, binds);
-            } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+            } catch (const std::runtime_error&) { return std::numeric_limits<double>::quiet_NaN(); }
         };
 
         auto samples = sample_function(f, lo, hi, numeric_samples);
@@ -1006,7 +1004,8 @@ x^(1/2) = sqrt(x)
                     }
                     break;  // only check first section with positional args
                 }
-            } catch (...) {}
+            // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system load or solve failure → no inverse available
+            } catch (const std::runtime_error&) {}
             return nullptr;  // no inverse found
         };
     }
@@ -1062,14 +1061,13 @@ x^(1/2) = sqrt(x)
                         if (eq.condition && !check_condition(*eq.condition, test))
                             continue;
                         // Evaluate this equation's RHS with all known bindings
-                        try {
-                            double computed = evaluate(*simplify(
-                                substitute_bindings(eq.rhs, test)));
-                            if (!std::isfinite(computed)) continue;
-                            if (!approx_equal(computed, lhs_it->second)) {
+                        if (auto computed = evaluate(*simplify(
+                                substitute_bindings(eq.rhs, test)))) {
+                            if (!std::isfinite(*computed)) continue;
+                            if (!approx_equal(*computed, lhs_it->second)) {
                                 valid = false; break;
                             }
-                        } catch (...) {}
+                        }
                     }
                     if (valid) validated.push_back(r);
                 }
@@ -1083,7 +1081,8 @@ x^(1/2) = sqrt(x)
                         { all_exact = false; break; }
                 numeric_results_[target] = all_exact;
             }
-        } catch (...) {}
+        // NOLINTNEXTLINE(bugprone-empty-catch) — solve_all failure → no exact results; fall through to constraints
+        } catch (const std::runtime_error&) {}
 
         // Collect constraints from iff conditions (range-valued results).
         // Ranges from iff branches may contribute even when algebraic results exist.
@@ -1098,14 +1097,13 @@ x^(1/2) = sqrt(x)
                 has_iff_constraints = true;
                 // Check if this equation's body is satisfied
                 if (auto it = prepared.find(eq.lhs_var); it != prepared.end()) {
-                    try {
-                        double rhs_val = evaluate(*substitute_bindings(eq.rhs, prepared, target));
-                        if (approx_equal(it->second, rhs_val)) {
+                    if (auto rhs_val = evaluate(*substitute_bindings(eq.rhs, prepared, target))) {
+                        if (approx_equal(it->second, *rhs_val)) {
                             // Equation body matches — condition constrains target
                             auto cond_vs = eq.condition->to_valueset(target, prepared);
                             constraints = constraints.intersect(cond_vs);
                         }
-                    } catch (...) {}
+                    }
                 }
             }
         }
@@ -1217,7 +1215,8 @@ private:
                             if (!check_condition(gc, b)) return false;
                         results.push_back(val);
                     }
-                } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system resolve failure → no result from this candidate
+                } catch (const std::runtime_error&) {}
             } else if (c.type == CandidateType::NUMERIC) {
                 // Skip numeric for multi-variable equations when algebraic already
                 // found results — the system-probe fallback is expensive and redundant.
@@ -1475,19 +1474,20 @@ private:
                     return std::nullopt; // unknown variable — can't evaluate
                 }
             }
-            try {
-                double l = evaluate(*simplify(lhs));
-                double r = evaluate(*simplify(rhs));
-                switch (c.op) {
-                    case CondOp::GT: return l > r;
-                    case CondOp::GE: return l >= r;
-                    case CondOp::LT: return l < r;
-                    case CondOp::LE: return l <= r;
-                    case CondOp::EQ: return std::abs(l - r) < EPSILON_ZERO;
-                    case CondOp::NE: return std::abs(l - r) >= EPSILON_ZERO;
-                    case CondOp::COUNT_: assert(false && "invalid CondOp"); return false;
-                }
-            } catch (...) { return std::nullopt; }
+            auto l_opt = evaluate(*simplify(lhs));
+            auto r_opt = evaluate(*simplify(rhs));
+            if (!l_opt || !r_opt) return std::nullopt;
+            double l = *l_opt;
+            double r = *r_opt;
+            switch (c.op) {
+                case CondOp::GT: return l > r;
+                case CondOp::GE: return l >= r;
+                case CondOp::LT: return l < r;
+                case CondOp::LE: return l <= r;
+                case CondOp::EQ: return std::abs(l - r) < EPSILON_ZERO;
+                case CondOp::NE: return std::abs(l - r) >= EPSILON_ZERO;
+                case CondOp::COUNT_: assert(false && "invalid CondOp"); return false;
+            }
             return std::nullopt;
         };
 
@@ -1560,7 +1560,8 @@ private:
             try {
                 auto cond = parse_condition(eq_part);
                 if (cond) global_conditions.push_back(std::move(*cond));
-            } catch (...) { /* malformed, skip */ }
+            // NOLINTNEXTLINE(bugprone-empty-catch) — malformed condition at load time → skip (best-effort parse)
+            } catch (const std::runtime_error&) {}
             return;
         }
 
@@ -1626,7 +1627,8 @@ private:
         // Equation: parse RHS as expression
         Parser p(std::vector<Token>(mod_tok.begin() + 2, mod_tok.end()));
         std::optional<Condition> cond;
-        try { cond = parse_condition(cond_part); } catch (...) { /* malformed condition → ignore */ }
+        // NOLINTNEXTLINE(bugprone-empty-catch) — malformed condition at load time → treat as unconditional
+        try { cond = parse_condition(cond_part); } catch (const std::runtime_error&) {}
         equations.push_back({lhs, p.parse_expr(), std::move(cond), is_iff});
     }
 
@@ -1660,7 +1662,7 @@ private:
         if (path.find('.') == std::string::npos) path += ".fw";
         std::string abs_path;
         try { abs_path = std::filesystem::weakly_canonical(path).string(); }
-        catch (...) { abs_path = path; }
+        catch (const std::filesystem::filesystem_error&) { abs_path = path; }
 
         // Cache key: defined functions use name directly, files use abs path
         std::string cache_key = def_source
@@ -1686,7 +1688,8 @@ private:
                     sub->load_file(abs_path, section);
                     loaded = true;
                 }
-            } catch (...) {}
+            // NOLINTNEXTLINE(bugprone-empty-catch) — user override file missing/malformed → fall back to builtin definition
+            } catch (const std::runtime_error&) {}
             if (!loaded) {
                 sub->load_string(*def_source, "@def:" + file_part);
             }
@@ -1738,12 +1741,11 @@ private:
                     try {
                         double val = solve_recursive(v, parent_bindings, visited, depth + 1);
                         resolved = substitute(resolved, v, Expr::Num(val));
-                    } catch (...) { return; }
+                    } catch (const std::runtime_error&) { return; }
                 } else { return; }
             }
-            try {
-                sub[sub_var] = evaluate(*simplify(resolved));
-            } catch (...) { return; }
+            if (auto val = evaluate(*simplify(resolved))) sub[sub_var] = *val;
+            else return;
         };
 
         for (auto& [sv, expr] : call.bindings) {
@@ -1761,7 +1763,8 @@ private:
                 try {
                     double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1);
                     sub[call.query_var] = val;
-                } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — output_var unresolvable → leave unbound, sub-system may still solve
+                } catch (const std::runtime_error&) {}
             }
         }
 
@@ -2034,10 +2037,9 @@ private:
         }
 
         // Try full evaluation — if it works, return a clean number
-        try {
-            double val = evaluate(result);
-            if (!std::isnan(val) && !std::isinf(val)) return Expr::Num(val);
-        } catch (...) { return result; }
+        if (auto val = evaluate(result)) {
+            if (!std::isnan(*val) && !std::isinf(*val)) return Expr::Num(*val);
+        }
         return result;
     }
 
@@ -2054,7 +2056,7 @@ private:
             if (!cond) return true; // no condition = always valid
             std::map<std::string, double> numeric;
             for (auto& [k, v] : bindings) {
-                try { numeric[k] = evaluate(*v); } catch (...) {}
+                if (auto nv = evaluate(*v)) numeric[k] = *nv;
             }
             return check_condition(*cond, numeric);
         };
@@ -2079,7 +2081,7 @@ private:
                         if (eq.condition) {
                             std::map<std::string, double> cond_binds;
                             for (auto& [sv, pe] : parent_map) {
-                                try { cond_binds[sv] = evaluate(*pe); } catch (...) {}
+                                if (auto v = evaluate(*pe)) cond_binds[sv] = *v;
                             }
                             if (!sub_sys.check_condition(*eq.condition, cond_binds))
                                 continue;
@@ -2109,7 +2111,8 @@ private:
                             return true;
                         }
                     }
-                } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — unfold/load failure → fall back to direct sub-system derivation below
+                } catch (const std::runtime_error&) {}
 
                 // Fallback: derive into sub-system directly (original approach)
                 {
@@ -2134,7 +2137,7 @@ private:
                                 sub_binds[k] = Expr::Num(v);
                         auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
                         if (result) { bindings[target] = result; found = result; return true; }
-                    } catch (...) { return false; }
+                    } catch (const std::runtime_error&) { return false; }
                 }
             } else if (c.type == CandidateType::FORMULA_REV) {
                 // Unfold: substitute sub-system equation body into parent scope
@@ -2152,10 +2155,10 @@ private:
                         if (eq.condition) {
                             std::map<std::string, double> cond_binds;
                             for (auto& [sv, pe] : parent_map) {
-                                try { cond_binds[sv] = evaluate(*pe); } catch (...) {}
+                                if (auto v = evaluate(*pe)) cond_binds[sv] = *v;
                             }
                             for (auto& [k, v] : bindings) {
-                                try { cond_binds[k] = evaluate(*v); } catch (...) {}
+                                if (auto nv = evaluate(*v)) cond_binds[k] = *nv;
                             }
                             if (!sub_sys.check_condition(*eq.condition, cond_binds))
                                 continue;
@@ -2195,7 +2198,8 @@ private:
                             }
                         }
                     }
-                } catch (...) {}
+                // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system load or solve_for_all failure → skip reverse unfold
+                } catch (const std::runtime_error&) {}
             }
             return false;
         });
@@ -2279,7 +2283,7 @@ private:
                 try {
                     double val = solve_recursive(v, bindings, visited, depth + 1);
                     expr = substitute(expr, v, Expr::Num(val));
-                } catch (...) { has_formula_vars = true; } // treat as unresolvable
+                } catch (const std::runtime_error&) { has_formula_vars = true; }
             }
         }
         expr = simplify(expr);
@@ -2301,10 +2305,9 @@ private:
         if (has_target && !has_formula_vars) {
             // Equation-based: f(target) = combined_expr(target) = 0
             auto f = [&, expr](double x) -> double {
-                try {
-                    ExprPtr subst = substitute(expr, target, Expr::Num(x));
-                    return evaluate(*simplify(subst));
-                } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+                ExprPtr subst = substitute(expr, target, Expr::Num(x));
+                auto v = evaluate(*simplify(subst));
+                return v ? *v : std::numeric_limits<double>::quiet_NaN();
             };
 
             if (try_integer) {
@@ -2355,7 +2358,7 @@ private:
                         test_binds.erase(probe_var); // remove so it gets recomputed
                         double computed = resolve_memoized(probe_var, test_binds);
                         return computed - expected;
-                    } catch (...) { return std::numeric_limits<double>::quiet_NaN(); }
+                    } catch (const std::runtime_error&) { return std::numeric_limits<double>::quiet_NaN(); }
                 };
 
                 if (try_integer) {
@@ -2555,33 +2558,28 @@ private:
                     if (std::string(e.what()).find("depth") != std::string::npos) throw;
                     missing.insert(v);
                     return false;
-                } catch (...) {
-                    missing.insert(v);
-                    return false;
                 }
             }
         }
 
-        try {
-            trace.calc("evaluate: " + expr_to_string(resolved), depth + 2);
-            simplify_clear_assumptions();
-            auto simplified = simplify(resolved);
-            auto assumptions = simplify_get_assumptions();
-            for (auto& a : assumptions)
-                trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
-            double result = evaluate(simplified);
-            if (std::isnan(result) || std::isinf(result)) {
-                trace.step("result is " + std::string(std::isnan(result) ? "NaN" : "inf")
-                    + ", trying alternatives", depth + 1);
-                had_nan_inf = true;
-                return false;
-            }
-            trace.step("result: " + target + " = " + fmt_num(result), depth + 1);
-            bindings[target] = result;
-            return true;
-        } catch (...) {
+        trace.calc("evaluate: " + expr_to_string(resolved), depth + 2);
+        simplify_clear_assumptions();
+        auto simplified = simplify(resolved);
+        auto assumptions = simplify_get_assumptions();
+        for (auto& a : assumptions)
+            trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
+        auto result_opt = evaluate(simplified);
+        if (!result_opt) return false;
+        double result = *result_opt;
+        if (std::isnan(result) || std::isinf(result)) {
+            trace.step("result is " + std::string(std::isnan(result) ? "NaN" : "inf")
+                + ", trying alternatives", depth + 1);
+            had_nan_inf = true;
             return false;
         }
+        trace.step("result: " + target + " = " + fmt_num(result), depth + 1);
+        bindings[target] = result;
+        return true;
     }
 };
 
@@ -2706,15 +2704,23 @@ inline CLIQuery parse_cli_query(const std::string& input,
             double v = 0;
             size_t pos = 0;
             try { v = std::stod(val, &pos); }
-            catch (...) { pos = 0; }
+            catch (const std::invalid_argument&) { pos = 0; }
+            catch (const std::out_of_range&) { pos = 0; }
             if (pos != val.size()) {
                 // Try parsing as expression (e.g. "10*2^3", "sqrt(2)")
+                bool ok = false;
                 try {
                     ExprArena temp_arena;
                     ExprArena::Scope scope(temp_arena);
                     auto expr = Parser(Lexer(val).tokenize()).parse_expr();
-                    v = evaluate(*simplify(expr));
-                } catch (...) {
+                    if (auto val_opt = evaluate(*simplify(expr))) {
+                        v = *val_opt;
+                        ok = true;
+                    }
+                } catch (const std::runtime_error&) {
+                    // Parser failure (malformed expression) — handled below
+                }
+                if (!ok) {
                     if (allow_symbolic) {
                         q.symbolic[name] = val;
                         continue;

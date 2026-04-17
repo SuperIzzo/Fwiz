@@ -86,10 +86,13 @@ int main(int argc, char* argv[]) {
             else if (arg == "--derive")       derive_mode = true;
             else if (arg == "--fit") {
                 fit_mode = true;
-                // Optional depth argument: --fit 3
+                // Optional depth argument: --fit 3 (non-numeric next arg → treat --fit as flag-only)
                 if (i + 1 < argc) {
                     try { fit_depth = std::stoi(argv[i + 1]); i++; }
-                    catch (...) {} // not a number — leave for query string
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — not a number; leave for query string
+                    catch (const std::invalid_argument&) {}
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — value out of range; leave for query string
+                    catch (const std::out_of_range&) {}
                 }
             }
             else if (arg == "--no-numeric")   numeric_mode = false;
@@ -100,7 +103,8 @@ int main(int argc, char* argv[]) {
             else if (arg == "--precision") {
                 if (i + 1 < argc) {
                     try { sys_samples = std::stoi(argv[++i]); }
-                    catch (...) { std::cerr << "Error: --precision requires a number\n"; return 1; }
+                    catch (const std::invalid_argument&) { std::cerr << "Error: --precision requires a number\n"; return 1; }
+                    catch (const std::out_of_range&) { std::cerr << "Error: --precision value out of range\n"; return 1; }
                 } else { std::cerr << "Error: --precision requires an argument\n"; return 1; }
             }
             else if (arg == "--verify") {
@@ -220,7 +224,8 @@ int main(int argc, char* argv[]) {
                     try {
                         auto result = sys.fit(q.variable, query.bindings, query.symbolic);
                         out << q.variable << " = " << result.equation << '\n';
-                    } catch (...) {}
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — fit failure for one var → skip, continue with others
+                    } catch (const std::runtime_error&) {}
                 }
             }
             return 0;
@@ -250,7 +255,7 @@ int main(int argc, char* argv[]) {
                         double result = sys.resolve(var, query.bindings);
                         std::cout << alias << " = " << fmt_solve_result(result, true) << '\n';
                         solved[var] = result;
-                    } catch (...) {
+                    } catch (const std::runtime_error&) {
                         std::cout << alias << " = ?\n";
                     }
                 }
