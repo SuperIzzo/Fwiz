@@ -801,8 +801,7 @@ inline std::vector<FitResult> compose_level(
     for (auto& inner : inners) {
         if (!inner.expr) continue;
         auto eval_inner = [&inner, &var](double x) -> double {
-            auto v = evaluate(*substitute(inner.expr, var, Expr::Num(x)));
-            return v ? v.value() : std::numeric_limits<double>::quiet_NaN();
+            return evaluate(*substitute(inner.expr, var, Expr::Num(x))).value_or_nan();
         };
 
         std::vector<FitSample> transformed;
@@ -828,8 +827,7 @@ inline std::vector<FitResult> compose_level(
             compute_fit_stats(cr, samples, [&eval_inner, &of](double x) {
                 double ix = eval_inner(x);
                 if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
-                auto v = evaluate(*substitute(of.expr, "__inner__", Expr::Num(ix)));
-                return v ? v.value() : std::numeric_limits<double>::quiet_NaN();
+                return evaluate(*substitute(of.expr, "__inner__", Expr::Num(ix))).value_or_nan();
             });
             if (cr.r_squared > min_r2) new_fits.push_back(cr);
         }
