@@ -65,7 +65,7 @@ struct Condition {
             }
             auto val_opt = evaluate(*simplify(resolved));
             if (!val_opt) return ValueSet::all();
-            double val = *val_opt;
+            double val = val_opt.value();
 
             // Build ValueSet from operator (flip if var is on RHS)
             CondOp op = c.op;
@@ -688,7 +688,7 @@ x^(1/2) = sqrt(x)
             }
             auto computed_opt = evaluate(simplify(resolved));
             if (!computed_opt) return;
-            double computed = *computed_opt;
+            double computed = computed_opt.value();
             if (std::isnan(computed) || std::isinf(computed)) return;
             results.push_back({desc, computed, approx_equal(computed, known_value)});
         };
@@ -741,7 +741,7 @@ x^(1/2) = sqrt(x)
     // Format a derived ExprPtr as a string (evaluate if fully numeric)
     std::string format_derived(const ExprPtr& result) const {
         if (auto val = evaluate(result)) {
-            if (!std::isnan(*val) && !std::isinf(*val)) return fmt_num(*val);
+            if (!std::isnan(val.value()) && !std::isinf(val.value())) return fmt_num(val.value());
         } else {
             trace.calc("derive: symbolic result (cannot evaluate)");
         }
@@ -782,7 +782,7 @@ x^(1/2) = sqrt(x)
 
         std::map<std::string, double> numeric;
         for (auto& [k, v] : bindings) {
-            if (auto nv = evaluate(*v)) numeric[k] = *nv;
+            if (auto nv = evaluate(*v)) numeric[k] = nv.value();
         }
 
         enumerate_candidates(target, [&](const Candidate& c) {
@@ -860,7 +860,7 @@ x^(1/2) = sqrt(x)
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
                     auto lhs_num = evaluate(*it->second);
                     auto rhs_num = evaluate(*rhs_val);
-                    if (lhs_num && rhs_num && !approx_equal(*lhs_num, *rhs_num)) matches = false;
+                    if (lhs_num && rhs_num && !approx_equal(lhs_num.value(), rhs_num.value())) matches = false;
                 }
                 if (!matches) continue;
 
@@ -887,7 +887,7 @@ x^(1/2) = sqrt(x)
                     // Also check numeric equality
                     auto a = evaluate(*this_rhs);
                     auto b = evaluate(*other_rhs);
-                    if (a && b && approx_equal(*a, *b)) { exclusive = false; break; }
+                    if (a && b && approx_equal(a.value(), b.value())) { exclusive = false; break; }
                 }
 
                 std::string link = exclusive ? " iff " : " if ";
@@ -1065,8 +1065,8 @@ x^(1/2) = sqrt(x)
                         // Evaluate this equation's RHS with all known bindings
                         if (auto computed = evaluate(*simplify(
                                 substitute_bindings(eq.rhs, test)))) {
-                            if (!std::isfinite(*computed)) continue;
-                            if (!approx_equal(*computed, lhs_it->second)) {
+                            if (!std::isfinite(computed.value())) continue;
+                            if (!approx_equal(computed.value(), lhs_it->second)) {
                                 valid = false; break;
                             }
                         }
@@ -1100,7 +1100,7 @@ x^(1/2) = sqrt(x)
                 // Check if this equation's body is satisfied
                 if (auto it = prepared.find(eq.lhs_var); it != prepared.end()) {
                     if (auto rhs_val = evaluate(*substitute_bindings(eq.rhs, prepared, target))) {
-                        if (approx_equal(it->second, *rhs_val)) {
+                        if (approx_equal(it->second, rhs_val.value())) {
                             // Equation body matches — condition constrains target
                             auto cond_vs = eq.condition->to_valueset(target, prepared);
                             constraints = constraints.intersect(cond_vs);
@@ -1479,8 +1479,8 @@ private:
             auto l_opt = evaluate(*simplify(lhs));
             auto r_opt = evaluate(*simplify(rhs));
             if (!l_opt || !r_opt) return std::nullopt;
-            double l = *l_opt;
-            double r = *r_opt;
+            double l = l_opt.value();
+            double r = r_opt.value();
             switch (c.op) {
                 case CondOp::GT: return l > r;
                 case CondOp::GE: return l >= r;
@@ -1746,7 +1746,7 @@ private:
                     } catch (const std::runtime_error&) { return; }
                 } else { return; }
             }
-            if (auto val = evaluate(*simplify(resolved))) sub[sub_var] = *val;
+            if (auto val = evaluate(*simplify(resolved))) sub[sub_var] = val.value();
             else return;
         };
 
@@ -2040,7 +2040,7 @@ private:
 
         // Try full evaluation — if it works, return a clean number
         if (auto val = evaluate(result)) {
-            if (!std::isnan(*val) && !std::isinf(*val)) return Expr::Num(*val);
+            if (!std::isnan(val.value()) && !std::isinf(val.value())) return Expr::Num(val.value());
         }
         return result;
     }
@@ -2058,7 +2058,7 @@ private:
             if (!cond) return true; // no condition = always valid
             std::map<std::string, double> numeric;
             for (auto& [k, v] : bindings) {
-                if (auto nv = evaluate(*v)) numeric[k] = *nv;
+                if (auto nv = evaluate(*v)) numeric[k] = nv.value();
             }
             return check_condition(*cond, numeric);
         };
@@ -2083,7 +2083,7 @@ private:
                         if (eq.condition) {
                             std::map<std::string, double> cond_binds;
                             for (auto& [sv, pe] : parent_map) {
-                                if (auto v = evaluate(*pe)) cond_binds[sv] = *v;
+                                if (auto v = evaluate(*pe)) cond_binds[sv] = v.value();
                             }
                             if (!sub_sys.check_condition(*eq.condition, cond_binds))
                                 continue;
@@ -2157,10 +2157,10 @@ private:
                         if (eq.condition) {
                             std::map<std::string, double> cond_binds;
                             for (auto& [sv, pe] : parent_map) {
-                                if (auto v = evaluate(*pe)) cond_binds[sv] = *v;
+                                if (auto v = evaluate(*pe)) cond_binds[sv] = v.value();
                             }
                             for (auto& [k, v] : bindings) {
-                                if (auto nv = evaluate(*v)) cond_binds[k] = *nv;
+                                if (auto nv = evaluate(*v)) cond_binds[k] = nv.value();
                             }
                             if (!sub_sys.check_condition(*eq.condition, cond_binds))
                                 continue;
@@ -2309,7 +2309,7 @@ private:
             auto f = [&, expr](double x) -> double {
                 ExprPtr subst = substitute(expr, target, Expr::Num(x));
                 auto v = evaluate(*simplify(subst));
-                return v ? *v : std::numeric_limits<double>::quiet_NaN();
+                return v ? v.value() : std::numeric_limits<double>::quiet_NaN();
             };
 
             if (try_integer) {
@@ -2571,11 +2571,25 @@ private:
         for (auto& a : assumptions)
             trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
         auto result_opt = evaluate(simplified);
-        if (!result_opt) return false;
-        double result = *result_opt;
-        if (std::isnan(result) || std::isinf(result)) {
-            trace.step("result is " + std::string(std::isnan(result) ? "NaN" : "inf")
-                + ", trying alternatives", depth + 1);
+        if (!result_opt) {
+            // Empty can mean either (a) an unresolved variable / unknown function
+            // (structural failure — fall through silently) or (b) a NaN propagated
+            // from eval_div / sqrt(-1) / log(-1) (numeric failure — flag as
+            // "all equations produced invalid results" for the user).
+            // value_or_nan() returns NaN in both cases, so we distinguish by
+            // re-evaluating: structural failures leave behind free variables.
+            std::set<std::string> free_vars;
+            collect_vars(simplified, free_vars);
+            for (auto& [k, _] : bindings) free_vars.erase(k);
+            if (free_vars.empty()) {
+                trace.step("result is NaN, trying alternatives", depth + 1);
+                had_nan_inf = true;
+            }
+            return false;
+        }
+        double result = result_opt.value();
+        if (std::isinf(result)) {
+            trace.step("result is inf, trying alternatives", depth + 1);
             had_nan_inf = true;
             return false;
         }
@@ -2716,7 +2730,7 @@ inline CLIQuery parse_cli_query(const std::string& input,
                     ExprArena::Scope scope(temp_arena);
                     auto expr = Parser(Lexer(val).tokenize()).parse_expr();
                     if (auto val_opt = evaluate(*simplify(expr))) {
-                        v = *val_opt;
+                        v = val_opt.value();
                         ok = true;
                     }
                 // NOLINTNEXTLINE(bugprone-empty-catch) — parser failure (malformed expression) handled by the !ok branch below

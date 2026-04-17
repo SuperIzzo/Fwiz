@@ -28,6 +28,67 @@ static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_I
 static_assert(RATIONAL_POW_MAX_EXP > 0 && RATIONAL_POW_MAX_EXP < 64, "RATIONAL_POW_MAX_EXP must fit comfortably within int64 iteration");
 
 // ============================================================================
+//  Checked<T> — NaN-sentinel wrapper for floating-point evaluate() results.
+//  Empty (no-value) state is encoded as quiet_NaN.
+//  sizeof(Checked<double>) == sizeof(double) — no hidden bool discriminant.
+//
+//  Requires std::numeric_limits<T>::has_quiet_NaN.
+//
+//  Intentional API constraints:
+//    - No operator*         — prevents silent crash on empty dereference
+//    - No value_or(default) — prevents trivial bypass of check discipline
+//    - No operator==        — no call site needs it; avoids NaN-identity trap
+//    - operator bool is explicit — matches std::optional; `if (v)` works
+//    - value() asserts on empty — debug abort, not exception
+//    - value_or_nan() — named boundary escape for symbolic→numeric handoffs
+//      (e.g. into find_numeric_roots, which is a pure-double consumer with
+//      its own isfinite checks). Using this IS a deliberate statement.
+//
+//  NaN IS the empty sentinel: passing a NaN into the engaged constructor
+//  (e.g. from eval_div(1,0) propagating) yields an empty Checked. This is
+//  intentional — legitimate IEEE-754 NaN propagation must not assert-fail.
+// ============================================================================
+
+template<typename T>
+class Checked {
+    static_assert(std::numeric_limits<T>::has_quiet_NaN,
+        "Checked<T> requires a floating-point type with a quiet NaN sentinel");
+
+    T val_;
+
+public:
+    // Empty state — stores quiet_NaN.
+    Checked() noexcept
+        : val_(std::numeric_limits<T>::quiet_NaN()) {}
+
+    // Engaged construction — implicit from T intentional.
+    // If v is NaN (legitimate IEEE-754 propagation, e.g. from eval_div(1,0)),
+    // the result is empty per the "NaN IS the empty sentinel" contract. No
+    // assert — NaN-in is a total, deliberate part of the contract.
+    /*implicit*/ Checked(T v) noexcept : val_(v) {}
+
+    bool has_value()         const noexcept { return !std::isnan(val_); }
+    explicit operator bool() const noexcept { return has_value(); }
+
+    // Value access. Asserts in debug on empty; UB in release
+    // (assert-postcondition style, matching std::optional::operator*).
+    T value() const noexcept {
+        assert(has_value() && "Checked<T>::value() called on empty");
+        return val_;
+    }
+
+    // Boundary escape: hands off the raw T (quiet_NaN when empty) to code
+    // outside the Checked ecosystem — specifically the numerical root-finder
+    // library (find_numeric_roots, adaptive_scan, newton_solve, bisection_solve),
+    // which is a pure-double algorithm layer with its own isfinite discipline.
+    // Using this operator IS an explicit, reviewable statement of intent.
+    T value_or_nan() const noexcept { return val_; }
+};
+
+static_assert(sizeof(Checked<double>) == sizeof(double),
+    "Checked<double> must be the same size as double — no hidden bool padding");
+
+// ============================================================================
 //  Formatting (needed by ValueSet::to_string)
 // ============================================================================
 
@@ -927,42 +988,42 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 //  Evaluate
 // ============================================================================
 
-inline std::optional<double> evaluate(const Expr& e) {
+inline Checked<double> evaluate(const Expr& e) {
     switch (e.type) {
         case ExprType::NUM: return e.num;
         case ExprType::VAR: {
-            if (e.name == "undefined") return std::nullopt;
+            if (e.name == "undefined") return {};
             auto& consts = builtin_constants();
             auto it = consts.find(e.name);
             if (it != consts.end()) return it->second;
-            return std::nullopt;
+            return {};
         }
         case ExprType::UNARY_NEG: {
             auto v = evaluate(*e.child);
-            if (!v) return std::nullopt;
-            return -*v;
+            if (!v) return {};
+            return -v.value();
         }
         case ExprType::BINOP: {
             auto l = evaluate(*e.left);
-            if (!l) return std::nullopt;
+            if (!l) return {};
             auto r = evaluate(*e.right);
-            if (!r) return std::nullopt;
-            return binop_info(e.op).eval(*l, *r);
+            if (!r) return {};
+            return binop_info(e.op).eval(l.value(), r.value());
         }
         case ExprType::FUNC_CALL: {
-            if (e.args.size() != 1) return std::nullopt;
+            if (e.args.size() != 1) return {};
             auto fn = lookup_function(e.name);
-            if (!fn) return std::nullopt;
+            if (!fn) return {};
             auto v = evaluate(*e.args[0]);
-            if (!v) return std::nullopt;
-            return fn(*v);
+            if (!v) return {};
+            return fn(v.value());
         }
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
-    return std::nullopt;
+    return {};
 }
-inline std::optional<double> evaluate(ExprPtr e) {
-    if (!e) return std::nullopt;
+inline Checked<double> evaluate(ExprPtr e) {
+    if (!e) return {};
     return evaluate(*e);
 }
 
@@ -992,10 +1053,10 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
         bool all_num = true;
         for (auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
-        // evaluate() can still return nullopt here (e.g. multi-arg function
+        // evaluate() can still return empty here (e.g. multi-arg function
         // with args.size() != 1) — fall through to tree-as-is on failure.
         if (all_num) {
-            if (auto v = evaluate(e)) return Expr::Num(*v);
+            if (auto v = evaluate(e)) return Expr::Num(v.value());
         }
     }
     // Fall-through: not fully numeric-foldable — return the tree as-is
@@ -1445,7 +1506,7 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
                     for (auto& [var, val] : *bindings)
                         resolved = substitute(resolved, var, Expr::Num(val));
                     if (auto v = evaluate(*resolved)) {
-                        if (std::abs(*v) < EPSILON_ZERO) is_zero_term = true;
+                        if (std::abs(v.value()) < EPSILON_ZERO) is_zero_term = true;
                     }
                 }
                 if (is_zero_term) continue;  // skip: would be 0/0
