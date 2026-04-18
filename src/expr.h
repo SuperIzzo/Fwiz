@@ -1448,7 +1448,11 @@ inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
 }
 
 inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
-    if (is_zero(l)) return Expr::Num(0);
+    if (is_zero(l) && !is_zero(r)) return Expr::Num(0);
+    // a / 0 is undefined — keep structural DIV so later evaluate() yields
+    // empty Checked via the NaN sentinel. Do NOT fold to 0 or NaN here.
+    // This also covers 0/0: both operands preserved symbolically.
+    if (is_zero(r)) return Expr::BinOpExpr(BinOp::DIV, l, r);
     if (is_one(r)) return l;
     if (is_neg_one(r)) return Expr::Neg(l);
     // Rational division: (a/b) / (c/d) = (a*d) / (b*c)

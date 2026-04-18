@@ -6152,6 +6152,94 @@ void test_simplify_constant_reassociation() {
     ASSERT_EQ(ss("x / 4 * 2"), "0.5 * x", "(x/4)*2 → 0.5*x");
 }
 
+void test_simplify_div_zero_denom() {
+    SECTION("Simplifier: Zero Denominator Safety");
+
+    // --- API cases: simplify_div must NOT call make_rational with denom=0 ---
+    // Previously, the constant-reassociation branch in simplify_div (for
+    // (K1 * a) / K2 or (a * K1) / K2) called make_rational unconditionally
+    // when both numbers were integers, triggering an assertion when K2 == 0.
+
+    // Case 1: Num(3) / Num(0) — no MUL on LHS, but still must not crash.
+    {
+        auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(3), Expr::Num(0));
+        auto s = simplify(e);
+        ASSERT(s != nullptr, "simplify(3/0) does not crash");
+        auto ev = evaluate(*s);
+        ASSERT(!ev.has_value(), "simplify(3/0) evaluates to empty Checked");
+    }
+
+    // Case 2: MUL(Num(3), Var(x)) / Num(0) — Num-on-left MUL branch.
+    // This was the primary crash path: is_integer_value(l->left->num)
+    // && is_integer_value(r->num) passed, then make_rational(3, 0) aborted.
+    {
+        auto mul = Expr::BinOpExpr(BinOp::MUL, Expr::Num(3), Expr::Var("x"));
+        auto e = Expr::BinOpExpr(BinOp::DIV, mul, Expr::Num(0));
+        auto s = simplify(e);
+        ASSERT(s != nullptr, "simplify((3*x)/0) does not crash");
+        // Without bindings x cannot evaluate, but the expression must not
+        // fold to a non-DIV form that lies about division-by-zero.
+        // Substitute x=5 and check evaluate is empty (NaN sentinel).
+        auto subst = substitute(s, "x", Expr::Num(5));
+        auto ev = evaluate(*subst);
+        ASSERT(!ev.has_value(), "(3*x)/0 with x=5 stays empty Checked");
+    }
+
+    // Case 3: MUL(Var(x), Num(3)) / Num(0) — Num-on-right MUL branch.
+    {
+        auto mul = Expr::BinOpExpr(BinOp::MUL, Expr::Var("x"), Expr::Num(3));
+        auto e = Expr::BinOpExpr(BinOp::DIV, mul, Expr::Num(0));
+        auto s = simplify(e);
+        ASSERT(s != nullptr, "simplify((x*3)/0) does not crash");
+        auto subst = substitute(s, "x", Expr::Num(5));
+        auto ev = evaluate(*subst);
+        ASSERT(!ev.has_value(), "(x*3)/0 with x=5 stays empty Checked");
+    }
+
+    // Case 4: Num(0) / Num(0) — 0/0 preserves both operands, evaluate empty.
+    // Must not short-circuit to Num(0) via the is_zero(l) rule, because
+    // 0/0 is undefined (not zero).
+    {
+        auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(0), Expr::Num(0));
+        auto s = simplify(e);
+        ASSERT(s != nullptr, "simplify(0/0) does not crash");
+        auto ev = evaluate(*s);
+        ASSERT(!ev.has_value(), "simplify(0/0) evaluates to empty Checked");
+    }
+
+    // --- Shell cases: end-to-end, CLI must not abort with make_rational. ---
+    // We write stderr to a temp file and grep for the assertion string.
+
+    // Case 5: explicit /0 in --derive should error cleanly, not abort.
+    {
+        int rc = system("./bin/fwiz --derive '(y=?, x=x) y = (3 * x) / 0' "
+                        "> /dev/null 2>/tmp/fwiz_divzero_stderr.txt");
+        int exit_status = WEXITSTATUS(rc);
+        // Exit 134 = SIGABRT (assertion). Anything else is acceptable.
+        ASSERT(exit_status != 134, "(3*x)/0 derive: no SIGABRT");
+        std::ifstream f("/tmp/fwiz_divzero_stderr.txt");
+        std::string content((std::istreambuf_iterator<char>(f)),
+                            std::istreambuf_iterator<char>());
+        ASSERT(content.find("make_rational") == std::string::npos,
+               "(3*x)/0 derive: no make_rational assertion in stderr");
+    }
+
+    // Case 6: triangle with only angles — numeric probe previously hit the
+    // same assertion via simplify_div. Tolerate any clean exit (0 or 1),
+    // but never a crash.
+    {
+        int rc = system("timeout 15 ./bin/fwiz 'examples/triangle(A=?, B=45, C=45)' "
+                        "> /dev/null 2>/tmp/fwiz_triangle_stderr.txt");
+        int exit_status = WEXITSTATUS(rc);
+        ASSERT(exit_status != 134, "triangle(A=?, B=45, C=45): no SIGABRT");
+        std::ifstream f("/tmp/fwiz_triangle_stderr.txt");
+        std::string content((std::istreambuf_iterator<char>(f)),
+                            std::istreambuf_iterator<char>());
+        ASSERT(content.find("make_rational") == std::string::npos,
+               "triangle(A=?, B=45, C=45): no make_rational assertion in stderr");
+    }
+}
+
 void test_simplify_mul_to_pow() {
     SECTION("Simplifier: Multiplication to Power");
 
@@ -10114,6 +10202,7 @@ int main() {
     test_simplify_self_division();
     test_simplify_constant_collection();
     test_simplify_constant_reassociation();
+    test_simplify_div_zero_denom();
 
     // Derive mode
     test_derive_basic();
