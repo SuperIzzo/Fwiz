@@ -423,6 +423,87 @@ Dotted form interacts with #15 — a shared implementation of path-qualified
 variable names covers both CLI-query dotted access and in-file sub-scope
 references.
 
+## 22. Post-derive simplification and deduplication
+
+### Problem
+
+`fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)"` produces 294
+distinct output lines. Many are semantically equivalent, just rendered
+differently — e.g.:
+
+```
+A = 180 / pi * acos((b^2 + c^2 - 16) / (2 * b * c))
+A = acos((b^2 + c^2 - 16) / (2 * b * c)) / 0.01745329252
+```
+
+Same equation; one uses `180/pi`, the other uses its decimal reciprocal.
+
+Worse, individual expressions contain obvious dead arithmetic. Example
+from the same output:
+
+```
+A = ... (-b/2 - c/2 + (b+4)/2 - 2) ...
+```
+
+That parenthesized sub-expression equals `-c/2`. Verified: fwiz's simplifier
+correctly handles `-b/2 - c/2 + b/2 + 4/2 - 2 → -c/2` when the user writes
+the distributed form, but leaves `(b+4)/2` opaque.
+
+### Root cause
+
+The simplifier's like-term combiner can't peek inside `DIV(ADD(b, 4), 2)`
+to see the `b/2` hiding there. Distribution of division over addition
+(`(a + c) / k → a/k + c/k` when `k` is a numeric literal) is missing.
+
+Two independent improvements:
+
+### Improvement A — Division-over-addition distribution
+
+Add a simplification rule (either in `simplify_div` in `src/expr.h` or as
+a `.fw` rewrite rule in `BUILTIN_REWRITE_RULES`):
+
+```
+(a + b) / k = a/k + b/k   iff k is a numeric literal, k != 0
+(a - b) / k = a/k - b/k   iff k is a numeric literal, k != 0
+```
+
+Guard on `k` being a literal to avoid introducing `1/k` symbolic inverses
+where `k` is itself variable. The like-term combiner then collapses terms
+like `-b/2 + b/2` automatically as it already does.
+
+### Improvement B — Post-derive deduplication pass
+
+After `derive_all` produces its raw result set, run each expression
+through `simplify()` once more (re-simplification may catch patterns
+produced by the cross-equation-elimination strategy that weren't in
+canonical form when the candidate was emitted), then `expr_to_string`,
+then deduplicate the string set. With Improvement A in place, the
+deduplication becomes effective — many of the 294 current outputs collapse.
+
+### Why queue these together
+
+- (A) alone simplifies individual expressions but doesn't reduce the output
+  count — two differently-structured derivations may still produce equivalent
+  forms that only match after simplification.
+- (B) alone collapses exact-string duplicates but misses semantic duplicates
+  whose differing forms survive simplification.
+- Together: simplifier handles pattern (A), re-simplification in (B) maps
+  variants to canonical forms, deduplication collapses the set.
+
+### Cost estimate
+
+- Improvement A: ~10-20 lines (either a `.fw` rule or a few lines in
+  `simplify_div`), plus tests.
+- Improvement B: ~5 lines (re-simplify + string-set dedup in `derive_all`),
+  plus tests for the 294-line triangle case.
+
+### Interaction with planned features
+
+- `--validate` (#21) benefits — cross-checking is cheaper when the output
+  set is minimal and canonical.
+- `--fit` interactions: fit output already goes through simplification; no
+  change.
+
 ## Standard Library Ideas
 
 Beyond the collections in #8:
