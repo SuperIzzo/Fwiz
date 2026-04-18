@@ -3112,7 +3112,19 @@ inline CLIQuery parse_cli_query(const std::string& input,
         if (arg.empty()) continue;
 
         size_t eq = arg.find('=');
-        if (eq == std::string::npos) continue;
+        if (eq == std::string::npos) {
+            // Bare variable name (no '='). In symbolic modes (--derive, --fit)
+            // treat as a symbolic placeholder equivalent to "name=name" —
+            // matches the user's workaround of writing "b=b" to keep a variable
+            // free. In numeric modes, bare names have no useful interpretation.
+            if (allow_symbolic) {
+                q.symbolic[arg] = arg;
+                continue;
+            }
+            throw std::runtime_error(
+                "Bare variable name '" + arg + "' is only valid with --derive or --fit; "
+                "use '" + arg + "=<value>', '" + arg + "=?', or '" + arg + "=?alias' instead");
+        }
 
         std::string name = trim(arg.substr(0, eq));
         std::string val  = trim(arg.substr(eq + 1));
