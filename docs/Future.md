@@ -302,20 +302,20 @@ feeds directly into another without intermediate files or manual binding.
 ### Proposed syntax (nested form)
 
 ```bash
-fwiz 'sin(result=?, triangle(A=?angle, a=100, b=50, B=0.3))'
+fwiz 'sin(x=?, triangle(A=?x, a=100, b=50, B=0.3))'
 ```
 
-Reads as: "solve `triangle` for `A` (aliased `angle`) with the given sides
-and one angle known; pipe `angle` into `sin` as its `x` input; return
-`sin(x=angle, result=?)`."
+Reads as: "solve `triangle` for `A`, alias it as `x` so the outer `sin`
+call picks it up by name; solve `sin(x, result=?)`." Positional binding of
+the nested call's value into `sin`'s `x` argument also works:
 
-The inner call `triangle(A=?angle, a=100, b=50, B=0.3)` is parsed as an
-expression value binding `sin`'s `x` argument (via the section's positional
-arg metadata). The solver would:
+```bash
+fwiz 'sin(result=?, triangle(A=?, a=100, b=50, B=0.3))'
+```
 
-1. Resolve the inner call, exposing `angle` in the outer scope.
-2. Bind `sin.x = angle` (degrees or radians per fwiz convention).
-3. Resolve `sin(result=?)`.
+Here the nested call is evaluated to a single value (its queried `A`) and
+positionally binds `sin`'s first argument (which is `x` per the section
+header `[sin(x) -> result]`).
 
 ### Proposed syntax (dotted form)
 
@@ -323,14 +323,42 @@ Flat alternative with path-qualified variables, related to #15 Structs /
 Dot Access:
 
 ```bash
-fwiz 'sin(result=?, triangle.A=?angle, triangle.a=100, triangle.b=50, triangle.B=0.3)'
+fwiz 'sin(result=?, triangle.A=?sin.x, triangle.a=100, triangle.b=50, triangle.B=0.3)'
 ```
 
-Reads as: "in the `triangle` sub-scope, query `A` (alias `angle`) and bind
-the given values; expose `angle` to the outer `sin` call." Equivalent to
-the nested form but flatter; may be easier to read for CLI users who don't
-want deeply nested parentheses, and composes naturally with dot-access to
-query sub-scope intermediates (`triangle.area=?`).
+Reads as: "triangle's `A` (queried) is bound to `sin`'s `x`; triangle's
+sides and `B` are given; solve `sin.result`." The dotted alias on the RHS
+of `=?` routes the value into a named scope, not just exposing it by name.
+
+### Open design question — direction of binding
+
+Both forms below express "`triangle.A` and `sin.x` are the same variable":
+
+```
+triangle.A=?sin.x         # query A in triangle, feed into sin.x
+sin.x=?triangle.A         # query sin.x, receive it from triangle.A
+```
+
+The first reads as a "producer" point of view (triangle produces, sin
+consumes); the second as a "consumer" point of view (sin names its input
+by where it came from). Three possible resolutions:
+
+1. **Accept only the producer form** (`triangle.A=?sin.x`). Matches the
+   existing `A=?alias` convention where LHS names the variable being
+   solved and RHS names the output slot. Simpler grammar.
+2. **Accept both as equivalent** — the dotted paths and `=?` form a
+   bidirectional "these two identifiers refer to one variable" assertion;
+   direction is stylistic. More flexible, but invites confusion about
+   which side is "the source."
+3. **Assign different semantics** — producer form means "forward-evaluate
+   triangle then feed sin"; consumer form means "inverse-solve sin.x then
+   back-propagate to triangle.A as a constraint." This matches how one
+   might naturally express the two computational directions, but fwiz's
+   solver should already pick direction automatically — so this
+   distinction is likely spurious.
+
+Leaning toward (2) at design time: treat `=?` with dotted paths as a
+binding-equality assertion, solver chooses direction.
 
 ### Why
 
