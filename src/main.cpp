@@ -1,40 +1,12 @@
 #include "system.h"
 #include <iostream>
 
-// Render a solve result. Exact results (algebraic or Newton-verified) attempt
-// structural-fraction display (e.g. 1/3 → "1 / 3") for consistency with derive/
-// simplify output. Approximate results always fall through to decimal via
-// fmt_num, since a fraction under '~' would lie about exactness.
-//
-// Display rule: if the reconstructed fraction has a power-of-10 denominator
-// (10, 100, 1000, ...), render as decimal — "98.1" reads more naturally than
-// "981 / 10". All other denominators render as fractions, including large
-// numerators: "100 / 7" is more informative than "14.285714".
-//
-// This is a pragmatic stopgap. Fwiz's solver loses provenance (bindings are
-// map<string, double>), so we reconstruct rationality heuristically. Every
-// major CAS tracks exactness natively via the type system — see KNOWN_ISSUES
-// #6. Once that architectural fix lands, this rule becomes unnecessary: the
-// output follows the input's type directly.
-static bool is_power_of_10(int q) {
-    if (q < 10) return false;
-    while (q > 1) {
-        if (q % 10 != 0) return false;
-        q /= 10;
-    }
-    return true;
-}
-
-static std::string fmt_solve_result(double v, bool is_exact) {
-    constexpr int RECOGNIZE_MAX_DEN = 12;
-    if (is_exact) {
-        if (auto f = recognize_fraction(v, RECOGNIZE_MAX_DEN)) {
-            if (f->q == 1) return std::to_string(f->p);
-            if (!is_power_of_10(f->q))
-                return std::to_string(f->p) + " / " + std::to_string(f->q);
-        }
-    }
-    return fmt_num(v);
+// Render a solve result. In exact mode (the default), fmt_exact_double runs
+// fraction and constant recognition to match --derive output ('pi', '5 / 3',
+// etc.). In approximate mode (--approximate, or '~' numeric results), skip
+// recognition and emit fmt_num — users asking for a float get a float.
+static std::string fmt_solve_result(double v, bool try_exact) {
+    return try_exact ? fmt_exact_double(v) : fmt_num(v);
 }
 
 int main(int argc, char* argv[]) {
@@ -53,6 +25,8 @@ int main(int argc, char* argv[]) {
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
                   << "  --no-numeric   disable numeric solving (algebraic only)\n"
+                  << "  --approximate  collapse exact output (fractions, pi, etc.) to floating-point\n"
+                  << "  --exact        force exact output — default; useful to override --approximate\n"
                   << "  --fit [N]      fit a curve (depth N, default 2: compose templates)\n"
                   << "  --output FILE  write fitted equation to a .fw file\n"
                   << "  --precision N  set sample density (default 200)\n"
@@ -72,6 +46,7 @@ int main(int argc, char* argv[]) {
         bool fit_mode = false;
         int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
+        bool approximate_mode = false;
         int sys_samples = NUMERIC_DEFAULT_SAMPLES;
         std::string verify_arg;
         std::string output_file;
@@ -96,6 +71,8 @@ int main(int argc, char* argv[]) {
                 }
             }
             else if (arg == "--no-numeric")   numeric_mode = false;
+            else if (arg == "--approximate")  approximate_mode = true;
+            else if (arg == "--exact")        approximate_mode = false;
             else if (arg == "--output") {
                 if (i + 1 < argc) output_file = argv[++i];
                 else { std::cerr << "Error: --output requires a filename\n"; return 1; }
@@ -126,6 +103,7 @@ int main(int argc, char* argv[]) {
         FormulaSystem sys;
         sys.trace.level = level;
         sys.numeric_mode = numeric_mode;
+        sys.approximate_mode = approximate_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
 
@@ -234,6 +212,10 @@ int main(int argc, char* argv[]) {
         // --- Pass 1: solve queries ---
         std::map<std::string, double> solved = query.bindings;
 
+        // fmt_exact_double allocates Expr nodes into the arena (for constant
+        // recognition); require an active Scope around the output section.
+        ExprArena::Scope solve_fmt_scope(sys.arena);
+
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;
             if (explore_full) {
@@ -249,11 +231,11 @@ int main(int argc, char* argv[]) {
 
             for (auto& [var, alias] : vars) {
                 if (solved.count(var)) {
-                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), true) << '\n';
+                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode) << '\n';
                 } else {
                     try {
                         double result = sys.resolve(var, query.bindings);
-                        std::cout << alias << " = " << fmt_solve_result(result, true) << '\n';
+                        std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode) << '\n';
                         solved[var] = result;
                     } catch (const std::runtime_error&) {
                         std::cout << alias << " = ?\n";
@@ -274,7 +256,7 @@ int main(int argc, char* argv[]) {
                         double result = sys.resolve_one(q.variable, query.bindings);
                         bool exact = is_exact_result(q.variable);
                         std::cout << q.alias << (exact ? " = " : " ~ ")
-                                  << fmt_solve_result(result, exact) << '\n';
+                                  << fmt_solve_result(result, exact && !approximate_mode) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
@@ -282,7 +264,7 @@ int main(int argc, char* argv[]) {
                             bool exact = is_exact_result(q.variable);
                             for (auto r : result.discrete())
                                 std::cout << q.alias << (exact ? " = " : " ~ ")
-                                          << fmt_solve_result(r, exact) << '\n';
+                                          << fmt_solve_result(r, exact && !approximate_mode) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
                         } else {

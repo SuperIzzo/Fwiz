@@ -54,6 +54,7 @@ Current capabilities:
 - Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
 - Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
 - Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
+- Output formatting: `--approximate` (collapse to float) / `--exact` (default, human-readable fractions and constants); `fmt_exact_double` shared helper closes solve/derive asymmetry
 
 Planned (see Future.md):
 - **Symbolic differentiation** — sensitivity analysis
@@ -144,6 +145,8 @@ The core of the system. Contains:
 
 **substitute()** — Replaces a named variable with an expression throughout the tree.
 
+**substitute_builtin_constants()** — Tree walk; replaces Var nodes whose names appear in `builtin_constants()` (`pi`, `e`, `phi`) with their Num values. Used by the `--approximate` derive path before re-simplification. Other Var nodes pass through unchanged.
+
 **simplify()** — Algebraic simplification, run to fixpoint (max 20 iterations, checked via `expr_equal`). Rules:
 - Constant folding: `2 + 3 → 5`
 - Constant reassociation: `(x + 2) + 3 → x + 5` (handles ADD±ADD, ADD±SUB, SUB±ADD, SUB±SUB, MUL×MUL in one unified block)
@@ -199,9 +202,17 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 
 Conditions are checked before solving (if vars known) and after (to validate). Global conditions checked after every result. Formula call depth tracked via thread-local counter with configurable max (default 1000).
 
+`mutable bool approximate_mode` on `FormulaSystem` (mirrors `--approximate` CLI flag). `format_derived` reads it: exact path uses `fmt_exact_double` (fit.h) on collapsed-numeric branches; approximate path runs `substitute_builtin_constants` (expr.h) — a tree walk replacing `pi`/`e`/`phi` Var nodes with their Num values — then re-simplifies so adjacent numerics fold.
+
 Results validated — NaN and infinity rejected, causing fallback to next equation.
 
 Error messages are specific: "No equation found for 'x'", "no value for 'y'", "all equations produced invalid results".
+
+### fit.h
+
+Curve fitting: `sample_function`, `fit_base`, `fit_all`, template functions, `recognize_constant`. Also hosts two output helpers shared with the solve/derive pipeline:
+
+**`fmt_exact_double(double v)`** — the single formatter for exact numeric output. Wraps `expr_recognize_constants(Expr::Num(v))` and stringifies the result; falls back to `fmt_num` when nothing matches. Used from `fmt_solve_result` (main.cpp, solve path) and `format_derived` (system.h, derive exact path), closing the historical solve/derive asymmetry where `pi` rendered differently on each path.
 
 ### trace.h
 
@@ -216,7 +227,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-1700+ tests organized into functional tests, edge cases, and robustness groups:
+1851+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -277,7 +288,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 1700+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 1851+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

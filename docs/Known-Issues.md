@@ -43,13 +43,16 @@ $ fwiz --derive '(x=?, y=y) y = x^3'
 x = y^(1 / 3)
 ```
 
-## 6. Provenance loss in solve pipeline — OPEN
+## 6. Provenance loss in solve pipeline — PARTIALLY ADDRESSED
 
-`resolve()` returns `double`; `fmt_solve_result` in `main.cpp` reconstructs a fraction display heuristically. Current rule: `recognize_fraction(v, max_den=12)` — if the denominator is a power of 10 (`10`, `100`, ...), render as decimal (`98.1`, not `981 / 10`); otherwise render as fraction (`1/3`, `100/7`, `7/2`). This is idiosyncratic relative to mainstream CAS — Mathematica, SymPy, Maxima, Maple, and SageMath all use strict two-track exactness (the type carries the rational/float distinction natively). Fwiz can't do that today because `bindings` is `map<string, double>` — the solver collapses everything to float at line ~2565 of `system.h`.
+`resolve()` returns `double`; `fmt_solve_result` in `main.cpp` reconstructs exact-form display (fractions, `pi`, `sqrt(2)`, etc.) heuristically via `fmt_exact_double` → `recognize_fraction`/`recognize_constant`. The former `is_power_of_10` stopgap (which rendered `981 / 10` as `98.1`) has been removed in favour of the explicit `--approximate` flag — see [Solver.md §9](Solver.md#9-output-formatting). Default mode is now consistently exact (`weight = 1000.5` renders as `2001 / 2`); users who want the decimal form pass `--approximate`.
 
-The power-of-10 rule is a pragmatic stopgap. The long-term fix is to plumb `ExprPtr` through solve result types (parallel `map<string, ExprPtr>` track) so the original symbolic value reaches the formatter without reconstruction. Once that lands, `fmt_solve_result` can be deleted — the output follows the input's type directly, matching CAS convention.
+The underlying provenance issue — that the solver collapses symbolic values to `double` in `map<string, double>` — remains open, but its user-visible impact is now limited to two areas:
 
-Edge case to revisit: non-power-of-10 denominators from decimal-typed inputs (e.g. `weight = 1000.5` now renders as `2001 / 2`). Under provenance tracking, this would render as `1000.5` because the input type was `double`.
+1. **`--steps` / `--calc` traces**: render intermediate values via `fmt_num` only; a fractional intermediate like `981 / 10` shows up in the trace as `98.1` even though the final answer comes out as the fraction.
+2. **Recognisability limits**: values that don't match the fraction (max denominator 12) or constant table fall through to decimal output even in exact mode. Expanding the recognition table is an orthogonal improvement.
+
+The long-term structural fix is to plumb `ExprPtr` through solve result types (parallel `map<string, ExprPtr>` track) so the original symbolic value reaches the formatter without reconstruction. That would make trace output match final output, remove the table-limit issue, and mirror how mainstream CAS (Mathematica, SymPy, Maxima) track exactness via the type system.
 
 ## 5. Constant recognition in derive output — RESOLVED
 

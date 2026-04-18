@@ -148,6 +148,7 @@ public:
     mutable Trace trace;
     mutable int max_formula_depth = 1000;
     mutable bool numeric_mode = false;
+    mutable bool approximate_mode = false;  // --approximate: collapse symbolic to floats in derive output
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
     int fit_depth = FIT_DEFAULT_DEPTH;
     static inline thread_local int formula_depth_ = 0;
@@ -738,11 +739,35 @@ x^(1/2) = sqrt(x)
         return bindings;
     }
 
-    // Format a derived ExprPtr as a string (evaluate if fully numeric)
+    // Format a derived ExprPtr as a string.
+    // Default (exact) mode:
+    //   - If the tree collapses to a pure number, emit fmt_exact_double —
+    //     this yields 'pi' for M_PI, '5 / 3' for 1.666..., etc., matching
+    //     the solve path and closing the former solve/derive asymmetry.
+    //   - Otherwise, walk the tree with expr_recognize_constants for clean
+    //     symbolic output (log(2), sqrt(3), 1/3 fractions in coefficients).
+    // --approximate mode:
+    //   - Substitute builtin constants (pi, e, phi) with their numeric values,
+    //     then re-simplify so adjacent Nums fold (2 * pi * r → 6.2831 * r).
+    //   - If the result is fully numeric, emit fmt_num; otherwise stringify
+    //     the folded tree without triggering recognition (we don't want
+    //     freshly-folded 3.14159 to get re-promoted back to 'pi').
     std::string format_derived(const ExprPtr& result) const {
+        // format_derived allocates via the arena (fmt_exact_double builds
+        // Num nodes; substitute_builtin_constants rewrites the tree). Open
+        // our own scope so callers don't have to — scopes nest, and the
+        // cost of an extra stack frame is negligible for a one-shot format.
+        ExprArena::Scope scope(arena);
+        if (approximate_mode) {
+            auto subbed = simplify(substitute_builtin_constants(result));
+            if (auto val = evaluate(subbed)) {
+                if (!std::isinf(val.value())) return fmt_num(val.value());
+            }
+            return expr_to_string(subbed);
+        }
         if (auto val = evaluate(result)) {
             // Checked<double> already excludes NaN; only guard against infinity.
-            if (!std::isinf(val.value())) return fmt_num(val.value());
+            if (!std::isinf(val.value())) return fmt_exact_double(val.value());
         } else {
             trace.calc("derive: symbolic result (cannot evaluate)");
         }

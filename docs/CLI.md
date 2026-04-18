@@ -39,12 +39,16 @@ Input values can be expressions: `width=2^3, height=sqrt(9)`.
 | `--verify all` | Verify all values against all equations |
 | `--verify A,B` | Verify specific variables |
 | `--derive` | Output symbolic equation instead of numeric result |
+| `--approximate` | Collapse exact output (fractions, `pi`, etc.) to floating-point |
+| `--exact` | Force exact output — default; useful to override `--approximate` |
 | `--fit [N]` | Fit a curve (composition depth N, default 5) |
 | `--output FILE` | Write fitted equation to `.fw` file |
 | `--no-numeric` | Disable numeric solving (algebraic only) |
 | `--precision N` | Numeric scan density (default 200) |
 
-See [Solver.md](Solver.md) for `--derive`, `--verify`, `--explore`, `--no-numeric`, `--precision`.
+Default mode optimises for **human readability** — you'll see exact fractions like `200 / 9` and recognised constants like `pi`. `--approximate` collapses everything to floating-point, including symbolic constants in `--derive` output. Use it when piping into another tool (gnuplot, a script, an LLM) that expects pre-computed numeric coefficients rather than expressions to evaluate. `--exact` is a no-op against the default, useful only to override an earlier `--approximate` in a command chain — if both appear, last wins.
+
+See [Solver.md](Solver.md) for `--derive`, `--verify`, `--explore`, `--no-numeric`, `--precision`, `--approximate`/`--exact`.
 See [Fitting.md](Fitting.md) for `--fit` and `--output`.
 
 ---
@@ -77,6 +81,22 @@ celsius = 200 / 9
 ```
 
 The trace goes to stderr, so it doesn't interfere with piping the result.
+
+Use `--approximate` to collapse exact output to floating-point — fractions, `pi`, `sqrt(2)`, etc. all become decimals. This is the mode for feeding fwiz output to another tool:
+
+```bash
+$ fwiz convert(celsius=?, fahrenheit=72)
+celsius = 200 / 9
+
+$ fwiz --approximate convert(celsius=?, fahrenheit=72)
+celsius = 22.22222222
+
+$ fwiz --derive physics(circumference=?, radius=r)
+circumference = 2 * pi * r
+
+$ fwiz --approximate --derive physics(circumference=?, radius=r)
+circumference = 6.283185307 * r
+```
 
 ---
 

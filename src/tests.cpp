@@ -7968,12 +7968,13 @@ void test_sections() {
         ASSERT(WEXITSTATUS(rc) == 0, "section binary: rect area = 15");
     }
 
-    // Binary: cascading section
+    // Binary: cascading section (uses integer gravity to avoid fraction-vs-decimal
+    // rendering concerns — this test is about section cascading, not formatting)
     {
         write_fw("/tmp/tsec2.fw",
-            "g = 9.81\n[phys]\nforce = mass * g\n[phys.gravity]\nweight = force\n");
+            "g = 10\n[phys]\nforce = mass * g\n[phys.gravity]\nweight = force\n");
         int rc = system("./bin/fwiz '/tmp/tsec2.phys.gravity(weight=?, mass=10)' 2>/dev/null "
-                        "| grep -q 'weight = 98.1'");
+                        "| grep -q 'weight = 100'");
         ASSERT(WEXITSTATUS(rc) == 0, "section binary: cascading phys.gravity");
     }
 
@@ -9597,12 +9598,14 @@ void test_rational_solve_output() {
         ASSERT(WEXITSTATUS(rc) == 0, "solve output: 2/7 displays as '2 / 7'");
     }
 
-    // Solve output: -3/4 preserved with sign in numerator
+    // Solve output: -3/4 renders with parenthesized negative numerator,
+    // matching derive/simplify output (general expression printing wraps
+    // negative Num nodes when they appear inside larger expressions).
     {
         write_fw("/tmp/trso_m3_4.fw", "a = b + (-3)/4\n");
         int rc = system("./bin/fwiz '/tmp/trso_m3_4(a=?, b=0)' 2>/dev/null "
-                        "| grep -q 'a = -3 / 4'");
-        ASSERT(WEXITSTATUS(rc) == 0, "solve output: -3/4 displays as '-3 / 4'");
+                        "| grep -q 'a = (-3) / 4'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: -3/4 displays as '(-3) / 4'");
     }
 
     // Integer-valued fraction: 10/5 must render as '2', not '2 / 1'
@@ -9645,30 +9648,37 @@ void test_rational_solve_output() {
         ASSERT(WEXITSTATUS(rc) == 0, "solve output: --explore path renders fraction");
     }
 
-    // Power-of-10 denominators render as decimal (principled rule — supersedes
-    // the earlier ad-hoc |p| <= 12 cap). 98.1 = 981/10 exactly in IEEE 754;
-    // recognize_fraction matches (981, 10), but denom=10 is a power of 10 so
-    // we emit the decimal "98.1" instead of the jarring "981 / 10".
+    // Power-of-10 denominators render as fractions in default (exact) mode.
+    // The former is_power_of_10 heuristic has been replaced by the explicit
+    // --approximate flag: exact mode means "exact", so 98.1 = 981/10 renders
+    // as the truthful "981 / 10". Users who want the decimal form pass
+    // --approximate.
     {
         write_fw("/tmp/trso_981.fw", "a = b + 98.1\n");
         int rc = system("./bin/fwiz '/tmp/trso_981(a=?, b=0)' 2>/dev/null "
-                        "| grep -q 'a = 98.1'");
-        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 98.1 stays decimal (no 981/10)");
+                        "| grep -q 'a = 981 / 10'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 98.1 renders as '981 / 10' in exact mode");
         int rc2 = system("./bin/fwiz '/tmp/trso_981(a=?, b=0)' 2>/dev/null "
-                         "| grep -q '981 / 10'");
-        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 98.1 does not emit '981 / 10'");
+                         "| grep -qE 'a = 98.1$'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 98.1 does NOT render as decimal in exact mode");
+        // But --approximate restores decimal form
+        int rc3 = system("./bin/fwiz --approximate '/tmp/trso_981(a=?, b=0)' 2>/dev/null "
+                         "| grep -q 'a = 98.1'");
+        ASSERT(WEXITSTATUS(rc3) == 0, "--approximate: 98.1 renders as decimal");
     }
 
-    // Power-of-10 rule applies to 1/10 directly: 0.1 stays decimal, never
-    // renders as "1 / 10". Regression guard for the is_power_of_10 filter.
+    // 1/10 renders as fraction in exact mode; --approximate restores decimal.
     {
         write_fw("/tmp/trso_01.fw", "a = b + 0.1\n");
         int rc = system("./bin/fwiz '/tmp/trso_01(a=?, b=0)' 2>/dev/null "
-                        "| grep -q 'a = 0.1'");
-        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.1 stays decimal (not '1 / 10')");
+                        "| grep -q 'a = 1 / 10'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.1 renders as '1 / 10' in exact mode");
         int rc2 = system("./bin/fwiz '/tmp/trso_01(a=?, b=0)' 2>/dev/null "
-                         "| grep -q '1 / 10'");
-        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 0.1 does not emit '1 / 10'");
+                         "| grep -qE 'a = 0.1$'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 0.1 does NOT render as decimal in exact mode");
+        int rc3 = system("./bin/fwiz --approximate '/tmp/trso_01(a=?, b=0)' 2>/dev/null "
+                         "| grep -q 'a = 0.1'");
+        ASSERT(WEXITSTATUS(rc3) == 0, "--approximate: 0.1 renders as decimal");
     }
 
     // Non-power-of-10 denominators render as fraction regardless of numerator
@@ -9757,6 +9767,170 @@ void test_constant_recognition_derive() {
         auto result = sys.derive("x", {}, {{"y", "y"}});
         ASSERT(result.find("log(3)") != std::string::npos,
                "3^x derives x with log(3) not 1.0986... (got: " + result + ")");
+    }
+}
+
+void test_approximate_solve() {
+    SECTION("--approximate flag on solve output");
+
+    // (1) Default mode: y = 1/3 renders as fraction
+    {
+        write_fw("/tmp/tapx_1.fw", "y = x + 1/3\n");
+        int rc = system("./bin/fwiz '/tmp/tapx_1(y=?, x=0)' 2>/dev/null "
+                        "| grep -q 'y = 1 / 3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "default: 1/3 displays as '1 / 3'");
+    }
+
+    // (2) --approximate: y = 1/3 collapses to decimal
+    {
+        write_fw("/tmp/tapx_2.fw", "y = x + 1/3\n");
+        int rc = system("./bin/fwiz --approximate '/tmp/tapx_2(y=?, x=0)' 2>/dev/null "
+                        "| grep -q 'y = 0.333'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--approximate: 1/3 displays as decimal");
+        int rc2 = system("./bin/fwiz --approximate '/tmp/tapx_2(y=?, x=0)' 2>/dev/null "
+                         "| grep -q ' / '");
+        ASSERT(WEXITSTATUS(rc2) != 0, "--approximate: no fraction in output");
+    }
+
+    // (3) Default mode: y = pi solve renders symbolic pi
+    {
+        write_fw("/tmp/tapx_3.fw", "y = pi\n");
+        int rc = system("./bin/fwiz '/tmp/tapx_3(y=?)' 2>/dev/null "
+                        "| grep -q 'y = pi'");
+        ASSERT(WEXITSTATUS(rc) == 0, "default: y = pi displays as 'pi'");
+    }
+
+    // (4) --approximate: y = pi collapses to 3.141592...
+    {
+        write_fw("/tmp/tapx_4.fw", "y = pi\n");
+        int rc = system("./bin/fwiz --approximate '/tmp/tapx_4(y=?)' 2>/dev/null "
+                        "| grep -q 'y = 3.141592'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--approximate: y = pi displays as decimal");
+        int rc2 = system("./bin/fwiz --approximate '/tmp/tapx_4(y=?)' 2>/dev/null "
+                         "| grep -q 'y = pi'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "--approximate: no symbolic 'pi' in output");
+    }
+
+    // (5) Approximate-only numeric result: --approximate must not introduce a fraction
+    {
+        write_fw("/tmp/tapx_5.fw", "y = x + sin(x)\n");
+        int rc = system("./bin/fwiz --approximate '/tmp/tapx_5(x=?, y=1)' 2>/dev/null "
+                        "| grep -q 'x ~ '");
+        ASSERT(WEXITSTATUS(rc) == 0, "--approximate: numeric-only result uses '~'");
+        int rc2 = system("./bin/fwiz --approximate '/tmp/tapx_5(x=?, y=1)' 2>/dev/null "
+                         "| grep -q ' / '");
+        ASSERT(WEXITSTATUS(rc2) != 0, "--approximate: no fraction in approximate result");
+    }
+
+    // (6) Last-wins semantics: --exact --approximate → approximate wins; --approximate --exact → exact wins
+    {
+        write_fw("/tmp/tapx_6.fw", "y = x + 1/3\n");
+        int rc_a = system("./bin/fwiz --exact --approximate '/tmp/tapx_6(y=?, x=0)' 2>/dev/null "
+                          "| grep -q 'y = 0.333'");
+        ASSERT(WEXITSTATUS(rc_a) == 0, "--exact --approximate: approximate wins (last flag)");
+        int rc_b = system("./bin/fwiz --approximate --exact '/tmp/tapx_6(y=?, x=0)' 2>/dev/null "
+                          "| grep -q 'y = 1 / 3'");
+        ASSERT(WEXITSTATUS(rc_b) == 0, "--approximate --exact: exact wins (last flag)");
+    }
+}
+
+void test_approximate_derive_partial_eval() {
+    SECTION("--approximate on --derive: partial numeric evaluation");
+
+    // (1) c = 2 * pi * r, derive c with approximate → contains "6.28318", contains "r", no "pi"
+    {
+        FormulaSystem sys;
+        sys.approximate_mode = true;
+        sys.load_string("c = 2 * pi * r");
+        auto result = sys.derive("c", {}, {{"r", "r"}});
+        ASSERT(result.find("6.28318") != std::string::npos,
+               "approximate derive: 2*pi*r contains 6.28318 (got: " + result + ")");
+        ASSERT(result.find("r") != std::string::npos,
+               "approximate derive: 2*pi*r contains 'r' (got: " + result + ")");
+        ASSERT(result.find("pi") == std::string::npos,
+               "approximate derive: 2*pi*r has no 'pi' (got: " + result + ")");
+    }
+
+    // (2) y = 0.5 * x, derive y with approximate → "0.5 * x" not "(1/2) * x"
+    {
+        FormulaSystem sys;
+        sys.approximate_mode = true;
+        sys.load_string("y = 0.5 * x");
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT(result.find("0.5") != std::string::npos,
+               "approximate derive: 0.5*x contains '0.5' (got: " + result + ")");
+        ASSERT(result.find(" / ") == std::string::npos,
+               "approximate derive: 0.5*x has no fraction (got: " + result + ")");
+    }
+
+    // (3) y = pi, derive y with approximate → "3.14159" not "pi"
+    {
+        FormulaSystem sys;
+        sys.approximate_mode = true;
+        sys.load_string("y = pi");
+        auto result = sys.derive("y", {}, {});
+        ASSERT(result.find("3.14159") != std::string::npos,
+               "approximate derive: y=pi contains 3.14159 (got: " + result + ")");
+        ASSERT(result.find("pi") == std::string::npos,
+               "approximate derive: y=pi has no 'pi' (got: " + result + ")");
+    }
+}
+
+void test_solve_derive_output_parity() {
+    SECTION("Solve/derive output parity in default (exact) mode");
+
+    // For expressions that fully collapse to a numeric constant in derive,
+    // the shell-level solve output and the API-level derive output must agree.
+
+    // (1) y = pi — both should produce "pi"
+    {
+        write_fw("/tmp/tsdp_pi.fw", "y = pi\n");
+        FormulaSystem sys;
+        sys.load_string("y = pi");
+        auto derived = sys.derive("y", {}, {});
+
+        // Invoke solve via CLI to capture its formatter path.
+        int rc = system("./bin/fwiz '/tmp/tsdp_pi(y=?)' > /tmp/tsdp_pi.out 2>/dev/null");
+        (void) rc;
+        std::ifstream f("/tmp/tsdp_pi.out");
+        std::string line; std::getline(f, line);
+        // Solve prints "y = pi"; derive API returns just "pi"
+        ASSERT(line == "y = " + derived,
+               "solve/derive parity (pi): solve='" + line + "' derive='" + derived + "'");
+    }
+
+    // (2) y = sqrt(2) — both should render sqrt(2) symbolically.
+    // sqrt is a builtin function, so the API-level sys needs load_builtins()
+    // to resolve the sqrt call; cases (1) and (3) don't, because 'pi' is
+    // auto-recognized as a builtin constant and '5/3' uses only arithmetic.
+    {
+        write_fw("/tmp/tsdp_sqrt2.fw", "y = sqrt(2)\n");
+        FormulaSystem sys;
+        sys.load_builtins();
+        sys.load_string("y = sqrt(2)");
+        auto derived = sys.derive("y", {}, {});
+
+        int rc = system("./bin/fwiz '/tmp/tsdp_sqrt2(y=?)' > /tmp/tsdp_sqrt2.out 2>/dev/null");
+        (void) rc;
+        std::ifstream f("/tmp/tsdp_sqrt2.out");
+        std::string line; std::getline(f, line);
+        ASSERT(line == "y = " + derived,
+               "solve/derive parity (sqrt(2)): solve='" + line + "' derive='" + derived + "'");
+    }
+
+    // (3) y = 5/3 — both should render as "5 / 3"
+    {
+        write_fw("/tmp/tsdp_rat.fw", "y = 5/3\n");
+        FormulaSystem sys;
+        sys.load_string("y = 5/3");
+        auto derived = sys.derive("y", {}, {});
+
+        int rc = system("./bin/fwiz '/tmp/tsdp_rat(y=?)' > /tmp/tsdp_rat.out 2>/dev/null");
+        (void) rc;
+        std::ifstream f("/tmp/tsdp_rat.out");
+        std::string line; std::getline(f, line);
+        ASSERT(line == "y = " + derived,
+               "solve/derive parity (5/3): solve='" + line + "' derive='" + derived + "'");
     }
 }
 
@@ -10003,6 +10177,9 @@ int main() {
     test_rational_solve_output();
     test_evaluate_symbolic();
     test_constant_recognition_derive();
+    test_approximate_solve();
+    test_approximate_derive_partial_eval();
+    test_solve_derive_output_parity();
     test_checked_type();
 
     std::cout << "\n===============\n";

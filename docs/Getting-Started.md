@@ -81,13 +81,13 @@ force = mass * acceleration
 Now you can ask for any one of the three given the other two:
 
 ```bash
-$ fwiz physics(force=?, mass=10, acceleration=9.81)
-force = 98.1
+$ fwiz physics(force=?, mass=10, acceleration=3)
+force = 30
 
-$ fwiz physics(acceleration=?, force=98.1, mass=10)
-acceleration = 9.81
+$ fwiz physics(acceleration=?, force=30, mass=10)
+acceleration = 3
 
-$ fwiz physics(mass=?, force=98.1, acceleration=9.81)
+$ fwiz physics(mass=?, force=30, acceleration=3)
 mass = 10
 ```
 
@@ -97,22 +97,22 @@ Give a variable a fallback value by putting a bare number on the right:
 
 ```
 # physics.fw
-g = 9.81
+g = 10                  # handy round number; Earth gravity is 9.81 m/s²
 force = mass * g
 ```
 
-Now `g` defaults to Earth gravity:
+Now `g` defaults to that value:
 
 ```bash
 $ fwiz physics(force=?, mass=10)
-force = 98.1
+force = 100
 ```
 
 If you *do* provide `g`, yours wins:
 
 ```bash
-$ fwiz physics(force=?, mass=5, g=1.62)    # moon
-force = 8.1
+$ fwiz physics(force=?, mass=5, g=3)
+force = 15
 ```
 
 ## 5. Combining Equations
