@@ -984,6 +984,37 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
     return e;
 }
 
+// Walk an expression tree and replace every Var node whose name is a builtin
+// symbolic constant (pi, e, phi) with its numeric Num value. Used by the
+// --approximate derive path to collapse `2 * pi * r` → `6.28... * r` after
+// simplification. User-defined defaults (e.g. g = 9.81) are NOT touched —
+// the source of truth is builtin_constants() which holds only the true
+// mathematical constants.
+inline ExprPtr substitute_builtin_constants(ExprPtr e) {
+    if (!e) return e;
+    switch (e->type) {
+        case ExprType::NUM:       return e;
+        case ExprType::VAR: {
+            auto& consts = builtin_constants();
+            auto it = consts.find(e->name);
+            if (it != consts.end()) return Expr::Num(it->second);
+            return e;
+        }
+        case ExprType::UNARY_NEG: return Expr::Neg(substitute_builtin_constants(e->child));
+        case ExprType::BINOP:     return Expr::BinOpExpr(e->op,
+                                      substitute_builtin_constants(e->left),
+                                      substitute_builtin_constants(e->right));
+        case ExprType::FUNC_CALL: {
+            std::vector<ExprPtr> a;
+            a.reserve(e->args.size());
+            for (auto& arg : e->args) a.push_back(substitute_builtin_constants(arg));
+            return Expr::Call(e->name, a);
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    return e;
+}
+
 // ============================================================================
 //  Evaluate
 // ============================================================================

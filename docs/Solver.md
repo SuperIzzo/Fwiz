@@ -15,6 +15,7 @@ For the CLI reference, see [CLI.md](CLI.md).
 6. [Symbolic Derivation](#6-symbolic-derivation)
 7. [Verification](#7-verification)
 8. [Exploration](#8-exploration)
+9. [Output Formatting](#9-output-formatting)
 
 ---
 
@@ -182,3 +183,68 @@ C = 90
 ```
 
 `--explore-full` additionally prints every variable the file exposes, even those you didn't query. Good for understanding what a file exposes.
+
+---
+
+## 9. Output Formatting
+
+fwiz separates **what** was computed from **how** it's displayed along two axes.
+
+### 9.1 Exactness
+
+`=` — the result is algebraically derived, or numerically found and forward-verified to machine precision.
+`~` — the result is numerically approximate: the solver found a root but forward-substituting it doesn't reproduce the inputs within `EPSILON_REL`. Examples: `x + sin(x) = 1`, high-degree irrationals, recursive-formula inverses with accumulated rounding.
+
+Exactness is a property of the *computation*, not of the output format. `~` results always render as decimals regardless of formatting flags — a fraction under `~` would lie about exactness.
+
+### 9.2 Readable vs computation-ready — `--approximate`
+
+Default mode optimises for **reading**. Exact results prefer symbolic forms:
+
+- rational numbers render as structural fractions (`5 / 3`, `200 / 9`)
+- recognised constants render symbolically (`pi`, `e`, `phi`, `sqrt(2)`, `sqrt(3)`, `sqrt(5)`, `log(2)`, `log(3)`, `log(10)`)
+- composite forms combine both (`2 * pi`, `1 / 3 * sqrt(5)`)
+
+```bash
+$ fwiz convert(celsius=?, fahrenheit=72)
+celsius = 200 / 9
+
+$ fwiz '(y=?) y = pi / 4'
+y = 1 / 4 * pi
+
+$ fwiz --derive physics(circumference=?, radius=r)
+circumference = 2 * pi * r
+```
+
+`--approximate` flips to **computation-ready** output: everything collapses to floating-point, including symbolic constants in `--derive`. Use it when piping into another tool that doesn't want to evaluate expressions itself:
+
+```bash
+$ fwiz --approximate convert(celsius=?, fahrenheit=72)
+celsius = 22.22222222
+
+$ fwiz --approximate '(y=?) y = pi / 4'
+y = 0.7853981634
+
+$ fwiz --approximate --derive physics(circumference=?, radius=r)
+circumference = 6.283185307 * r
+```
+
+With `--approximate` on `--derive`, free symbols are preserved — only builtin constants (`pi`, `e`, `phi`) substitute; user variables stay symbolic. After substitution, the simplifier folds adjacent numeric nodes so coefficients come out pre-computed.
+
+`--exact` forces the default and is useful only to override an earlier `--approximate` in a command chain. If both appear, last wins.
+
+### 9.3 Unaffected paths
+
+`--steps` and `--calc` traces render decimals directly — they're diagnostic, not the answer. `--verify` and `--fit` output stay as they were: verify prints numeric equalities, fit prints the closed-form equation it discovered.
+
+### 9.4 Constant recognition table
+
+Numeric values attempt to match these symbolic forms before falling through to `fmt_num`:
+
+- **Builtin constants**: `pi`, `e`, `phi`
+- **Common irrational roots**: `sqrt(2)`, `sqrt(3)`, `sqrt(5)`
+- **Common logarithms**: `log(2)`, `log(3)`, `log(10)`
+- **Rational multiples**: `(p/q) * <constant>` for `|q| <= 12`
+- **Powers**: `<constant>^2`, `1/<constant>`
+
+A value that matches none of these renders as a decimal via `fmt_num` (10 significant figures).

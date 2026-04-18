@@ -15,7 +15,7 @@ $ fwiz convert(celsius=?, fahrenheit=72)
 celsius = 200 / 9
 ```
 
-You write the formula once. fwiz works out the algebra.
+You write the formula once. fwiz works out the algebra. The default output prefers exact forms — rational fractions, `pi`, `sqrt(2)` — for humans reading results. Add `--approximate` to collapse everything to a float (`celsius = 22.22222222`) when piping to another tool.
 
 > **Status: active development.** fwiz is usable and tested (1800+ tests), but the language and CLI are not yet stable — syntax, flags, and output format may change between commits. Pin a specific commit if you depend on it, and expect occasional breakage on `main`.
 
@@ -154,6 +154,7 @@ fwiz supports several modes beyond plain solving:
 | `--explore` | Solve everything that's solvable; show `?` for the rest |
 | `--fit` | Find a closed-form approximation of a function |
 | `--steps` / `--calc` | Show algebraic or numeric reasoning |
+| `--approximate` | Collapse exact output (fractions, `pi`) to floating-point |
 
 Example:
 
