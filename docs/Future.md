@@ -291,8 +291,35 @@ exclusion of alias identifiers from `collect_vars` at one call site
 
 Promoting formula calls to a dedicated `ExprType::FORMULA_CALL` node would
 remove the alias-exclusion hack and give matrix types / symbolic
-differentiation a clean foundation. Estimated ~200 lines across parser,
+differentiation a clean foundation. Estimated ~180 lines across parser,
 evaluator, simplifier, and solver strategies.
+
+**Status: DEFERRED** (decision recorded in
+`.fwiz-workflow/design-formula-call-typed.md`). Full design + critic +
+visionary review ran. Conclusion: #22 (post-derive simplification & dedup,
+the only scheduled dependent) doesn't actually need typed nodes — it's a
+`.fw` rewrite rule plus ~5 LOC of dedup against the existing side channel.
+Matrix types (#14) and symbolic differentiation (#6) are the natural
+drivers, but neither is scheduled. Shipping this refactor now is
+speculative infrastructure.
+
+**Reopen trigger — revisit when ANY of these lands in a planning cycle:**
+
+1. **Matrix-valued formula returns (#14)** where a call's result needs shape
+   metadata not expressible in scalar bindings.
+2. **Symbolic differentiation (#6)** reaches `diff(formula_call(...), var)`
+   and the chain rule needs stable node identity.
+3. A **second** unrelated feature wants an `aux_index` payload (LaTeX hints
+   #9, big-number handles #17, units annotation #7). At that point **build
+   the generic `aux_index` primitive first** (a `uint32_t` in `Expr`'s
+   existing padding after `op`, zero new bytes), then migrate FORMULA_CALL
+   as the first consumer. Correct sequencing: general primitive precedes
+   specialization.
+
+**Do NOT use `reinterpret_cast` overlay** when eventually revisited. The
+`aux_index` handle in existing padding is strictly more general and
+debugger/ASan-friendly — it's the correct primitive for all four listed
+use cases, not a specialization.
 
 ## 21. Composable / Nested Formula Calls
 
