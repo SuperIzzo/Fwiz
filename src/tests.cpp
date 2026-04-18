@@ -695,6 +695,39 @@ void test_cli_parser() {
         try { parse_cli_query("f(x=3)"); } catch (...) { threw = true; }
         ASSERT(threw, "no query var throws");
     }
+    // Bare variable names — allowed in symbolic modes (--derive/--fit),
+    // rejected elsewhere with a clear error. Matches user's "b=b" workaround.
+    {
+        // Symbolic mode: bare names become symbolic placeholders.
+        auto q = parse_cli_query("triangle(A=?, a=4, B=20, c, b)",
+                                 /*allow_no_queries*/false,
+                                 /*allow_symbolic*/true);
+        ASSERT_EQ(q.queries[0].variable, "A", "bare-name query: solve_for = A");
+        ASSERT_NUM(q.bindings.at("a"), 4, "bare-name query: a=4 binding");
+        ASSERT_NUM(q.bindings.at("B"), 20, "bare-name query: B=20 binding");
+        ASSERT(q.symbolic.count("c") == 1, "bare-name query: c is symbolic");
+        ASSERT(q.symbolic.count("b") == 1, "bare-name query: b is symbolic");
+        ASSERT_EQ(q.symbolic.at("c"), "c", "bare-name: c=c symbolic mapping");
+        ASSERT_EQ(q.symbolic.at("b"), "b", "bare-name: b=b symbolic mapping");
+    }
+    {
+        // Numeric mode: bare names throw with a clear error.
+        bool threw = false;
+        std::string msg;
+        try {
+            parse_cli_query("triangle(A=?, a=4, b)",
+                            /*allow_no_queries*/false,
+                            /*allow_symbolic*/false);
+        } catch (const std::runtime_error& e) {
+            threw = true;
+            msg = e.what();
+        }
+        ASSERT(threw, "bare-name in numeric mode throws");
+        ASSERT(msg.find("Bare variable name") != std::string::npos,
+               "bare-name error message mentions 'Bare variable name'");
+        ASSERT(msg.find("--derive") != std::string::npos,
+               "bare-name error suggests --derive");
+    }
 }
 
 // ---- File parsing edge cases ----
