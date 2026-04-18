@@ -294,6 +294,65 @@ remove the alias-exclusion hack and give matrix types / symbolic
 differentiation a clean foundation. Estimated ~200 lines across parser,
 evaluator, simplifier, and solver strategies.
 
+## 21. Composable / Nested Formula Calls
+
+Compose formula calls as expression-tree values, so the output of one call
+feeds directly into another without intermediate files or manual binding.
+
+### Proposed syntax (nested form)
+
+```bash
+fwiz 'sin(result=?, triangle(A=?angle, a=100, b=50, B=0.3))'
+```
+
+Reads as: "solve `triangle` for `A` (aliased `angle`) with the given sides
+and one angle known; pipe `angle` into `sin` as its `x` input; return
+`sin(x=angle, result=?)`."
+
+The inner call `triangle(A=?angle, a=100, b=50, B=0.3)` is parsed as an
+expression value binding `sin`'s `x` argument (via the section's positional
+arg metadata). The solver would:
+
+1. Resolve the inner call, exposing `angle` in the outer scope.
+2. Bind `sin.x = angle` (degrees or radians per fwiz convention).
+3. Resolve `sin(result=?)`.
+
+### Proposed syntax (dotted form)
+
+Flat alternative with path-qualified variables, related to #15 Structs /
+Dot Access:
+
+```bash
+fwiz 'sin(result=?, triangle.A=?angle, triangle.a=100, triangle.b=50, triangle.B=0.3)'
+```
+
+Reads as: "in the `triangle` sub-scope, query `A` (alias `angle`) and bind
+the given values; expose `angle` to the outer `sin` call." Equivalent to
+the nested form but flatter; may be easier to read for CLI users who don't
+want deeply nested parentheses, and composes naturally with dot-access to
+query sub-scope intermediates (`triangle.area=?`).
+
+### Why
+
+- Encourages composition over monolithic `.fw` files.
+- LLM-friendly: a single CLI line expresses a multi-step reasoning chain
+  without creating transient files.
+- Matches how users think about chained problems: "solve the triangle, then
+  take the sine of that angle."
+
+### Implementation notes
+
+Both forms touch `parse_cli_query` (the arg-list parser at `system.h:~3037`)
+and the expression evaluator. Benefits directly from #20 (formula calls as
+typed expression nodes) — the nested form becomes a tree of `FORMULA_CALL`
+nodes, trivially evaluated left-to-right. Without #20, the synthetic-alias
+side-channel approach can still work but gets messier with multiple aliases
+in one CLI line.
+
+Dotted form interacts with #15 — a shared implementation of path-qualified
+variable names covers both CLI-query dotted access and in-file sub-scope
+references.
+
 ## Standard Library Ideas
 
 Beyond the collections in #8:
