@@ -275,6 +275,25 @@ Arbitrary-precision integers and rationals for exact computation beyond double r
 
 Implemented as `Checked<T>` (not `checked_value`). NaN-sentinel optional replacing `std::optional<double>` for `evaluate()` return type. `sizeof(Checked<double>) == sizeof(double)`; returns in one FP register; `operator*` deliberately absent — unwrap via `.value()`. Full three-file migration: `expr.h` (type definition + evaluate signature), `system.h` (~20 call sites + hot probe lambda), `fit.h` (2 probe lambdas). Commits 7095f95 (type + evaluate), 620c3d9 (hot probe), 6608bdd (fit.h). 1829/1829 tests passing post-migration.
 
+## 20. Formula calls as typed expression nodes
+
+Currently, formula calls are extracted at parse time into a side-channel
+(`FormulaSystem::formula_calls`) and replaced with synthetic `Var`
+placeholders in the expression tree. This works but requires ad-hoc
+exclusion of alias identifiers from `collect_vars` at one call site
+(`system.h:~1423`), and makes it harder to support:
+
+- Matrix-valued formula calls (need typed expression boundaries)
+- Symbolic differentiation through formula calls (chain rule applications
+  want the call as a stable tree node, not a synthetic identifier)
+- Batch-mode amortization of formula-call derivation
+- LaTeX export of formula calls
+
+Promoting formula calls to a dedicated `ExprType::FORMULA_CALL` node would
+remove the alias-exclusion hack and give matrix types / symbolic
+differentiation a clean foundation. Estimated ~200 lines across parser,
+evaluator, simplifier, and solver strategies.
+
 ## Standard Library Ideas
 
 Beyond the collections in #8:

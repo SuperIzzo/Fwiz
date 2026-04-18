@@ -9655,21 +9655,23 @@ void test_dead_end_and_first_candidate() {
             "triangle SSA: A = 3.26... in stdout (got '" + content + "')");
     }
 
-    // 6. Triangle shell: under-constrained fails (not timeout).
-    //    Current behavior: budget sentinel fires at exit 2 with
-    //    "TIMEOUT: solve budget exceeded" after ~60s. This matches the
-    //    design principle: "treat TIMEOUT as critical failure".
-    //
-    //    Follow-up: a cleaner fast-fail (exit 1, "insufficient constraints")
-    //    is planned for the next cycle once the `?alias` AST placeholder
-    //    handling is refined (the current collect_vars over-counts query
-    //    aliases as free vars, blocking Fix B's gate generalization).
+    // 6. Triangle shell: under-constrained fast-fails.
+    //    Only 'a' known. The EXPR candidates for A all require multiple
+    //    additional unknowns (B, C, b, c); the NUMERIC candidate's residual
+    //    (after target/bindings/builtins/alias erasures) is non-empty, so
+    //    the multi-variable NUMERIC skip fires. solve_all exhausts with
+    //    no results → clean "Cannot solve" exit 1 in <1s.
     {
-        int rc = system("timeout 90 ./bin/fwiz 'examples/triangle(A=?, a=4)' "
+        int rc = system("timeout 5 ./bin/fwiz 'examples/triangle(A=?, a=4)' "
                         "> /tmp/tde_tri_uc.out 2>/tmp/tde_tri_uc.err");
         int exit_code = WEXITSTATUS(rc);
-        ASSERT(exit_code == 1 || exit_code == 2,
-            "under-constrained fails (exit 1 or 2, got " + std::to_string(exit_code) + ")");
+        ASSERT(exit_code == 1,
+            "under-constrained fast-fails with exit 1, got " + std::to_string(exit_code));
+        std::ifstream err("/tmp/tde_tri_uc.err");
+        std::string err_content((std::istreambuf_iterator<char>(err)),
+                                 std::istreambuf_iterator<char>());
+        ASSERT(err_content.find("Cannot solve") != std::string::npos,
+            "under-constrained stderr contains 'Cannot solve' (got '" + err_content + "')");
     }
 
     // 7. Factorial preserved (scoping reset at formula-call entry).

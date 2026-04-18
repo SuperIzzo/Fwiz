@@ -1415,17 +1415,24 @@ private:
                 // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system resolve failure → no result from this candidate
                 } catch (const std::runtime_error&) {}
             } else if (c.type == CandidateType::NUMERIC) {
-                // Skip numeric for multi-variable equations when algebraic already
-                // found results — the system-probe fallback is expensive and redundant.
-                // Keep numeric for single-variable equations (fast 1D scan, finds extra roots).
-                if (!results.empty()) {
-                    std::set<std::string> cvars;
-                    collect_vars(c.expr, cvars);
-                    cvars.erase(target);
-                    for (auto& [k, v] : bindings) cvars.erase(k);
-                    for (auto& [k, v] : builtin_constants()) cvars.erase(k);
-                    if (!cvars.empty()) return false; // multi-variable → skip
-                }
+                // Skip multi-variable NUMERIC candidates unconditionally. The
+                // system-probe fallback is expensive and rarely helpful when
+                // multiple variables are still free; single-variable NUMERIC
+                // (cvars empty after erasures) still fires for transcendental
+                // fallback (e.g., x + sin(x) = 1) and as the under-constrained
+                // fast-fail gate (no single-variable candidate → no results →
+                // clean "Cannot solve" exit 1 instead of a budget breach).
+                std::set<std::string> cvars;
+                collect_vars(c.expr, cvars);
+                cvars.erase(target);
+                for (auto& [k, v] : bindings) cvars.erase(k);
+                for (auto& [k, v] : builtin_constants()) cvars.erase(k);
+                // Query-alias placeholders (e.g. `?prev` in factorial(result=?prev, ...))
+                // are synthesized as Var nodes by the parser but aren't true free
+                // variables — they're bound by formula-call resolution. Exclude
+                // them from the residual.
+                for (auto& fc : formula_calls) cvars.erase(fc.output_var);
+                if (!cvars.empty()) return false; // multi-variable → skip
                 // Cap numeric contributions to prevent explosion with trig equations
                 constexpr size_t MAX_NUMERIC_RESULTS = 50;
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
