@@ -55,7 +55,7 @@ The user drives phase transitions. After each phase completes, present findings 
 When the user gives you a task or brief:
 
 1. Spawn 1-2 **researcher** agents in parallel:
-   - Internal: "Read FUTURE.md, KNOWN_ISSUES.md, DEVELOPER.md and find everything relevant to: {task}"
+   - Internal: "Read docs/Future.md, docs/Known-Issues.md, docs/Developer.md and find everything relevant to: {task}"
    - External: "Search online for mathematical strategies, how SymPy/Maxima/Mathematica handle: {task}. Check WolframAlpha, tutorial.math.lamar.edu, Wikipedia math references."
 2. Merge findings into `.fwiz-workflow/research-brief.md` with sections:
    - Problem Statement, Mathematical Background, How Other Tools Solve It, Relevance to Fwiz, Recommended Strategy, Open Questions, Sources
@@ -73,7 +73,7 @@ Spawn three agents **sequentially** (each reads previous output):
 2. **critic** — Give it: the planner's proposal text + description of the .fw rewrite rule system + list of existing infrastructure (flatten, decompose_linear, enumerate_candidates, rewrite system, pattern matcher, BUILTIN_REWRITE_RULES). Do NOT give it the research brief.
    - Append output under "## Simplicity Critique"
 
-3. **visionary** — Give it: both planner + critic outputs + the project vision (universal math inference engine, LLM integration, batch processing, tiny core, no feature creep) + FUTURE.md contents. Do NOT give it C++ implementation details.
+3. **visionary** — Give it: both planner + critic outputs + the project vision (universal math inference engine, LLM integration, batch processing, tiny core, no feature creep) + docs/Future.md contents. Do NOT give it C++ implementation details.
    - Append output under "## Visionary Assessment"
 
 4. **You synthesize** all three into "## Final Design":
@@ -102,7 +102,7 @@ Spawn three agents **sequentially**:
 
 1. **planner** — Give it: the Final Design. "Break this into ordered milestones. Each milestone must be a shippable increment — it passes all tests, doesn't leave the codebase in a broken state, and delivers a concrete capability. Earlier milestones should lay groundwork that later milestones build on. Write each milestone with: goal, what it enables, files affected, and acceptance criteria."
 
-2. **visionary** — Give it: the milestone list + project vision + FUTURE.md. "Evaluate this milestone ordering. Should any milestones merge because one abstraction solves both? Should any be killed (feature creep disguised as groundwork)? Does the ordering build toward the vision or just toward the feature? Could reordering enable a more general solution earlier?"
+2. **visionary** — Give it: the milestone list + project vision + docs/Future.md. "Evaluate this milestone ordering. Should any milestones merge because one abstraction solves both? Should any be killed (feature creep disguised as groundwork)? Does the ordering build toward the vision or just toward the feature? Could reordering enable a more general solution earlier?"
 
 3. **critic** — Give it: milestones + visionary feedback. "Can any milestones be eliminated entirely? Is each milestone the smallest useful increment? Are there milestones that add specializations — could they be replaced by a more general milestone?"
 
@@ -161,11 +161,11 @@ If analyze is already complete when reaching REVIEW (e.g., multi-milestone cycle
 
 **Contract-changing migrations**: If the cycle involved a contract change (return type, exception shape, signature flip), the critic-accepted/rejected items list MUST be echoed into `review-notes*.md` so the reviewer validates design fidelity (did the implementation honor each accept/reject decision?) — not just code quality. This closes the loop between design and review.
 
-1. **reviewer** — "Read `.fwiz-workflow/implementation-log.md` and run `git diff` to see changes. Check against DEVELOPER.md conventions. Minimalism audit: did line count go up? Can it go down? Dead code? New specializations that could be generalized? Sufficient tests?"
+1. **reviewer** — "Read `.fwiz-workflow/implementation-log.md` and run `git diff` to see changes. Check against docs/Developer.md conventions. Minimalism audit: did line count go up? Can it go down? Dead code? New specializations that could be generalized? Sufficient tests?"
 
 2. **perf-auditor** — "These files were changed: {list}. Check data locality (arena patterns preserved?), run `objdump -d -C bin/fwiz` on critical functions if hot paths changed, check sizeof(Expr) hasn't grown. Report pass/warn/fail."
 
-3. **doc-updater** — "Read `.fwiz-workflow/implementation-log.md` and `.fwiz-workflow/review-notes.md`. Update DEVELOPER.md, FUTURE.md, KNOWN_ISSUES.md, CLAUDE.md as needed. Be concise."
+3. **doc-updater** — "Read `.fwiz-workflow/implementation-log.md` and `.fwiz-workflow/review-notes.md`. Update docs/Developer.md, docs/Future.md, docs/Known-Issues.md, CLAUDE.md as needed. Be concise."
 
 Merge all three into `.fwiz-workflow/review-notes.md`. Present to user.
 
@@ -173,7 +173,7 @@ Merge all three into `.fwiz-workflow/review-notes.md`. Present to user.
 
 When review is complete or user asks "what's next":
 
-1. Read `.fwiz-workflow/review-notes.md`, FUTURE.md, KNOWN_ISSUES.md
+1. Read `.fwiz-workflow/review-notes.md`, docs/Future.md, docs/Known-Issues.md
 2. Write `.fwiz-workflow/next-priorities.md`:
    - Completed: what was just done
    - Issues from review: anything needing fixing

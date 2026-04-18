@@ -376,7 +376,7 @@ public:
 
     // Load lines with section selection (shared by load_file and load_string)
     // Built-in rewrite rules — loaded automatically, replace hardcoded C++ simplifier rules.
-    // These are the .fw equivalents; the file examples/builtin.fw mirrors this for documentation.
+    // These are the .fw equivalents; the file stdlib/builtin.fw mirrors this for documentation.
     static constexpr const char* BUILTIN_REWRITE_RULES = R"(
 sin(-x) = -sin(x)
 cos(-x) = cos(x)

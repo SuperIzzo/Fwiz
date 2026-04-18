@@ -381,7 +381,7 @@ struct Expr {
 };
 // Guard against accidental field additions — sizeof(Expr) is a cache/arena
 // concern. If this fails, reconsider whether the new field belongs in Expr
-// or in an auxiliary map keyed by ExprPtr. See DEVELOPER.md for the rationale.
+// or in an auxiliary map keyed by ExprPtr. See docs/Developer.md for the rationale.
 static_assert(sizeof(Expr) == 96, "sizeof(Expr) changed — update static_assert and audit cache/arena impact");
 
 // Arena allocation — contiguous chunks for cache locality
@@ -1034,7 +1034,7 @@ inline Checked<double> evaluate(ExprPtr e) {
 //
 // Rationals are the only non-real case handled today. Complex numbers,
 // matrices, and other number types will extend the dispatch here without
-// touching call sites. See FUTURE.md "Extending evaluate_symbolic".
+// touching call sites. See docs/Future.md "Extending evaluate_symbolic".
 //
 // Numeric callers (Newton/bisection grid scan, condition comparisons,
 // verify-mode equality, CLI arg parsing, solve_recursive bindings commit)

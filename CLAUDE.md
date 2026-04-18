@@ -60,7 +60,7 @@ result = 1 iff x > 0                           # bidirectional (enables inverse 
 y = x, if x > 0                                # optional comma
 ```
 - `if` — one-directional: condition checked forward only
-- `iff` — bidirectional: condition can be inverted (used in stdlib.fw piecewise functions)
+- `iff` — bidirectional: condition can be inverted (used in `stdlib/stdlib.fw` piecewise functions)
 - Operators: `>`, `>=`, `<`, `<=`, `=`, `==`, `!=`. Compound: `&&`, `||`.
 
 ### Global conditions
@@ -137,7 +137,7 @@ Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive 
 
 ## Key conventions
 
-Read `DEVELOPER.md` for the full guide. Summary:
+Read `docs/Developer.md` for the full guide. Summary:
 
 - **References for non-null** (`const Expr&`), **pointers for nullable** (`ExprPtr`)
 - **`constexpr`** for predicates and constants, **`inline`** for everything else
