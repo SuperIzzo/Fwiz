@@ -55,7 +55,7 @@ Current capabilities:
 - Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
 - Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
 
-Planned (see FUTURE.md):
+Planned (see Future.md):
 - **Symbolic differentiation** — sensitivity analysis
 - **Batch/table mode** — parameter sweeps with range syntax
 - **Units** — dimensional analysis and automatic conversion
@@ -368,54 +368,6 @@ Classic Mac line endings (bare `\r` without `\n`) are not supported as line sepa
 
 ### Power associativity
 `x^2^3` is parsed as `(x^2)` with `^3` left unparsed, rather than the mathematical convention of right-associative power.
-
----
-
-## Contributing
-
-### Adding a new built-in function
-
-**Via C++ API (runtime):**
-```cpp
-sys.register_function("sigmoid", my_sigmoid_fn,
-    "[sigmoid(x) -> result] @extern sigmoid; x = -log(1/result - 1)");
-```
-
-**Via embedded definition (compile-time):**
-1. Add to `builtin_function_defs()` in `system.h` — one-liner `.fw` definition
-2. Add to `builtin_functions()` in `expr.h` if C++ function pointer needed for `@extern`
-3. Add tests in `tests.cpp`
-
-**Via .fw file (no C++ changes):**
-Create a `.fw` file with a section header — it will be auto-loaded when called:
-```fw
-[myfunc(x) -> result] = x^2 + 1
-```
-
-### Adding a solver strategy
-
-1. Add the strategy to `enumerate_candidates()` in `system.h`
-2. Handle the new `CandidateType` in the callbacks of `solve_recursive`, `derive_recursive`, and `verify_variable`
-3. Add strategy-specific tests
-
-### Extending the simplifier
-
-**Preferred: add a `.fw` rewrite rule** — no C++ changes needed:
-```fw
-# In BUILTIN_REWRITE_RULES or a .fw file:
-sin(-x) = -sin(x)
-log(x^n) = n * log(x) iff x != 0
-x/x = 1 iff x != 0
-x/x = undefined iff x = 0
-```
-
-Rewrite rules support conditions (`iff`), domain exhaustiveness checking (`undefined` branches), and context-aware evaluation (conditions checked against known bindings).
-
-**Structural simplification stays in C++:**
-- **Additive**: `flatten_additive()` decomposes ADD/SUB chains into `(coefficient, base)` term lists. `group_additive()` combines like terms.
-- **Multiplicative**: `flatten_multiplicative()` decomposes MUL chains into `(base, exponent)` factor lists. `group_multiplicative()` combines matching bases.
-- **Division**: Cross-term cancellation via flatten-both-sides, context-aware zero-check.
-- **Constant folding**: `2 + 3 → 5`, `0 * x → 0`, etc.
 
 ---
 

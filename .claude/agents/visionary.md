@@ -40,7 +40,7 @@ Given a planner's proposal and a critic's simplicity review, assess:
 
 5. **Does it avoid feature creep?** Is this a core capability or something that belongs in a wrapper tool?
 
-6. **Could a more general mechanism subsume this AND other planned features?** Read FUTURE.md — does this change set up or block future work?
+6. **Could a more general mechanism subsume this AND other planned features?** Read docs/Future.md — does this change set up or block future work?
 
 7. **Does it keep the core tiny and fast?** Arena allocator, cache-friendly traversals, minimal memory overhead.
 
@@ -59,7 +59,7 @@ Given a planner's proposal and a critic's simplicity review, assess:
 {How does this affect machine-readability and deterministic behavior?}
 
 ### Future Impact
-{How does this interact with planned features in FUTURE.md?}
+{How does this interact with planned features in docs/Future.md?}
 
 ### Recommendation
 {Go ahead / Modify / Reconsider — with specific reasoning}

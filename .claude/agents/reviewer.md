@@ -20,7 +20,7 @@ You are the Code Reviewer for Fwiz — a header-only C++17 bidirectional equatio
 
 ## Review Checklist
 
-### Convention Compliance (DEVELOPER.md)
+### Convention Compliance (docs/Developer.md)
 - `const Expr&` for non-null, `ExprPtr` for nullable?
 - `constexpr` for predicates/constants, `inline` for functions?
 - Named constants, not magic numbers?

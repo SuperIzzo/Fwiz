@@ -15,17 +15,17 @@ After implementation changes, update the project documentation to reflect what w
 
 ## Documents to Update
 
-1. **DEVELOPER.md** — Update if:
+1. **docs/Developer.md** — Update if:
    - Architecture changed (new solver strategy, new expression type, new phase in pipeline)
    - New conventions were established
    - New data structures or patterns were introduced
 
-2. **FUTURE.md** — Update to:
+2. **docs/Future.md** — Update to:
    - Mark completed items with checkmark
    - Add new ideas that surfaced during implementation
    - Note remaining enhancements for partially-completed features
 
-3. **KNOWN_ISSUES.md** — Update to:
+3. **docs/Known-Issues.md** — Update to:
    - Remove issues that were fixed
    - Add new limitations discovered during implementation
    - Update existing issues if the situation changed

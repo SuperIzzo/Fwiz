@@ -6,11 +6,11 @@ Features that build on each other to make fwiz significantly more expressive whi
 
 ## 0-3: Conditions, Ranges, Recursion, Numeric Solving — ✅ DONE
 
-All implemented. `if`/`iff` conditions, ValueSet ranges, recursive formula calls with depth guard, numeric solving with adaptive grid scan + Newton/bisection. See DEVELOPER.md for details.
+All implemented. `if`/`iff` conditions, ValueSet ranges, recursive formula calls with depth guard, numeric solving with adaptive grid scan + Newton/bisection. See Developer.md for details.
 
 ## 4. Numeric Solving — ✅ DONE
 
-See DEVELOPER.md.
+See Developer.md.
 
 **Remaining enhancements:**
 - Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
@@ -198,7 +198,7 @@ Attack after complex numbers (the bindings-map extension below is shared):
 
 1. **`ExprType::MATRIX` leaf**: shape (rows, cols) + element storage. Start with `vector<double>` for scalar entries; promote to `vector<ExprPtr>` only when symbolic entries arrive.
 2. **`evaluate_symbolic` BINOP dispatch**: shape-checked add/sub (element-wise), mul (matrix product), scalar-matrix multiply. Shape mismatch → `undefined` (existing symbolic-undefined propagation).
-3. **Prefer `matmul(A, B)` function call** over a new `BinOp::MATMUL`. Keeps the binop table small — data-driven principle (see DEVELOPER.md). Same for `det(A)`, `inv(A)`, `transpose(A)`.
+3. **Prefer `matmul(A, B)` function call** over a new `BinOp::MATMUL`. Keeps the binop table small — data-driven principle (see Developer.md). Same for `det(A)`, `inv(A)`, `transpose(A)`.
 4. **`double evaluate()` rejection**: matrix operands throw ("cannot reduce matrix to scalar").
 5. **Solver bindings extension**: `bindings` is `map<string, double>` today. Matrix-valued variables require a parallel `map<string, ExprPtr>` track or promotion of the existing map to `ExprPtr`. Scope that when the first matrix use case lands — don't pre-generalize.
 

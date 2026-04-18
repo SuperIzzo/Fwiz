@@ -58,7 +58,7 @@ For each design item you're given:
     - `file:line` — description — pre-existing / new / regression
     ```
 
-## C++ Conventions (from DEVELOPER.md)
+## C++ Conventions (from docs/Developer.md)
 
 - `const Expr&` for non-null references, `ExprPtr` (raw `Expr*`) for nullable
 - `constexpr` for predicates and constants, `inline` for everything else
