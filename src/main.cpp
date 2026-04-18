@@ -336,6 +336,11 @@ int main(int argc, char* argv[]) {
             if (total_failed > 0) return 1;
         }
 
+    } catch (const SolveBudgetExceededError& e) {
+        // Budget sentinel — distinct exit code so library users / scripts can
+        // differentiate from regular solve failures.
+        std::cerr << e.what() << '\n';
+        return 2;
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << '\n';
         return 1;
