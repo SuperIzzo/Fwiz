@@ -360,6 +360,48 @@ by where it came from). Three possible resolutions:
 Leaning toward (2) at design time: treat `=?` with dotted paths as a
 binding-equality assertion, solver chooses direction.
 
+### Open design question — implicit output routing
+
+A tempting shortcut removes the explicit `triangle.A=?sin.x` binding:
+
+```bash
+fwiz 'sin(result=?, triangle.a=100, triangle.b=50, triangle.B=0.3)'
+```
+
+Intuition: "whatever triangle computes becomes sin's input." With the
+above bindings (two sides + one angle, an AAS/SSA shape), triangle
+produces a single resolvable angle `A`, and `sin.x = A` is unambiguous.
+
+But with **more** bindings the shortcut breaks:
+
+```bash
+fwiz 'sin(result=?, triangle.a=100, triangle.b=50, triangle.c=70, triangle.B=0.3)'
+```
+
+Given SSS (`a, b, c`) plus `B`, all three angles `A, B, C` become derivable.
+Which one routes to `sin.x`?
+
+Four possible designs, each with tradeoffs:
+
+1. **No implicit routing.** Require explicit `triangle.A=?sin.x`. Simple and
+   predictable but verbose in the common unambiguous case.
+2. **Implicit when unambiguous; clear error otherwise.** Allow the short form
+   when the inner scope exposes exactly one resolvable free variable
+   compatible with the outer call's input type; else error with a message
+   pointing at explicit syntax (`triangle exposes {A, B, C} — specify which
+   feeds sin.x via triangle.A=?sin.x`). Matches fwiz's general philosophy.
+3. **Multi-solution — `sin.result` returns once per compatible inner value.**
+   Leverages existing multi-solution support, but likely violates the
+   first-successful / LLM-deterministic commitments from the triangle cycle.
+   Use `--explore` for this semantic instead.
+4. **Positional-order default.** Use the first inner variable in file order.
+   Fragile; depends on `.fw` file formatting.
+
+Leaning toward **(2)** — allows the shortcut where it's safe, fails loud
+where it isn't. Gives LLMs a deterministic surface, and nudges users toward
+explicit routing when they need it. Option (3) is what `--explore` already
+gives you; no need to overload `=?`.
+
 ### Why
 
 - Encourages composition over monolithic `.fw` files.
