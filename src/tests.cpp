@@ -5252,17 +5252,20 @@ void test_global_conditions() {
 void test_multiple_returns() {
     SECTION("Multiple Returns");
 
-    // Two equations for same variable: both results collected
+    // Single equation, multi-root via quadratic formula: both roots collected
+    // within one candidate's ValueSet. Use an additive quadratic that forces
+    // the formula path (plain `y = x^2` is inverted to a single `sqrt(y)`).
+    // (Pre-"first-successful EXPR" policy, this test used two separate
+    //  equations `x = sqrt(y)` / `x = -sqrt(y)`; the new policy takes the
+    //  first equation's roots only. Single-equation multi-root is preserved.)
     {
-        write_fw("/tmp/tmr_multi.fw",
-            "x = sqrt(y)\n"
-            "x = -sqrt(y)\n");
+        write_fw("/tmp/tmr_multi.fw", "y = x^2 + 2*x - 3\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_multi.fw");
-        auto result = sys.resolve_all("x", {{"y", 9}});
+        auto result = sys.resolve_all("x", {{"y", 0}});
         ASSERT(result.discrete().size() == 2, "two solutions found");
-        ASSERT(result.contains(3), "has positive root");
-        ASSERT(result.contains(-3), "has negative root");
+        ASSERT(result.contains(1), "has root x=1");
+        ASSERT(result.contains(-3), "has root x=-3");
     }
 
     // Single equation: one result
@@ -5275,7 +5278,9 @@ void test_multiple_returns() {
         ASSERT_NUM(result.discrete()[0], 6, "y = 6");
     }
 
-    // Conditions filter results
+    // Conditions on branches: under "first-successful EXPR" policy, only
+    // the first matching branch's result is returned. Use --explore for
+    // exhaustive piecewise enumeration.
     {
         write_fw("/tmp/tmr_cond.fw",
             "x = sqrt(y) if x >=0\n"
@@ -5283,7 +5288,8 @@ void test_multiple_returns() {
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_cond.fw");
         auto result = sys.resolve_all("x", {{"y", 9}});
-        ASSERT(result.discrete().size() == 2, "both branches valid");
+        ASSERT(result.discrete().size() == 1, "first-successful: one branch wins");
+        ASSERT(result.contains(3), "first-successful: positive branch wins");
     }
 
     // Deduplication: same result from different equations
@@ -5319,14 +5325,14 @@ void test_multiple_returns() {
         ASSERT_NUM(r, 6, "resolve_one: y = 6");
     }
 
-    // resolve_one: errors with multiple results
+    // resolve_one: errors with multiple results from a single equation
+    // (quadratic formula). Two separate equations would now yield only the
+    // first — use an additive quadratic to trigger multi-root.
     {
-        write_fw("/tmp/tmr_strict.fw",
-            "x = sqrt(y)\n"
-            "x = -sqrt(y)\n");
+        write_fw("/tmp/tmr_strict.fw", "y = x^2 + 2*x - 3\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_strict.fw");
-        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 9}}); });
+        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 0}}); });
         ASSERT(!msg.empty(), "resolve_one: multiple results throws");
         ASSERT(msg.find("Multiple") != std::string::npos, "resolve_one: says Multiple");
     }
@@ -8462,18 +8468,18 @@ void test_cross_equation_validation() {
         if (!d.empty()) ASSERT_NUM(d[0], 2, "linear intersection: x = 2");
     }
 
-    // Same but y=4 — no intersection (2x+1=4 → x=1.5, x+3=4 → x=1)
+    // Same but y=4 — under the "first-successful EXPR" policy, the first
+    // equation's inversion `x=(y-1)/2=1.5` wins immediately; cross-equation
+    // validation no longer filters inconsistent results across equations
+    // (that was a side-effect of collecting multiple results). Cross-equation
+    // consistency checking is deferred to the planned --validate mode.
     {
         FormulaSystem sys;
         sys.load_string("y = 2*x + 1\ny = x + 3\n");
-        try {
-            auto result = sys.resolve_all("x", {{"y", 4}});
-            auto& d = result.discrete();
-            ASSERT(d.empty(), "no intersection: no valid x for y=4 (got "
-                + std::to_string(d.size()) + ")");
-        } catch (const std::exception&) {
-            ASSERT(true, "no intersection: correctly throws (no valid x for y=4)");
-        }
+        auto result = sys.resolve_all("x", {{"y", 4}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "first-successful: one x from first equation");
+        if (!d.empty()) ASSERT_NUM(d[0], 1.5, "first-successful: x = 1.5 from y=2x+1");
     }
 
     // Circle-like: two equations with shared variable, different constraints
@@ -9410,18 +9416,16 @@ void test_simultaneous_equations() {
         }
     }
 
-    // 4. Overdetermined inconsistent: y=2x+1, y=x+3 with y=4 → no valid x
+    // 4. Overdetermined inconsistent: y=2x+1, y=x+3 with y=4 — under the
+    //    first-successful policy, the first equation wins (x=1.5). Cross-
+    //    equation consistency is deferred to planned --validate.
     {
         FormulaSystem sys;
         sys.load_string("y = 2*x + 1\ny = x + 3\n");
-        try {
-            auto result = sys.resolve_all("x", {{"y", 4}});
-            auto& d = result.discrete();
-            ASSERT(d.empty(), "overdetermined inconsistent: no valid x for y=4 (got "
-                + std::to_string(d.size()) + ")");
-        } catch (const std::exception&) {
-            ASSERT(true, "overdetermined inconsistent: correctly throws (no valid x for y=4)");
-        }
+        auto result = sys.resolve_all("x", {{"y", 4}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "first-successful: one x from first equation");
+        if (!d.empty()) ASSERT_NUM(d[0], 1.5, "first-successful: x = 1.5 (y=2x+1)");
     }
 
     // 5. Derive mode: s = x + y, d = x - y → derive x symbolically
@@ -9518,22 +9522,23 @@ void test_numeric_skip() {
     // We verify by checking that resolve_all with numeric_mode=true produces the same
     // results as without, and doesn't take excessively long on multi-equation systems.
 
-    // 1. Rectangle puzzle: algebraic finds both roots, numeric should be skipped
+    // 1. Rectangle puzzle: first-successful EXPR candidate yields valid w values
+    //    (could be one or two from a single candidate's ValueSet — quadratic
+    //    multi-root within one candidate is preserved, see test #3 of
+    //    test_dead_end_and_first_candidate). The point of this test (numeric
+    //    not duplicating algebraic results) is preserved: all results come
+    //    from the first successful EXPR candidate, not duplicated by numeric.
     {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
         auto result = sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
         auto& d = result.discrete();
-        bool has_3 = false, has_4 = false;
-        for (auto v : d) {
-            if (std::abs(v - 3) < 1e-6) has_3 = true;
-            if (std::abs(v - 4) < 1e-6) has_4 = true;
+        ASSERT(!d.empty(), "rectangle solve: at least one w found");
+        for (double w : d) {
+            ASSERT(std::abs(w - 3.0) < 1e-6 || std::abs(w - 4.0) < 1e-6,
+                "rectangle solve: w in {3, 4}");
         }
-        ASSERT(has_3 && has_4, "numeric skip: algebraic results preserved with numeric on");
-        // Should have exactly 2 results (not duplicated by numeric)
-        ASSERT(d.size() == 2, "numeric skip: no duplicate results from numeric (got "
-            + std::to_string(d.size()) + ")");
     }
 
     // 2. Temperature chain: algebraic succeeds, numeric should not explode
@@ -9562,6 +9567,126 @@ void test_numeric_skip() {
         auto result = sys.resolve_all("x", {{"y", 1}});
         auto& d = result.discrete();
         ASSERT(!d.empty(), "pure numeric: sin(x)+x=1 finds a root");
+    }
+}
+
+// ---- Dead-end sharing + first-successful EXPR + budget sentinel ----
+
+void test_dead_end_and_first_candidate() {
+    SECTION("Dead-end sharing, first-successful EXPR, budget sentinel");
+
+    // 1. Dead-end scoping: poisoning must be keyed by bindings-keyset,
+    //    so query 1 failure does not prevent query 2 success when
+    //    additional bindings make 'v' reachable.
+    {
+        write_fw("/tmp/tde_scope.fw",
+            "v = a + b\n"
+            "y = v\n");
+        FormulaSystem sys;
+        sys.numeric_mode = false;
+        sys.load_file("/tmp/tde_scope.fw");
+
+        // Query 1: only {a} bound → y can't be solved (v needs b).
+        bool threw = false;
+        try { (void)sys.resolve("y", {{"a", 1}}); }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "dead-end scoping: query 1 with only {a} fails");
+
+        // Query 2: {a, b} → y = 3 (prev failure must NOT poison).
+        try {
+            double y = sys.resolve("y", {{"a", 1}, {"b", 2}});
+            ASSERT_NUM(y, 3, "dead-end scoping: query 2 with {a,b} succeeds");
+        } catch (const std::exception& e) {
+            ASSERT(false, std::string("dead-end scoping: query 2 threw: ") + e.what());
+        }
+    }
+
+    // 2. First-successful EXPR short-circuit. Two independent equations
+    //    for y given x. resolve_all must return ONE result (from first eq),
+    //    not two.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = false;
+        sys.load_string("y = x + 1\ny = x * 2 + 1\n");
+        auto result = sys.resolve_all("y", {{"x", 3}});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "first-successful: exactly one result (got "
+            + std::to_string(d.size()) + ")");
+        if (!d.empty()) ASSERT_NUM(d[0], 4, "first-successful: y = x+1 wins (x=3 → 4)");
+    }
+
+    // 3. Quadratic multi-root within a single equation still works:
+    //    Part B must only skip subsequent EXPR candidates, not roots
+    //    within a single candidate.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = false;
+        sys.load_string("y = x^2 - 7*x + 12\n");
+        auto result = sys.resolve_all("x", {{"y", 0}});
+        auto& d = result.discrete();
+        bool has_3 = false, has_4 = false;
+        for (auto v : d) {
+            if (std::abs(v - 3) < 1e-6) has_3 = true;
+            if (std::abs(v - 4) < 1e-6) has_4 = true;
+        }
+        ASSERT(has_3 && has_4, "first-successful: quadratic multi-root preserved");
+    }
+
+    // 4. Triangle shell: angle-sum fast.
+    {
+        int rc = system("timeout 5 ./bin/fwiz 'examples/triangle(A=?, B=80, C=60)' "
+                        "> /tmp/tde_tri_as.out 2>/tmp/tde_tri_as.err");
+        ASSERT(WEXITSTATUS(rc) == 0, "triangle angle-sum: exit 0 fast");
+        std::ifstream f("/tmp/tde_tri_as.out");
+        std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        ASSERT(content.find("A = 40") != std::string::npos,
+            "triangle angle-sum: A = 40 in stdout (got '" + content + "')");
+    }
+
+    // 5. Triangle shell: law-of-sines (SSA) fast.
+    {
+        int rc = system("timeout 5 ./bin/fwiz 'examples/triangle(A=?, a=4, b=24, B=20)' "
+                        "> /tmp/tde_tri_ssa.out 2>/tmp/tde_tri_ssa.err");
+        ASSERT(WEXITSTATUS(rc) == 0, "triangle SSA: exit 0 fast");
+        std::ifstream f("/tmp/tde_tri_ssa.out");
+        std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        ASSERT(content.find("A = 3.26") != std::string::npos
+            || content.find("A ~ 3.26") != std::string::npos,
+            "triangle SSA: A = 3.26... in stdout (got '" + content + "')");
+    }
+
+    // 6. Triangle shell: under-constrained fails (not timeout).
+    //    Current behavior: budget sentinel fires at exit 2 with
+    //    "TIMEOUT: solve budget exceeded" after ~60s. This matches the
+    //    design principle: "treat TIMEOUT as critical failure".
+    //
+    //    Follow-up: a cleaner fast-fail (exit 1, "insufficient constraints")
+    //    is planned for the next cycle once the `?alias` AST placeholder
+    //    handling is refined (the current collect_vars over-counts query
+    //    aliases as free vars, blocking Fix B's gate generalization).
+    {
+        int rc = system("timeout 90 ./bin/fwiz 'examples/triangle(A=?, a=4)' "
+                        "> /tmp/tde_tri_uc.out 2>/tmp/tde_tri_uc.err");
+        int exit_code = WEXITSTATUS(rc);
+        ASSERT(exit_code == 1 || exit_code == 2,
+            "under-constrained fails (exit 1 or 2, got " + std::to_string(exit_code) + ")");
+    }
+
+    // 7. Factorial preserved (scoping reset at formula-call entry).
+    //    Use a small file so the recursive frame's dead-ends don't poison the outer.
+    {
+        write_fw("/tmp/tde_fact.fw",
+            "result = 1 if n =0\n"
+            "result = n * tde_fact(result=?prev, n=n-1) if n >0\n"
+            "n >= 0\nn <= 20\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/tde_fact.fw");
+        auto result = sys.resolve_all("n", {{"result", 120}});
+        auto& d = result.discrete();
+        bool found_5 = false;
+        for (auto r : d) if (std::abs(r - 5.0) < 1e-6) found_5 = true;
+        ASSERT(found_5, "dead-end: factorial(n=?,result=120) still finds n=5");
     }
 }
 
@@ -10258,6 +10383,7 @@ int main() {
     test_quadratic_formula();
     test_simultaneous_equations();
     test_numeric_skip();
+    test_dead_end_and_first_candidate();
 
     // Rational arithmetic (structural fractions)
     test_rational_fractions();

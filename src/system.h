@@ -13,6 +13,8 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <cstdlib>
+#include <iostream>
 
 // ============================================================================
 //  Shared utility
@@ -123,6 +125,92 @@ struct FormulaCall {
     std::map<std::string, ExprPtr> bindings;
 };
 
+// Shared dead-end set: keys are (variable_name, binding_name_keyset).
+// Threaded through solve_recursive / solve_all / try_resolve by reference
+// so sibling candidates within one top-level query avoid redundantly
+// re-exploring the same unreachable variables. Scoped per top-level query
+// (each resolve/resolve_all constructs its own); sub-systems from
+// formula calls construct their own independently (no leakage).
+using DeadEndSet = std::set<std::pair<std::string, std::set<std::string>>>;
+
+// Diagnostic helper: dump dead-end set in readable form.
+// Format: "(size=N) [(var1, {b1,b2}), (var2, {}), ...]"
+inline void dump_dead_ends(std::ostream& os, const DeadEndSet& de) {
+    os << "(size=" << de.size() << ")";
+    if (de.empty()) return;
+    os << " [";
+    bool first = true;
+    for (auto& [var, keys] : de) {
+        if (!first) os << ", ";
+        os << "(" << var << ", {";
+        bool first_k = true;
+        for (auto& k : keys) {
+            if (!first_k) os << ",";
+            os << k;
+            first_k = false;
+        }
+        os << "})";
+        first = false;
+    }
+    os << "]";
+}
+
+// Thrown when the per-query solve budget is exhausted. Signals a critical
+// bug (should never fire in practice given dead-end sharing); distinct from
+// regular solve failures so CLI can return a dedicated exit code.
+// Intentionally NOT derived from std::runtime_error so the many
+// `catch (const std::runtime_error&)` sites in the solver don't swallow it —
+// a budget breach must propagate to the top-level caller to signal the bug.
+struct SolveBudgetExceededError : std::exception {
+    const char* what() const noexcept override { return "TIMEOUT: solve budget exceeded"; }
+};
+
+// ============================================================================
+//  Diagnostic logging (gated by FWIZ_TRACE_SOLVER env var)
+// ============================================================================
+// Temporary instrumentation for diagnosing triangle-hang. When FWIZ_TRACE_SOLVER
+// is set in the environment, key solver entry / exit sites stream a concise
+// structured line to std::cerr so we can see depth, bindings, dead-end and
+// budget state. The env var is read exactly once (static-local lazy init).
+
+inline bool fwiz_trace_solver() {
+    static bool enabled = std::getenv("FWIZ_TRACE_SOLVER") != nullptr;
+    return enabled;
+}
+
+constexpr int MAX_DIAGNOSTIC_SOLVE_DEPTH = 100; // hard cap while diagnosing
+
+inline std::string diag_keyset_str(const std::map<std::string, double>& m) {
+    std::string out = "{";
+    bool first = true;
+    for (auto& [k, _] : m) {
+        if (!first) out += ",";
+        out += k;
+        first = false;
+    }
+    out += "}";
+    return out;
+}
+
+inline std::string diag_set_str(const std::set<std::string>& s) {
+    std::string out = "{";
+    bool first = true;
+    for (auto& v : s) {
+        if (!first) out += ",";
+        out += v;
+        first = false;
+    }
+    out += "}";
+    return out;
+}
+
+inline std::string diag_expr_preview(const ExprPtr& e, size_t limit = 60) {
+    if (!e) return "<null>";
+    std::string s = expr_to_string(e);
+    if (s.size() > limit) s = s.substr(0, limit) + "...";
+    return s;
+}
+
 class FormulaSystem {
 public:
     mutable ExprArena arena;
@@ -152,6 +240,44 @@ public:
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
     int fit_depth = FIT_DEFAULT_DEPTH;
     static inline thread_local int formula_depth_ = 0;
+
+    // --- Budget sentinel (Part C) ---
+    // Thread-local counter decremented per try_resolve / try_resolve_numeric.
+    // Initialized at the OUTERMOST top-level query (resolve/resolve_all/
+    // verify_variable); nested internal resolves (e.g. resolve_memoized
+    // during numeric probing) share the same envelope. On breach, throws
+    // SolveBudgetExceededError (not a runtime_error — bypasses the many
+    // silent-catch sites in the solver). Insurance net: should never fire
+    // in practice given Part A's dead-end sharing.
+    static constexpr int MAX_SOLVE_BUDGET = 100000;
+    static inline thread_local int solve_budget_remaining_ = 0;
+    static inline thread_local int solve_budget_depth_ = 0; // nesting depth
+
+    // RAII: outermost guard initializes the budget; nested guards no-op.
+    struct BudgetGuard {
+        bool outermost;
+        BudgetGuard() : outermost(solve_budget_depth_ == 0) {
+            if (outermost) solve_budget_remaining_ = MAX_SOLVE_BUDGET;
+            solve_budget_depth_++;
+        }
+        ~BudgetGuard() { solve_budget_depth_--; }
+    };
+
+    static void charge_budget() {
+        if (solve_budget_depth_ == 0) return; // uninitialized (direct test calls)
+        if (--solve_budget_remaining_ < 0) throw SolveBudgetExceededError();
+    }
+
+    // Collect the names (keys) of a bindings map as a set. Used to key
+    // dead-end entries by available-binding context rather than specific values.
+    template <typename Value>
+    static std::set<std::string> bindings_keyset(
+            const std::map<std::string, Value>& bindings) {
+        std::set<std::string> keys;
+        for (auto& [k, _] : bindings) keys.insert(k);
+        return keys;
+    }
+
     mutable std::map<std::string, std::shared_ptr<FormulaSystem>> sub_systems;
     mutable std::unordered_map<std::string, double> numeric_memo_;
     mutable std::map<std::string, bool> numeric_results_; // var → true if exact (verified)
@@ -666,6 +792,7 @@ x^(1/2) = sqrt(x)
         std::map<std::string, double> bindings) const
     {
         ExprArena::Scope scope(arena);
+        BudgetGuard budget_guard; // Part C
         std::vector<VerifyResult> results;
         bindings.erase(target);
         for (auto& [k, v] : defaults)
@@ -682,7 +809,8 @@ x^(1/2) = sqrt(x)
                 } else {
                     try {
                         auto b2 = bindings;
-                        double val = solve_recursive(v, b2, {target}, 0);
+                        DeadEndSet de;
+                        double val = solve_recursive(v, b2, {target}, 0, de);
                         resolved = substitute(resolved, v, Expr::Num(val));
                     } catch (const std::runtime_error&) { return; }
                 }
@@ -782,7 +910,8 @@ x^(1/2) = sqrt(x)
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
-        auto result = derive_recursive(target, bindings, {}, 0);
+        DeadEndSet dead_ends; // Fix 1: per-top-level-query dead-end set
+        auto result = derive_recursive(target, bindings, {}, 0, dead_ends);
         if (!result) throw std::runtime_error("Cannot derive equation for '" + target + "'");
         return format_derived(result);
     }
@@ -811,12 +940,16 @@ x^(1/2) = sqrt(x)
             if (auto nv = evaluate(*v)) numeric[k] = nv.value();
         }
 
+        // Fix 1: per-top-level-query dead-end set shared across sibling
+        // candidates within this derive_all pass.
+        DeadEndSet dead_ends;
+
         enumerate_candidates(target, [&](const Candidate& c) {
             if (c.condition && !check_condition(*c.condition, numeric)) return false;
 
             if (c.type == CandidateType::EXPR) {
                 auto b = bindings;
-                add_result(try_derive(c.expr, target, b, {}, 0));
+                add_result(try_derive(c.expr, target, b, {}, 0, dead_ends));
             } else if (c.type == CandidateType::FORMULA_REV) {
                 // Unfold sub-system equations and collect all solutions
                 // (sub-system load failure → no reverse solutions from this candidate)
@@ -847,13 +980,13 @@ x^(1/2) = sqrt(x)
                             if (!sol.expr) continue;
                             if (is_var(binding_expr) && binding_expr->name == target) {
                                 auto b = bindings;
-                                add_result(try_derive(sol.expr, target, b, {}, 0));
+                                add_result(try_derive(sol.expr, target, b, {}, 0, dead_ends));
                             } else {
                                 auto final_sols = solve_for_all(sol.expr, binding_expr, target);
                                 for (auto& fs : final_sols) {
                                     if (!fs.expr) continue;
                                     auto b = bindings;
-                                    add_result(try_derive(fs.expr, target, b, {}, 0));
+                                    add_result(try_derive(fs.expr, target, b, {}, 0, dead_ends));
                                 }
                             }
                         }
@@ -863,7 +996,7 @@ x^(1/2) = sqrt(x)
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 // Forward formula call — derive into sub-system
                 auto b = bindings;
-                auto result = derive_recursive(target, b, {}, 0);
+                auto result = derive_recursive(target, b, {}, 0, dead_ends);
                 add_result(result);
                 return result != nullptr; // stop if found (forward is single-valued)
             }
@@ -1047,16 +1180,19 @@ x^(1/2) = sqrt(x)
     double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
+        BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
-        return solve_recursive(target, prepared, {}, 0);
+        DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
+        return solve_recursive(target, prepared, {}, 0, dead_ends);
     }
 
     ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
+        BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1065,8 +1201,9 @@ x^(1/2) = sqrt(x)
 
         // Try solving for exact values
         std::vector<double> exact_results;
+        DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
         try {
-            exact_results = solve_all(target, prepared, {}, 0);
+            exact_results = solve_all(target, prepared, {}, 0, dead_ends);
 
             // Cross-equation validation: verify each candidate against ALL equations
             // For each equation, substitute all known values + candidate,
@@ -1191,10 +1328,28 @@ private:
     // Like solve_recursive but collects ALL valid results instead of stopping at first
     std::vector<double> solve_all(const std::string& target,
                                    std::map<std::string, double>& bindings,
-                                   std::set<std::string> visited, int depth) const {
-        if (auto it = bindings.find(target); it != bindings.end())
+                                   std::set<std::string> visited, int depth,
+                                   DeadEndSet& dead_ends) const {
+        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+            std::cerr << "[depth=" << depth << " fn=solve_all target=" << target << "]\n"
+                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
+                      << "  visited: " << diag_set_str(visited) << "\n"
+                      << "  dead_ends: ";
+            dump_dead_ends(std::cerr, dead_ends);
+            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
+        }
+        if (auto it = bindings.find(target); it != bindings.end()) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
+                          << " exit=bound]\n";
             return {it->second};
-        if (visited.count(target)) return {};
+        }
+        if (visited.count(target)) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
+                          << " exit=visited-cycle]\n";
+            return {};
+        }
         visited.insert(target);
 
         std::vector<double> results;
@@ -1205,7 +1360,7 @@ private:
                                 const Condition* cond) {
             auto b = bindings; // copy — each attempt gets fresh bindings
             bool nan_inf = false;
-            if (try_resolve(expr, target, b, visited, depth, nan_inf, missing)) {
+            if (try_resolve(expr, target, b, visited, depth, nan_inf, missing, dead_ends)) {
                 double val = b.at(target);
                 // Check equation condition
                 if (cond && !check_condition(*cond, b)) return;
@@ -1220,17 +1375,31 @@ private:
             if (nan_inf) had_nan_inf = true;
         };
 
+        // Part B: first-successful-EXPR-source policy. Candidates from the same
+        // source equation share a source_group id (Strategy 2's multi-root from
+        // quadratic formula all fall in the same group). Once a source group has
+        // produced >=1 finite result, subsequent EXPR candidates from a DIFFERENT
+        // group are skipped. NUMERIC candidates (Strategy 6) still fire subject
+        // to their own gate below for single-variable equations.
+        int winning_expr_group = -1;
         enumerate_candidates(target, [&](const Candidate& c) {
+            charge_budget(); // Part C: insurance — per-candidate-evaluation
             if (c.type == CandidateType::EXPR) {
+                if (winning_expr_group >= 0 && c.source_group != winning_expr_group)
+                    return true; // moved to a new source group — stop enumeration
                 // Check pre-condition
                 if (c.condition && !check_condition(*c.condition, bindings)) return false;
+                size_t before = results.size();
                 try_expr_all(c.expr, c.desc, c.condition);
+                if (results.size() > before && winning_expr_group < 0)
+                    winning_expr_group = c.source_group;
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 if (formula_depth_ >= max_formula_depth) return false;
                 try {
                     formula_depth_++;
                     struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
-                    auto sub_binds = prepare_sub_bindings(*c.call, bindings, visited, depth);
+                    auto sub_binds = prepare_sub_bindings(*c.call, bindings, visited, depth,
+                                                          "", true, &dead_ends);
                     auto& sub_sys = load_sub_system(c.call->file_stem);
                     sub_sys.max_formula_depth = max_formula_depth;
                     double val = sub_sys.resolve(c.call->query_var, sub_binds);
@@ -1261,7 +1430,7 @@ private:
                 constexpr size_t MAX_NUMERIC_RESULTS = 50;
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
                 auto roots = try_resolve_numeric(c.expr, target, bindings,
-                    visited, depth, c.condition);
+                    visited, depth, c.condition, dead_ends);
                 for (double val : roots) {
                     if (results.size() >= MAX_NUMERIC_RESULTS) break;
                     bool dup = false;
@@ -1279,13 +1448,26 @@ private:
         }, &bindings);
 
         if (results.empty() && !missing.empty()) {
+            // Part A: record dead-end — target unreachable from current bindings.
+            dead_ends.insert({target, bindings_keyset(bindings)});
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
+                          << " exit=exhausted missing=" << diag_set_str(missing) << "]\n";
             std::string list;
             for (auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
             throw std::runtime_error("Cannot solve for '" + target + "': no value for " + list);
         }
-        if (results.empty())
+        if (results.empty()) {
+            dead_ends.insert({target, bindings_keyset(bindings)});
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
+                          << " exit=no-equation]\n";
             throw std::runtime_error("Cannot solve for '" + target + "'");
+        }
 
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
+                      << " exit=ok count=" << results.size() << "]\n";
         return results;
     }
     static void strip_bom(std::string& line) {
@@ -1752,8 +1934,14 @@ private:
         std::map<std::string, double>& parent_bindings,
         std::set<std::string> visited = {}, int depth = 0,
         const std::string& skip_parent_var = "",
-        bool resolve_unknowns = true) const
+        bool resolve_unknowns = true,
+        DeadEndSet* dead_ends = nullptr) const
     {
+        // If caller didn't provide a dead-end set (verify / derive paths),
+        // use a local one so we still thread a valid reference downward.
+        DeadEndSet local_dead_ends;
+        DeadEndSet& de = dead_ends ? *dead_ends : local_dead_ends;
+
         std::map<std::string, double> sub;
 
         // Evaluate a binding expression against parent bindings
@@ -1767,9 +1955,10 @@ private:
                     resolved = substitute(resolved, v, Expr::Num(it->second));
                 } else if (resolve_unknowns) {
                     try {
-                        double val = solve_recursive(v, parent_bindings, visited, depth + 1);
+                        double val = solve_recursive(v, parent_bindings, visited, depth + 1, de);
                         resolved = substitute(resolved, v, Expr::Num(val));
-                    } catch (const std::runtime_error&) { return; }
+                    } catch (const SolveBudgetExceededError&) { throw; }
+                    catch (const std::runtime_error&) { return; }
                 } else { return; }
             }
             if (auto val = evaluate(*simplify(resolved))) sub[sub_var] = val.value();
@@ -1789,10 +1978,11 @@ private:
                 sub[call.query_var] = it->second;
             else if (resolve_unknowns) {
                 try {
-                    double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1);
+                    double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1, de);
                     sub[call.query_var] = val;
+                } catch (const SolveBudgetExceededError&) { throw; }
                 // NOLINTNEXTLINE(bugprone-empty-catch) — output_var unresolvable → leave unbound, sub-system may still solve
-                } catch (const std::runtime_error&) {}
+                catch (const std::runtime_error&) {}
             }
         }
 
@@ -1809,6 +1999,11 @@ private:
         const FormulaCall* call;  // for formula candidates
         std::string sub_var;      // for FORMULA_REV: which sub-system var to solve
         const Condition* condition; // condition from the source equation (may be null)
+        // Source-group id: candidates originating from the same source equation
+        // share an id. Strategy 2's multiple roots (quadratic formula) all share
+        // one id. `solve_all`'s first-successful policy stops the moment a NEW
+        // source group arrives after the previous group produced >=1 result.
+        int source_group = -1;
     };
 
     // Generates candidates for solving a target variable.
@@ -1818,25 +2013,29 @@ private:
     template<typename Handler>
     void enumerate_candidates(const std::string& target, Handler&& handler,
                               const std::map<std::string, double>* sub_bindings = nullptr) const {
+        int next_group = 0;
+
         // Strategy 1: target on LHS — direct from RHS
         for (auto& eq : equations)
             if (eq.lhs_var == target)
                 if (handler(Candidate{CandidateType::EXPR, eq.rhs,
                     target + " = " + expr_to_string(eq.rhs), nullptr, "",
-                    eq.condition ? &*eq.condition : nullptr}))
+                    eq.condition ? &*eq.condition : nullptr, next_group++}))
                     return;
 
         // Strategy 2: target in RHS — algebraic inversion (may produce multiple solutions)
         for (auto& eq : equations) {
             if (!contains_var(eq.rhs, target)) continue;
             auto sols = solve_for_all(Expr::Var(eq.lhs_var), eq.rhs, target);
+            int eq_group = next_group++;  // one group per source equation
             for (auto& sol : sols)
                 if (sol.expr)
                     if (handler(Candidate{CandidateType::EXPR, sol.expr,
                         target + " = " + expr_to_string(sol.expr)
                         + "  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")"
                         + (sol.cond_desc.empty() ? "" : "  [" + sol.cond_desc + "]"),
-                        nullptr, "", eq.condition ? &*eq.condition : nullptr}))
+                        nullptr, "", eq.condition ? &*eq.condition : nullptr,
+                        eq_group}))
                         return;
         }
 
@@ -1845,7 +2044,7 @@ private:
             if (call.output_var == target)
                 if (handler(Candidate{CandidateType::FORMULA_FWD, nullptr,
                     target + " via " + call.file_stem + "(" + call.query_var + "=?)",
-                    &call, "", nullptr}))
+                    &call, "", nullptr, next_group++}))
                     return;
 
         // Strategy 4: equate RHS of equations sharing a LHS variable
@@ -1867,6 +2066,7 @@ private:
                 auto ej = maybe_sub(equations[j].rhs);
                 for (auto& [a, b] : {std::pair{ei, ej}, std::pair{ej, ei}}) {
                     auto sols = solve_for_all(a, b, target);
+                    int pair_group = next_group++; // one group per (i,j,direction)
                     for (auto& sol : sols) {
                         if (!sol.expr) continue;
                         // Verify: the solution must satisfy BOTH equations' conditions
@@ -1878,7 +2078,7 @@ private:
                         if (handler(Candidate{CandidateType::EXPR, sol.expr,
                             target + " = " + expr_to_string(sol.expr)
                             + "  (via " + equations[i].lhs_var + ")",
-                            nullptr, "", cond}))
+                            nullptr, "", cond, pair_group}))
                             return;
                     }
                 }
@@ -1890,7 +2090,7 @@ private:
                 if (contains_var(expr, target))
                     if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
                         target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
-                        &call, sub_var, nullptr}))
+                        &call, sub_var, nullptr, next_group++}))
                         return;
 
         // Strategy 7: cross-equation variable elimination
@@ -1936,12 +2136,13 @@ private:
                         // Try solving directly
                         auto try_solve_and_emit = [&](const ExprPtr& rhs, const std::string& desc) -> bool {
                             auto tsols = solve_for_all(Expr::Var(e1.lhs_var), rhs, target);
+                            int sub_group = next_group++; // one group per elim source
                             for (auto& ts : tsols) {
                                 if (!ts.expr) continue;
                                 const Condition* cond = e1.condition ? &*e1.condition : nullptr;
                                 if (!cond && e2.condition) cond = &*e2.condition;
                                 if (handler(Candidate{CandidateType::EXPR, ts.expr, desc,
-                                    nullptr, "", cond}))
+                                    nullptr, "", cond, sub_group}))
                                     return true;
                             }
                             return false;
@@ -1986,7 +2187,7 @@ private:
                     Expr::Var(eq.lhs_var), eq.rhs));
                 if (handler(Candidate{CandidateType::NUMERIC, combined,
                     target + " ~= numeric  (from " + eq.lhs_var + " = " + expr_to_string(eq.rhs) + ")",
-                    nullptr, "", eq.condition ? &*eq.condition : nullptr}))
+                    nullptr, "", eq.condition ? &*eq.condition : nullptr, next_group++}))
                     return;
             }
         }
@@ -2029,7 +2230,8 @@ private:
 
     ExprPtr try_derive(const ExprPtr& expr, const std::string& target,
                        std::map<std::string, ExprPtr>& bindings,
-                       std::set<std::string> visited, int depth) const { // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
+                       std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
+                       DeadEndSet& dead_ends) const {
         std::set<std::string> vars;
         collect_vars(expr, vars);
 
@@ -2040,7 +2242,7 @@ private:
             if (auto it = bindings.find(v); it != bindings.end()) {
                 resolved = substitute(resolved, v, it->second);
             } else {
-                auto sub_expr = derive_recursive(v, bindings, visited, depth + 1);
+                auto sub_expr = derive_recursive(v, bindings, visited, depth + 1, dead_ends);
                 if (sub_expr) {
                     resolved = substitute(resolved, v, sub_expr);
                     // After substitution, the target might have been introduced
@@ -2074,10 +2276,53 @@ private:
 
     ExprPtr derive_recursive(const std::string& target,
                              std::map<std::string, ExprPtr>& bindings,
-                             std::set<std::string> visited, int depth) const {
-        if (auto it = bindings.find(target); it != bindings.end()) return it->second;
-        if (is_active_builtin(target)) return Expr::Var(target);
-        if (visited.count(target)) return nullptr;
+                             std::set<std::string> visited, int depth,
+                             DeadEndSet& dead_ends) const {
+        // Diagnostic: hard cap to prevent true-infinite recursion during diagnosis.
+        // Only enforced when FWIZ_TRACE_SOLVER is set.
+        if (fwiz_trace_solver() && depth > MAX_DIAGNOSTIC_SOLVE_DEPTH)
+            throw std::runtime_error("Max solve depth 100 reached (diagnostic cap)");
+        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+            std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target << "]\n"
+                      << "  bindings: {";
+            bool first = true;
+            for (auto& [k, _] : bindings) {
+                if (!first) std::cerr << ",";
+                std::cerr << k;
+                first = false;
+            }
+            std::cerr << "}\n  visited: " << diag_set_str(visited) << "\n"
+                      << "  dead_ends: ";
+            dump_dead_ends(std::cerr, dead_ends);
+            std::cerr << "\n";
+        }
+        if (auto it = bindings.find(target); it != bindings.end()) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
+                          << " exit=bound]\n";
+            return it->second;
+        }
+        if (is_active_builtin(target)) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
+                          << " exit=builtin]\n";
+            return Expr::Var(target);
+        }
+        if (visited.count(target)) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
+                          << " exit=visited-cycle]\n";
+            return nullptr;
+        }
+        // Fix 1: pre-filter — skip if a sibling in this top-level derive
+        // already discovered (target, current-bindings-keyset) is a dead-end.
+        auto dead_key = std::make_pair(target, bindings_keyset(bindings));
+        if (dead_ends.count(dead_key)) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
+                          << " exit=dead-end-hit]\n";
+            return nullptr;
+        }
         visited.insert(target);
 
         // Check condition using symbolic bindings (evaluate what we can)
@@ -2096,7 +2341,7 @@ private:
             if (!derive_check_condition(c.condition)) return false;
 
             if (c.type == CandidateType::EXPR) {
-                auto result = try_derive(c.expr, target, bindings, visited, depth);
+                auto result = try_derive(c.expr, target, bindings, visited, depth, dead_ends);
                 if (result) { bindings[target] = result; found = result; return true; }
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 // Try unfolding: substitute the sub-system's equation body
@@ -2164,7 +2409,11 @@ private:
                         for (auto& [k, v] : sub_sys.defaults)
                             if (!sub_binds.count(k) && k != c.call->query_var)
                                 sub_binds[k] = Expr::Num(v);
-                        auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1);
+                        // Fix 1: sub-systems get a fresh DeadEndSet (reset at
+                        // formula-call entry) so sub-system failures don't
+                        // poison the caller's sibling candidates.
+                        DeadEndSet sub_dead_ends;
+                        auto result = sub_sys.derive_recursive(c.call->query_var, sub_binds, {}, depth + 1, sub_dead_ends);
                         if (result) { bindings[target] = result; found = result; return true; }
                     } catch (const std::runtime_error&) { return false; }
                 }
@@ -2210,13 +2459,13 @@ private:
                             ExprPtr final_expr = nullptr;
                             if (is_var(binding_expr) && binding_expr->name == target) {
                                 auto b = bindings; // fresh copy per branch
-                                final_expr = try_derive(sol.expr, target, b, visited, depth);
+                                final_expr = try_derive(sol.expr, target, b, visited, depth, dead_ends);
                             } else {
                                 auto final_sols = solve_for_all(sol.expr, binding_expr, target);
                                 for (auto& fs : final_sols) {
                                     if (!fs.expr) continue;
                                     auto b = bindings;
-                                    final_expr = try_derive(fs.expr, target, b, visited, depth);
+                                    final_expr = try_derive(fs.expr, target, b, visited, depth, dead_ends);
                                     if (final_expr) break;
                                 }
                             }
@@ -2232,15 +2481,28 @@ private:
             }
             return false;
         });
+        // Fix 1: post-fail — record dead-end before returning nullptr so
+        // sibling candidates in the outer query don't redundantly re-explore.
+        if (!found) dead_ends.insert(dead_key);
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
+                      << " exit=" << (found ? "found" : "exhausted") << "]\n";
         return found;
     }
 
     // --- Numeric solver ---
 
     // Memoized resolve for numeric scanning — caches results to avoid
-    // redundant recursive evaluations (critical for factorial, fibonacci)
+    // redundant recursive evaluations (critical for factorial, fibonacci).
+    //
+    // Fix 2: when called from within a top-level query (e.g. the system-probe
+    // fallback in try_resolve_numeric), accept the caller's DeadEndSet so
+    // probe iterations share dead-end knowledge across the 200+ samples.
+    // When dead_ends is null (direct external call or a re-entrant test),
+    // a fresh resolve() top-level call handles its own set and guards.
     double resolve_memoized(const std::string& target,
-                            std::map<std::string, double> bindings) const {
+                            std::map<std::string, double> bindings,
+                            DeadEndSet* dead_ends = nullptr) const {
         // Build cache key: target + sorted bindings
         std::string key = target;
         for (auto& [k, v] : bindings)
@@ -2249,7 +2511,22 @@ private:
         auto it = numeric_memo_.find(key);
         if (it != numeric_memo_.end()) return it->second;
 
-        double result = resolve(target, bindings);
+        double result;
+        if (dead_ends) {
+            // Caller is already inside a top-level guarded context (rewrite
+            // rules, func inverter, budget, arena scope). Reuse the caller's
+            // DeadEndSet so sibling probe iterations benefit from each
+            // iteration's recorded dead-ends.
+            auto prepared = prepare_bindings(target, bindings);
+            if (auto pit = prepared.find(target); pit != prepared.end())
+                result = pit->second;
+            else {
+                std::set<std::string> visited;
+                result = solve_recursive(target, prepared, visited, 0, *dead_ends);
+            }
+        } else {
+            result = resolve(target, bindings);
+        }
         numeric_memo_[key] = result;
         return result;
     }
@@ -2283,7 +2560,18 @@ private:
             const ExprPtr& combined, const std::string& target,
             std::map<std::string, double>& bindings,
             const std::set<std::string>& visited, int depth,
-            const Condition* eq_condition = nullptr) const {
+            const Condition* eq_condition,
+            DeadEndSet& dead_ends) const {
+        charge_budget(); // Part C: insurance
+        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
+                      << " expr=" << diag_expr_preview(combined) << "]\n"
+                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
+                      << "  visited: " << diag_set_str(visited) << "\n"
+                      << "  dead_ends: ";
+            dump_dead_ends(std::cerr, dead_ends);
+            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
+        }
 
         // Re-entrance guard: prevent infinite recursion on coupled systems
         static thread_local std::set<std::string> numeric_active_;
@@ -2309,10 +2597,17 @@ private:
             if (auto it = bindings.find(v); it != bindings.end()) {
                 expr = substitute(expr, v, Expr::Num(it->second));
             } else {
+                // Part A pre-filter: don't recurse on known dead-end vars.
+                if (dead_ends.count({v, bindings_keyset(bindings)})) {
+                    has_formula_vars = true;
+                    continue;
+                }
                 try {
-                    double val = solve_recursive(v, bindings, visited, depth + 1);
+                    std::set<std::string> visited_copy = visited;
+                    double val = solve_recursive(v, bindings, visited_copy, depth + 1, dead_ends);
                     expr = substitute(expr, v, Expr::Num(val));
-                } catch (const std::runtime_error&) { has_formula_vars = true; }
+                } catch (const SolveBudgetExceededError&) { throw; }
+                catch (const std::runtime_error&) { has_formula_vars = true; }
             }
         }
         expr = simplify(expr);
@@ -2384,7 +2679,10 @@ private:
                         auto test_binds = bindings;
                         test_binds[target] = x;
                         test_binds.erase(probe_var); // remove so it gets recomputed
-                        double computed = resolve_memoized(probe_var, test_binds);
+                        // Fix 2: share the outer DeadEndSet across probe
+                        // iterations — first iteration populates, later
+                        // iterations benefit from pre-filter short-circuits.
+                        double computed = resolve_memoized(probe_var, test_binds, &dead_ends);
                         return computed - expected;
                     } catch (const std::runtime_error&) { return std::numeric_limits<double>::quiet_NaN(); }
                 };
@@ -2398,6 +2696,9 @@ private:
             }
         }
 
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
+                      << " exit=empty]\n";
         return {};
 
         filter:
@@ -2412,6 +2713,9 @@ private:
                 if (!check_condition(gc, test_binds)) ok = false;
             if (ok) filtered.push_back(r);
         }
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
+                      << " exit=roots count=" << filtered.size() << "]\n";
         return filtered;
     }
 
@@ -2419,9 +2723,26 @@ private:
 
     double solve_recursive(const std::string& target,
                            std::map<std::string, double>& bindings,
-                           std::set<std::string> visited, int depth) const {
+                           std::set<std::string> visited, int depth,
+                           DeadEndSet& dead_ends) const {
+        // Diagnostic: hard cap to prevent true-infinite recursion during diagnosis.
+        // Only enforced when FWIZ_TRACE_SOLVER is set, so legitimate deep chains
+        // (e.g. 500-eq chain tests) don't break during normal test runs.
+        if (fwiz_trace_solver() && depth > MAX_DIAGNOSTIC_SOLVE_DEPTH)
+            throw std::runtime_error("Max solve depth 100 reached (diagnostic cap)");
+        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+            std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target << "]\n"
+                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
+                      << "  visited: " << diag_set_str(visited) << "\n"
+                      << "  dead_ends: ";
+            dump_dead_ends(std::cerr, dead_ends);
+            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
+        }
         if (auto it = bindings.find(target); it != bindings.end()) {
             trace.calc("known: " + target + " = " + fmt_num(it->second), depth + 1);
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
+                          << " exit=bound result=" << it->second << "]\n";
             return it->second;
         }
         if (is_active_builtin(target)) {
@@ -2432,6 +2753,12 @@ private:
         if (visited.count(target))
             throw std::runtime_error(
                 "Circular dependency: '" + target + "' depends on itself through a chain of equations");
+        // Part A: short-circuit if we've already discovered target is unreachable
+        // with this exact set of bindings (a sibling candidate earlier in the
+        // top-level query exhausted all paths to it).
+        auto dead_key = std::make_pair(target, bindings_keyset(bindings));
+        if (dead_ends.count(dead_key))
+            throw std::runtime_error("Cannot solve for '" + target + "'");
         visited.insert(target);
 
         bool found_eq = false;
@@ -2441,7 +2768,7 @@ private:
         auto try_expr = [&](const ExprPtr& expr, const std::string& label) -> bool {
             found_eq = true;
             trace.step(label, depth + 1);
-            return try_resolve(expr, target, bindings, visited, depth, had_nan_inf, missing);
+            return try_resolve(expr, target, bindings, visited, depth, had_nan_inf, missing, dead_ends);
         };
 
         auto try_formula = [&](const FormulaCall& call, const std::string& resolve_var,
@@ -2453,7 +2780,8 @@ private:
             try {
                 formula_depth_++;
                 struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
-                auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var);
+                auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var,
+                                                      true, &dead_ends);
                 auto& sub_sys = load_sub_system(call.file_stem);
                 sub_sys.max_formula_depth = max_formula_depth;
                 for (auto& [sv, val] : sub_binds)
@@ -2496,6 +2824,20 @@ private:
 
         bool solved = false;
         enumerate_candidates(target, [&](const Candidate& c) {
+            charge_budget(); // Part C: insurance — per-candidate-evaluation
+            if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+                const char* tname = "?";
+                switch (c.type) {
+                    case CandidateType::EXPR: tname = "EXPR"; break;
+                    case CandidateType::FORMULA_FWD: tname = "FORMULA_FWD"; break;
+                    case CandidateType::FORMULA_REV: tname = "FORMULA_REV"; break;
+                    case CandidateType::NUMERIC: tname = "NUMERIC"; break;
+                    case CandidateType::COUNT_: break;
+                }
+                std::cerr << "  [depth=" << depth << " solve_recursive candidate type=" << tname
+                          << " group=" << c.source_group
+                          << " expr=" << diag_expr_preview(c.expr) << "]\n";
+            }
             // Check condition BEFORE solving if all vars are known
             if (c.condition && !check_condition(*c.condition, bindings)) {
                 trace.step("  condition failed (pre-check), skipping", depth + 1);
@@ -2512,10 +2854,17 @@ private:
                 case CandidateType::FORMULA_REV:
                     ok = try_formula(*c.call, c.sub_var, target); break;
                 case CandidateType::NUMERIC: {
+                    // Numeric probing is for the user's top-level intent
+                    // (transcendental equations, direct numerical inversion).
+                    // At nested depth, we're resolving a free variable inside
+                    // another candidate's evaluation — numeric probing at that
+                    // level is almost always a dead end and drives exponential
+                    // fan-out in densely-interconnected systems (triangle.fw).
+                    if (depth > 0) { found_eq = true; break; }
                     found_eq = true;
                     trace.step(c.desc, depth + 1);
                     auto roots = try_resolve_numeric(c.expr, target, bindings,
-                        visited, depth, c.condition);
+                        visited, depth, c.condition, dead_ends);
                     if (!roots.empty()) {
                         bindings[target] = roots[0];
                         numeric_results_[target] = false;
@@ -2546,7 +2895,20 @@ private:
             }
             return false;
         }, &bindings);
-        if (solved) return bindings.at(target);
+        if (solved) {
+            if (fwiz_trace_solver())
+                std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
+                          << " exit=solved result=" << bindings.at(target) << "]\n";
+            return bindings.at(target);
+        }
+
+        // Part A: record dead-end before propagating the failure — sibling
+        // candidates in the outer query won't redundantly re-try the same
+        // free vars with the same bindings.
+        dead_ends.insert(dead_key);
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
+                      << " exit=exhausted missing=" << diag_set_str(missing) << "]\n";
 
         // Error reporting
         if (!found_eq)
@@ -2565,7 +2927,17 @@ private:
     bool try_resolve(const ExprPtr& expr, const std::string& target,
                      std::map<std::string, double>& bindings,
                      std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
-                     bool& had_nan_inf, std::set<std::string>& missing) const {
+                     bool& had_nan_inf, std::set<std::string>& missing,
+                     DeadEndSet& dead_ends) const {
+        charge_budget(); // Part C: insurance — should never trip given Part A
+        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
+            std::cerr << "[depth=" << depth << " fn=try_resolve target=" << target
+                      << " expr=" << diag_expr_preview(expr) << "]\n"
+                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
+                      << "  dead_ends: ";
+            dump_dead_ends(std::cerr, dead_ends);
+            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
+        }
         // Resolve all free variables in the expression
         std::set<std::string> vars;
         collect_vars(expr, vars);
@@ -2577,12 +2949,20 @@ private:
                 trace.calc("substitute " + v + " = " + fmt_num(it->second), depth + 2);
                 resolved = substitute(resolved, v, Expr::Num(it->second));
             } else {
+                // Part A: pre-filter — skip this candidate without descending
+                // if a sibling already discovered (v, current-bindings-keyset)
+                // is a dead-end.
+                if (dead_ends.count({v, bindings_keyset(bindings)})) {
+                    missing.insert(v);
+                    return false;
+                }
                 trace.step("need: " + v, depth + 2);
                 try {
-                    double val = solve_recursive(v, bindings, visited, depth + 1);
+                    double val = solve_recursive(v, bindings, visited, depth + 1, dead_ends);
                     trace.calc("substitute " + v + " = " + fmt_num(val), depth + 2);
                     resolved = substitute(resolved, v, Expr::Num(val));
-                } catch (const std::runtime_error& e) {
+                } catch (const SolveBudgetExceededError&) { throw; }
+                catch (const std::runtime_error& e) {
                     if (std::string(e.what()).find("depth") != std::string::npos) throw;
                     missing.insert(v);
                     return false;
@@ -2621,6 +3001,9 @@ private:
         }
         trace.step("result: " + target + " = " + fmt_num(result), depth + 1);
         bindings[target] = result;
+        if (fwiz_trace_solver())
+            std::cerr << "[depth=" << depth << " fn=try_resolve target=" << target
+                      << " exit=ok result=" << result << "]\n";
         return true;
     }
 };

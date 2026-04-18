@@ -33,6 +33,8 @@ When asked to solve for a variable, fwiz tries these in order:
 
 At each step, if a needed variable is unknown, fwiz recursively tries to solve for it from other equations.
 
+`solve_all` stops at the first EXPR candidate that produces a finite result.
+
 ---
 
 ## 2. Algebraic Capabilities
@@ -58,19 +60,25 @@ When multiple equations can solve for the same variable, **file order is priorit
 3. On dead end (circular dependency, no data, invalid result), skip to the next equation
 4. First equation producing a finite valid result wins
 
+This applies to both single-solution queries (`=?!`) and multi-solution queries (`=?`): the first EXPR candidate producing finite results wins, and sibling equations are not tried. Multi-root output comes from within that one equation (§4); for exhaustive cross-equation search, use `--explore`.
+
 This is why `triangle.fw` lists angle-sum equations before law-of-cosines before law-of-sines: simplest relationships first. The solver automatically finds the right path through the equations regardless of which variables you provide.
 
 ---
 
 ## 4. Multiple Solutions
 
-`=?` returns all solutions:
+`=?` returns all solutions **from within a single equation**:
 
 ```bash
 $ fwiz f(x=?, y=9)       # y = x^2
 x = -3
 x = 3
 ```
+
+Both roots here come from one equation (the quadratic formula applied to `y = x^2`). `=?` does not iterate across sibling equations — once the first EXPR candidate produces finite results, the solver stops (§3). This keeps queries predictable and fast on densely-interconnected systems.
+
+For **cross-equation exhaustive search** (try every equation that can express the target, collect all results), use `--explore` (§8). A planned `--validate` flag will additionally check cross-equation consistency.
 
 `=?!` errors if more than one solution is found.
 
@@ -94,6 +102,8 @@ Enabled by default. Kicks in when algebraic strategies can't isolate the target 
 3. **Newton's method**: refine to machine precision
 
 Re-entrance guard prevents stack overflow when a numeric solve recursively calls another numeric solve. Results are memoized.
+
+Numeric probing is applied only to single-variable equations or at the top level of a query. Nested sub-solves inside candidate evaluation use algebraic strategies only — if no algebraic path resolves a sub-variable, the parent candidate is skipped. This prevents exponential numeric fan-out in densely-interconnected systems.
 
 ### 5.2 Result Classification
 
