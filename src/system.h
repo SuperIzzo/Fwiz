@@ -958,6 +958,14 @@ x^(1/2) = sqrt(x)
     //     the folded tree without triggering recognition (we don't want
     //     freshly-folded 3.14159 to get re-promoted back to 'pi').
     std::string format_derived(const ExprPtr& result) const {
+        // Back-compat entry point: build the alias table on the fly. Callers in
+        // hot loops (e.g. derive_all) should pre-compute the table once and
+        // use the overload below.
+        return format_derived(result, build_alias_table());
+    }
+
+    std::string format_derived(const ExprPtr& result,
+                               const std::map<std::string, double>& aliases) const {
         // format_derived allocates via the arena (fmt_exact_double builds
         // Num nodes; substitute_builtin_constants rewrites the tree). Open
         // our own scope so callers don't have to — scopes nest, and the
@@ -977,7 +985,6 @@ x^(1/2) = sqrt(x)
             }
             return expr_to_string(subbed);
         }
-        auto aliases = build_alias_table();
         if (auto val = evaluate(distributed)) {
             // Checked<double> already excludes NaN; only guard against infinity.
             if (!std::isinf(val.value())) return fmt_exact_double(val.value(), aliases);
@@ -1010,6 +1017,11 @@ x^(1/2) = sqrt(x)
         FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
+        // Alias table is stable across the whole call; build once and reuse
+        // for every format_derived invocation below (sentinel hashing path and
+        // final emit phase).
+        const auto aliases = build_alias_table();
+
         // --- Semantic fingerprint dedup setup (2026-04-19 cycle) ---
         // Build 3 prime test points for every free variable in the output.
         // Free vars are the keys of symbolic_bindings — those become VARs in
@@ -1030,8 +1042,15 @@ x^(1/2) = sqrt(x)
         }
 
         // Winners map: fingerprint_key → {score, representative ExprPtr}.
-        // Map iteration order IS output order (lex on rounded-double vector,
-        // or the all-empty sentinel counter) — deterministic across runs.
+        // Key shape uses a leading discriminator byte to make the two buckets
+        // (empty-fp sentinel vs real fingerprint) structurally disjoint:
+        //   {0, counter}                — sentinel (sorts first → preserves
+        //                                  emit order where always-NaN
+        //                                  candidates come before real-fp
+        //                                  winners, as in the initial design).
+        //   {1, fp_0, fp_1, ..., fp_k}  — real fingerprint buckets.
+        // The discriminator guarantees no cross-bucket collision is possible
+        // regardless of fingerprint magnitude.
         using Key = std::vector<int64_t>;
         std::map<Key, std::pair<std::pair<int, int>, ExprPtr>> winners;
         int64_t empty_fp_counter = 0;
@@ -1072,16 +1091,15 @@ x^(1/2) = sqrt(x)
             if (fp.empty()) {
                 // Hash by formatted string so structurally different
                 // always-NaN candidates stay separate, but exact string
-                // clones collapse. Negative range keeps these sentinel
-                // keys lexicographically before real numeric keys.
-                auto s = format_derived(result);
-                auto [it, inserted] = empty_fp_keys.emplace(
-                    s, std::numeric_limits<int64_t>::min() + empty_fp_counter);
+                // clones collapse.
+                auto s = format_derived(result, aliases);
+                auto [it, inserted] = empty_fp_keys.emplace(s, empty_fp_counter);
                 if (inserted) empty_fp_counter++;
-                key.push_back(it->second);
+                key = {0, it->second};  // sentinel discriminator
             } else {
-                key.reserve(fp.size());
-                for (double v : fp) key.push_back(llround(v * 1e9));
+                key.reserve(fp.size() + 1);
+                key.push_back(1);  // real-fingerprint discriminator
+                for (double v : fp) key.push_back(llround(v * FINGERPRINT_SCALE));
             }
             auto score = canonicity_score(result);
             auto it = winners.find(key);
@@ -1159,11 +1177,14 @@ x^(1/2) = sqrt(x)
         });
 
         // Emit winners phase: format each survivor in fingerprint-key order.
+        // Sentinel keys ({0, counter}) sort before real-fp keys ({1, ...}) so
+        // always-NaN candidates appear first, matching the pre-discriminator
+        // emit order.
         std::vector<std::string> results;
         results.reserve(winners.size());
         for (auto& [key, sc_expr] : winners) {
             (void)key;
-            results.push_back(format_derived(sc_expr.second));
+            results.push_back(format_derived(sc_expr.second, aliases));
         }
 
         // If no equation-based results, check iff conditions for constraint inversion.

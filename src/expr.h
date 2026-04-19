@@ -22,10 +22,18 @@ constexpr double EPSILON_REL  = 1e-9;    // relative tolerance for verify mode (
 constexpr int    SIMPLIFY_MAX_ITER = 20; // fixpoint loop limit for simplify()
 constexpr int    RATIONAL_POW_MAX_EXP = 20; // max integer exponent for (p/q)^n structural expansion — larger exponents fall back to double POW (int64 overflow risk for non-tiny bases)
 
+// Scale factor for hashing fingerprint doubles into int64 buckets in derive_all.
+// Tied to EPSILON_REL so two values within EPSILON_REL map to the same bucket
+// (see fingerprint_expr / canonicity_score in this file, and the dedup pipeline
+// in system.h).
+constexpr int64_t FINGERPRINT_SCALE = 1000000000;  // = 1 / EPSILON_REL
+
 static_assert(EPSILON_ZERO > 0 && EPSILON_ZERO < 1e-6, "EPSILON_ZERO must be a small positive value");
 static_assert(EPSILON_REL > 0 && EPSILON_REL < 1e-3, "EPSILON_REL must be a small positive value");
 static_assert(SIMPLIFY_MAX_ITER > 0 && SIMPLIFY_MAX_ITER < 1000, "SIMPLIFY_MAX_ITER must be reasonable");
 static_assert(RATIONAL_POW_MAX_EXP > 0 && RATIONAL_POW_MAX_EXP < 64, "RATIONAL_POW_MAX_EXP must fit comfortably within int64 iteration");
+static_assert(static_cast<double>(FINGERPRINT_SCALE) * EPSILON_REL == 1.0,
+              "FINGERPRINT_SCALE must equal 1/EPSILON_REL so bucket size matches tolerance");
 
 // ============================================================================
 //  Checked<T> — NaN-sentinel wrapper for floating-point evaluate() results.
@@ -1106,33 +1114,30 @@ inline std::vector<double> fingerprint_expr(
 
 inline std::pair<int, int> canonicity_score(ExprPtr e) {
     if (!e) return {0, 0};
-    int non_int = 0;
-    int leaves = 0;
-    std::function<void(ExprPtr)> walk = [&](ExprPtr n) {
-        if (!n) return;
-        switch (n->type) {
-            case ExprType::NUM:
-                leaves++;
-                if (!is_integer_value(n->num)) non_int++;
-                return;
-            case ExprType::VAR:
-                leaves++;
-                return;
-            case ExprType::UNARY_NEG:
-                walk(n->child);
-                return;
-            case ExprType::BINOP:
-                walk(n->left);
-                walk(n->right);
-                return;
-            case ExprType::FUNC_CALL:
-                for (auto& a : n->args) walk(a);
-                return;
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); return;
+    switch (e->type) {
+        case ExprType::NUM:
+            return {is_integer_value(e->num) ? 0 : 1, 1};
+        case ExprType::VAR:
+            return {0, 1};
+        case ExprType::UNARY_NEG:
+            return canonicity_score(e->child);
+        case ExprType::BINOP: {
+            auto l = canonicity_score(e->left);
+            auto r = canonicity_score(e->right);
+            return {l.first + r.first, l.second + r.second};
         }
-    };
-    walk(e);
-    return {non_int, leaves};
+        case ExprType::FUNC_CALL: {
+            std::pair<int, int> acc{0, 0};
+            for (auto& a : e->args) {
+                auto s = canonicity_score(a);
+                acc.first += s.first;
+                acc.second += s.second;
+            }
+            return acc;
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType");
+    }
+    return {0, 0};  // unreachable; pacify -Wreturn-type under future enum changes
 }
 
 // Symbolic sibling of evaluate(): preserves exact arithmetic in the returned

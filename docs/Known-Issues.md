@@ -50,16 +50,20 @@ x = y^(1 / 3)
 The underlying provenance issue — that the solver collapses symbolic values to `double` in `map<string, double>` — remains open, but its user-visible impact is now limited to two areas:
 
 1. **`--steps` / `--calc` traces**: render intermediate values via `fmt_num` only; a fractional intermediate like `981 / 10` shows up in the trace as `98.1` even though the final answer comes out as the fraction.
-2. **Recognisability limits**: values that don't match the fraction (max denominator 12) or constant table fall through to decimal output even in exact mode. Expanding the recognition table is an orthogonal improvement.
+2. **Recognisability limits**: values that don't match the fraction (max denominator 360, `RECOGNIZE_FRACTION_MAX_DEN`) or constant table fall through to decimal output even in exact mode. File-defined constants are now recognized via `build_alias_table()` and injected into `fmt_exact_double` as `extra_constants`, so user-defined values like `deg=pi/180` render by name rather than as raw decimals.
 
 The long-term structural fix is to plumb `ExprPtr` through solve result types (parallel `map<string, ExprPtr>` track) so the original symbolic value reaches the formatter without reconstruction. That would make trace output match final output, remove the table-limit issue, and mirror how mainstream CAS (Mathematica, SymPy, Maxima) track exactness via the type system.
 
 ## 5. Constant recognition in derive output — RESOLVED
 
-`expr_recognize_constants()` walks derive output trees and replaces floating-point NUM nodes with recognized symbolic forms (fractions, known constants). Extended constant table includes `log(2)`, `log(3)`, `log(10)`, `sqrt(2)`, `sqrt(3)`, `sqrt(5)`, `pi`, `e`, `phi`.
+`expr_recognize_constants()` walks derive output trees and replaces floating-point NUM nodes with recognized symbolic forms (fractions, known constants). Extended constant table includes `log(2)`, `log(3)`, `log(10)`, `sqrt(2)`, `sqrt(3)`, `sqrt(5)`, `pi`, `e`, `phi`. File-defined constants (e.g. `deg`) are recognized via `build_alias_table()` threaded through `fmt_exact_double`.
 
 ```bash
 $ fwiz --derive '(x=?, y=y) y = 2^x'
 x = log(y) / log(2)
 ```
+
+## 7. `--derive` output duplication — RESOLVED
+
+`fwiz --derive` previously produced hundreds of semantically-equivalent output lines (294 for the triangle reproducer). Resolved by semantic fingerprint dedup in `derive_all`: `fingerprint_expr` evaluates each candidate at prime-cycled test points; candidates sharing a fingerprint are merged, retaining the most canonical form via `canonicity_score`. The triangle reproducer now produces 159 lines. Residual variation is genuine algebraic non-equivalence (different branch-cut coverage at obtuse-angle test points), not duplication.
 
