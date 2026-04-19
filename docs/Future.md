@@ -580,23 +580,17 @@ The two lambdas at expr.h:1259/1267 carry `// cppcheck-suppress constParameterRe
 
 **Reopen trigger:** next warnings-cleanup cycle, or any refactor of additive/multiplicative flattening in expr.h.
 
-## 24. Widen `is_one`/`is_neg_one`/`is_neg` pointer overloads to `const Expr*`
+## 24. ~~Widen `is_one`/`is_neg_one`/`is_neg` pointer overloads to `const Expr*`~~ — **done 2026-04-19 (0708bf5)**
 
-M10 widened `is_num`, `is_var`, `is_atomic`, `is_zero`, `is_neg_num` to `const Expr*`. The remaining three (`is_one`, `is_neg_one`, `is_neg`) were not flagged by cppcheck in that pass and were left at `ExprPtr`. They are now inconsistent with the rest of the set. Widening is a one-line each change per the M10 pattern.
+Widened in the M6+M7+F24 micro-cycle. No caller cascade surfaced (unlike M3/M10).
 
-**Reopen trigger:** cppcheck regression on those overloads, or next warnings-cleanup cycle.
+## 25. ~~M6/M7 deferred: `variableScope` and shadow renames~~ — **done 2026-04-19 (0708bf5)**
 
-## 25. M6/M7 deferred: `variableScope` and shadow renames
+All 24 warnings cleared (8 `variableScope` + 16 shadow renames). No behavior changes; test output byte-identical.
 
-Eight `variableScope` warnings remain: 6 in tests.cpp (moving `FormulaSystem` declarations inside try-blocks), 2 in system.h (`dead_ends` and `loaded`). Sixteen shadow warnings remain: 12 `shadowFunction` + 4 `shadowVariable`, largely `ev`/`ss`/`write_fw`/`arena`/`scope` locals in tests.cpp. Plan is in `.fwiz-workflow/design-warnings-cleanup.md` (M6, M7 sections). M7 specifically needs byte-identical diff evidence for the 4 `write_fw` lambda deletions per visionary's review.
+## 26. ~~`system.h:1890` redundantAssignment bug-smell~~ — **done 2026-04-19 (6caf0a4)**
 
-**Reopen trigger:** follow-up micro-cycle, or user request.
-
-## 26. `system.h:1890` redundantAssignment bug-smell
-
-Inside the `if (blt == custom_function_defs_.end())` branch, `blt` is reassigned to `custom_function_defs_.end()` — a no-op. This may be dead code from a refactor or a subtle logic error in the custom-function vs builtin lookup path. Requires a debugger round before touching; do not suppress blindly.
-
-**Reopen trigger:** any solver regression on custom function lookup, or routine investigation.
+Debugger round confirmed truly-dead code (inner branch fires 2× in test suite but the else-if below independently re-finds the builtin). Four lines deleted; semantically equivalent. Findings preserved in `.fwiz-workflow/debug-findings-system-1890.md`.
 
 ## Interaction with existing features
 
