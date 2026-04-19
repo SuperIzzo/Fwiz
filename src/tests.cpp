@@ -6204,7 +6204,7 @@ void test_simplify_div_zero_denom() {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(3), Expr::Num(0));
         auto s = simplify(e);
         ASSERT(s != nullptr, "simplify(3/0) does not crash");
-        auto ev = evaluate(*s);
+        auto ev = s ? evaluate(*s) : Checked<double>{};
         ASSERT(!ev.has_value(), "simplify(3/0) evaluates to empty Checked");
     }
 
@@ -6242,7 +6242,7 @@ void test_simplify_div_zero_denom() {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(0), Expr::Num(0));
         auto s = simplify(e);
         ASSERT(s != nullptr, "simplify(0/0) does not crash");
-        auto ev = evaluate(*s);
+        auto ev = s ? evaluate(*s) : Checked<double>{};
         ASSERT(!ev.has_value(), "simplify(0/0) evaluates to empty Checked");
     }
 
@@ -7755,7 +7755,7 @@ void test_fit_edge_cases() {
     {
         auto f = [](double x) { return x; };
         auto samples = sample_function(f, 0, 1, 1); // only 2 points
-        auto result = fit_polynomial(samples, 1);
+        (void)fit_polynomial(samples, 1);
         // Should handle gracefully (might have R²=1 with 2 points for degree 1)
         ASSERT(true, "fit: 2 samples doesn't crash");
     }
@@ -7824,7 +7824,7 @@ void test_fit_templates_edge() {
     {
         auto f = [](double x) { return x * x; };
         auto samples = sample_function(f, -10, -1, 50);
-        auto result = fit_power_law(samples, "x");
+        (void)fit_power_law(samples, "x");
         // Power law filters x <= 0, so few/no valid samples → low R² or empty
         ASSERT(true, "template: power law negative x doesn't crash");
     }
@@ -7843,7 +7843,7 @@ void test_fit_templates_edge() {
     {
         auto f = [](double x) { return 100.0 + 0.001 * std::sin(x); };
         auto samples = sample_function(f, 0, 10, 50);
-        auto result = fit_sinusoidal(samples, "x");
+        (void)fit_sinusoidal(samples, "x");
         // Very few/no zero crossings around mean → might not fit
         ASSERT(true, "template: sinusoidal no crossings doesn't crash");
     }
@@ -9485,9 +9485,8 @@ void test_simultaneous_equations() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
-        bool crashed = false;
         try {
-            auto result = sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
+            sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
             // May or may not find the answer — but must not crash
             ASSERT(true, "numeric no-crash: did not crash");
         } catch (const std::exception&) {
