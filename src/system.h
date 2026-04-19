@@ -480,7 +480,7 @@ public:
 
     void trace_loaded() const {
         if (!trace.show_steps()) return;
-        for (auto& eq : equations)
+        for (const auto& eq : equations)
             trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
         for (auto& [k, v] : defaults)
             trace.step("  default: " + k + " = " + fmt_num(v));
@@ -2672,7 +2672,7 @@ private:
             // Find variables that are both known (in bindings) and computable from target
             // e.g., for factorial: result=120 is known, result can be computed from n
             std::vector<std::string> probe_vars;
-            for (auto& eq : equations) {
+            for (const auto& eq : equations) {
                 if (eq.lhs_var == target) continue; // target on LHS = normal direction
                 if (contains_var(eq.rhs, target)) continue; // target in RHS = equation-based (tried above)
                 // eq.lhs_var is defined by equations — if it's in bindings, we can probe

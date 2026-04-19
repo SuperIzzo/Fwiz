@@ -745,7 +745,7 @@ inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
     });
     std::vector<FitResult> unique;
     std::set<std::string> seen;
-    for (auto& f : fits) {
+    for (const auto& f : fits) {
         if (!f.expr) continue;
         std::string s = expr_to_string(f.expr);
         if (!seen.insert(s).second) continue;

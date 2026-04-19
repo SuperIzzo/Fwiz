@@ -1135,13 +1135,13 @@ void test_solve_for_edge() {
 
     // Solve for var not in equation => coeff=0, returns nullptr
     {
-        auto sol = solve_for(Expr::Var("x"), parse("a + b"), "z");
+        const auto* sol = solve_for(Expr::Var("x"), parse("a + b"), "z");
         ASSERT(sol == nullptr, "var not in equation returns nullptr");
     }
 
     // Solve degenerate: x = x => coeff=0, always true, returns nullptr
     {
-        auto sol = solve_for(Expr::Var("x"), Expr::Var("x"), "x");
+        const auto* sol = solve_for(Expr::Var("x"), Expr::Var("x"), "x");
         ASSERT(sol == nullptr, "x = x returns nullptr (identity, no unique solution)");
     }
 
@@ -1155,7 +1155,7 @@ void test_solve_for_edge() {
     // Solve with nested expressions: x = (2*y + 3) / (y - something)
     // This has y in denominator — nonlinear, should return nullptr
     {
-        auto sol = solve_for(Expr::Var("x"),
+        const auto* sol = solve_for(Expr::Var("x"),
             Expr::BinOpExpr(BinOp::DIV,
                 Expr::BinOpExpr(BinOp::ADD,
                     Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Var("y")),
@@ -5836,7 +5836,7 @@ void test_solve_for_zero_guard() {
         // a*c - a*c = 0 → coeff is symbolic, rest=0, should reject
         auto lhs = Parser(Lexer("a * c").tokenize()).parse_expr();
         auto rhs = Parser(Lexer("a * c").tokenize()).parse_expr();
-        auto sol = solve_for(lhs, rhs, "c");
+        const auto* sol = solve_for(lhs, rhs, "c");
         ASSERT(sol == nullptr, "symbolic coeff zero rest: rejected");
     }
 
@@ -5845,7 +5845,7 @@ void test_solve_for_zero_guard() {
         // a*c + 5 = 0 → c = -5/a (valid even though coeff is symbolic)
         auto lhs = Parser(Lexer("a * c + 5").tokenize()).parse_expr();
         auto rhs = Expr::Num(0);
-        auto sol = solve_for(lhs, rhs, "c");
+        const auto* sol = solve_for(lhs, rhs, "c");
         ASSERT(sol != nullptr, "symbolic coeff nonzero rest: solution found");
     }
 
@@ -6202,7 +6202,7 @@ void test_simplify_div_zero_denom() {
     // Case 1: Num(3) / Num(0) — no MUL on LHS, but still must not crash.
     {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(3), Expr::Num(0));
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT(s != nullptr, "simplify(3/0) does not crash");
         auto ev = s ? evaluate(*s) : Checked<double>{};
         ASSERT(!ev.has_value(), "simplify(3/0) evaluates to empty Checked");
@@ -6219,7 +6219,7 @@ void test_simplify_div_zero_denom() {
         // Without bindings x cannot evaluate, but the expression must not
         // fold to a non-DIV form that lies about division-by-zero.
         // Substitute x=5 and check evaluate is empty (NaN sentinel).
-        auto subst = substitute(s, "x", Expr::Num(5));
+        const auto* subst = substitute(s, "x", Expr::Num(5));
         auto ev = evaluate(*subst);
         ASSERT(!ev.has_value(), "(3*x)/0 with x=5 stays empty Checked");
     }
@@ -6230,7 +6230,7 @@ void test_simplify_div_zero_denom() {
         auto e = Expr::BinOpExpr(BinOp::DIV, mul, Expr::Num(0));
         auto s = simplify(e);
         ASSERT(s != nullptr, "simplify((x*3)/0) does not crash");
-        auto subst = substitute(s, "x", Expr::Num(5));
+        const auto* subst = substitute(s, "x", Expr::Num(5));
         auto ev = evaluate(*subst);
         ASSERT(!ev.has_value(), "(x*3)/0 with x=5 stays empty Checked");
     }
@@ -6240,7 +6240,7 @@ void test_simplify_div_zero_denom() {
     // 0/0 is undefined (not zero).
     {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(0), Expr::Num(0));
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT(s != nullptr, "simplify(0/0) does not crash");
         auto ev = s ? evaluate(*s) : Checked<double>{};
         ASSERT(!ev.has_value(), "simplify(0/0) evaluates to empty Checked");
@@ -7377,26 +7377,26 @@ void test_builtin_constants() {
 
     // pi evaluates correctly
     {
-        auto expr = parse("pi");
+        const auto* expr = parse("pi");
         ASSERT_NUM((evaluate(*expr).value()), M_PI, "constant: pi evaluates to M_PI");
     }
 
     // e evaluates correctly
     {
-        auto expr = parse("e");
+        const auto* expr = parse("e");
         ASSERT_NUM((evaluate(*expr).value()), M_E, "constant: e evaluates to M_E");
     }
 
     // phi evaluates correctly
     {
-        auto expr = parse("phi");
+        const auto* expr = parse("phi");
         double expected = (1.0 + std::sqrt(5.0)) / 2.0;
         ASSERT_NUM((evaluate(*expr).value()), expected, "constant: phi evaluates to golden ratio");
     }
 
     // Constants in expressions
     {
-        auto expr = parse("2 * pi");
+        const auto* expr = parse("2 * pi");
         ASSERT_NUM((evaluate(*expr).value()), 2 * M_PI, "constant: 2*pi");
     }
 
@@ -8251,11 +8251,11 @@ void test_simplify_exp_log() {
 
     // Numeric evaluation still works
     {
-        auto expr = simplify(parse("e^(log(5))"));
+        const auto* expr = simplify(parse("e^(log(5))"));
         ASSERT_NUM((evaluate(*expr).value()), 5.0, "simplify: e^log(5) = 5");
     }
     {
-        auto expr = simplify(parse("log(e^3)"));
+        const auto* expr = simplify(parse("log(e^3)"));
         ASSERT_NUM((evaluate(*expr).value()), 3.0, "simplify: log(e^3) = 3");
     }
 }
@@ -8812,7 +8812,7 @@ void test_undefined() {
         sys.load_builtins();
         int xdivx_count = 0;
         bool has_defined = false, has_undefined = false;
-        for (auto& r : sys.rewrite_rules) {
+        for (const auto& r : sys.rewrite_rules) {
             if (expr_to_string(r.pattern) == "x / x") {
                 xdivx_count++;
                 if (r.is_undefined_branch) has_undefined = true;
@@ -9948,7 +9948,7 @@ void test_evaluate_symbolic() {
 
     // DIV of two integers: preserved as structural fraction, NOT folded to double
     {
-        auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(3));
+        const auto* e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(3));
         auto r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "1 / 3",
                   "evaluate_symbolic: 1/3 preserved as fraction");
@@ -9956,14 +9956,14 @@ void test_evaluate_symbolic() {
 
     // MUL of two integers: folded to Num
     {
-        auto e = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Num(3));
+        const auto* e = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Num(3));
         auto r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "6", "evaluate_symbolic: 2 * 3 = 6");
     }
 
     // ADD(Num, Var): symbolic RHS — tree returned unchanged
     {
-        auto e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Var("x"));
+        const auto* e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Var("x"));
         auto r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "1 + x",
                   "evaluate_symbolic: Num + Var returned as-is");
@@ -9972,7 +9972,7 @@ void test_evaluate_symbolic() {
     // FUNC_CALL with a non-numeric argument: must fall through to tree-as-is,
     // not attempt to fold. Guards the extension-point contract.
     {
-        auto e = Expr::Call("sin", {Expr::Var("x")});
+        const auto* e = Expr::Call("sin", {Expr::Var("x")});
         auto r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "sin(x)",
                   "evaluate_symbolic: FUNC_CALL with symbolic arg returned as-is");
