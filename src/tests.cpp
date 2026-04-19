@@ -10264,6 +10264,98 @@ void test_semantic_dedup_m1() {
     }
 }
 
+// ============================================================================
+// Milestone 2: source_label_ + build_alias_table + cross-file collision
+// qualification. Threads aliases through format_derived and fmt_solve_result.
+// ============================================================================
+void test_semantic_dedup_m2() {
+    SECTION("Semantic Dedup — M2 (alias table + cross-file qualification)");
+
+    // M2-1. Single-file: triangle defaults surface as deg, rdeg (unqualified).
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/triangle.fw");
+        auto table = sys.build_alias_table();
+        ASSERT(table.count("deg") == 1, "M2-1: triangle alias table has 'deg'");
+        ASSERT(table.count("rdeg") == 1, "M2-1: triangle alias table has 'rdeg'");
+        // Values should match the file's definitions.
+        ASSERT(table.count("deg") && std::abs(table.at("deg") - 0.01745329251994) < 1e-12,
+               "M2-1: deg value matches");
+        ASSERT(table.count("rdeg") && std::abs(table.at("rdeg") - 57.2957795130823) < 1e-12,
+               "M2-1: rdeg value matches");
+        // Builtins must NOT be in the alias table (builtin wins).
+        ASSERT(table.count("pi") == 0, "M2-1: alias table excludes builtin 'pi'");
+        ASSERT(table.count("e") == 0, "M2-1: alias table excludes builtin 'e'");
+        ASSERT(table.count("phi") == 0, "M2-1: alias table excludes builtin 'phi'");
+    }
+
+    // M2-2. Different values in two sub-systems → qualified keys.
+    {
+        write_fw("/tmp/dedup_file_a.fw", "k = 2.5\ny = k * x\n");
+        write_fw("/tmp/dedup_file_b.fw", "k = 3.0\ny = k * x\n");
+        FormulaSystem sys;
+        sys.load_string("# parent that references sub-systems\n", "parent");
+        // Manually populate sub_systems with two different sub-systems that
+        // share the name 'k' at different values.
+        auto sub_a = std::make_shared<FormulaSystem>();
+        sub_a->load_file("/tmp/dedup_file_a.fw");
+        auto sub_b = std::make_shared<FormulaSystem>();
+        sub_b->load_file("/tmp/dedup_file_b.fw");
+        sys.sub_systems["dedup_file_a.fw"] = sub_a;
+        sys.sub_systems["dedup_file_b.fw"] = sub_b;
+        auto table = sys.build_alias_table();
+        // Since they disagree, should produce qualified "dedup_file_a.k" and "dedup_file_b.k".
+        ASSERT(table.count("dedup_file_a.k") == 1 &&
+               std::abs(table.at("dedup_file_a.k") - 2.5) < 1e-12,
+               "M2-2: different values → qualified dedup_file_a.k = 2.5");
+        ASSERT(table.count("dedup_file_b.k") == 1 &&
+               std::abs(table.at("dedup_file_b.k") - 3.0) < 1e-12,
+               "M2-2: different values → qualified dedup_file_b.k = 3.0");
+        ASSERT(table.count("k") == 0, "M2-2: no unqualified 'k' when values disagree");
+    }
+
+    // M2-3. Same value in two sub-systems → one unqualified entry.
+    {
+        write_fw("/tmp/dedup_same_a.fw", "k = 2.5\ny = k * x\n");
+        write_fw("/tmp/dedup_same_b.fw", "k = 2.5\ny = k * x\n");
+        FormulaSystem sys;
+        sys.load_string("# parent\n", "parent");
+        auto sub_a = std::make_shared<FormulaSystem>();
+        sub_a->load_file("/tmp/dedup_same_a.fw");
+        auto sub_b = std::make_shared<FormulaSystem>();
+        sub_b->load_file("/tmp/dedup_same_b.fw");
+        sys.sub_systems["dedup_same_a.fw"] = sub_a;
+        sys.sub_systems["dedup_same_b.fw"] = sub_b;
+        auto table = sys.build_alias_table();
+        ASSERT(table.count("k") == 1 && std::abs(table.at("k") - 2.5) < 1e-12,
+               "M2-3: same value → unqualified 'k' = 2.5");
+        ASSERT(table.count("dedup_same_a.k") == 0,
+               "M2-3: no qualified form when values agree");
+        ASSERT(table.count("dedup_same_b.k") == 0,
+               "M2-3: no qualified form when values agree (b)");
+    }
+
+    // M2-4. Triangle --derive output contains NO raw 0.01745329252 literal.
+    {
+        int rc = system(
+            "./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -q '0.01745329252'");
+        // grep exit 0 means match FOUND (bad); we want 1 (not found).
+        ASSERT(WEXITSTATUS(rc) != 0, "M2-4: triangle derive output has no raw 0.01745329252");
+    }
+
+    // M2-5. --calc (solve) output uses the user's alias: define deg manually
+    //       and solve for a value that equals deg. The solve output should
+    //       contain 'deg' (or pi/180 via M1), NOT the raw decimal.
+    {
+        write_fw("/tmp/m2_calc_alias.fw", "deg = 0.01745329251994\ny = deg\n");
+        int rc = system("./bin/fwiz '/tmp/m2_calc_alias(y=?)' 2>/dev/null "
+                        "| grep -q '0.01745'");
+        ASSERT(WEXITSTATUS(rc) != 0,
+               "M2-5: solve output does not emit raw decimal (deg alias applied)");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -10517,6 +10609,7 @@ int main() {
 
     // Semantic dedup of --derive output (2026-04-19 cycle)
     test_semantic_dedup_m1();
+    test_semantic_dedup_m2();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

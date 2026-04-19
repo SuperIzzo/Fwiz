@@ -233,6 +233,11 @@ public:
     std::map<std::string, std::string> custom_function_defs_;  // name → .fw definition
 
     std::string base_dir;
+    // Human-readable source label — file stem for load_file, the passed
+    // `label` argument for load_string, or empty for a fresh-constructed
+    // system. Used by build_alias_table() as the stem qualifier on
+    // cross-file constant-name collisions.
+    std::string source_label_;
     mutable Trace trace;
     mutable int max_formula_depth = 1000;
     mutable bool numeric_mode = false;
@@ -746,6 +751,7 @@ x^(1/2) = sqrt(x)
         ExprArena::Scope scope(arena);
         if (base_dir.empty()) base_dir = ".";
         if (rewrite_rules.empty()) load_builtins();
+        if (source_label_.empty()) source_label_ = label;
         trace.step("loading " + label);
         std::istringstream ss(source);
         load_with_sections(read_all_lines(ss), section);
@@ -772,6 +778,8 @@ x^(1/2) = sqrt(x)
         base_dir = std::filesystem::path(path).parent_path().string();
         if (base_dir.empty()) base_dir = ".";
         if (rewrite_rules.empty()) load_builtins();
+        if (source_label_.empty())
+            source_label_ = std::filesystem::path(path).stem().string();
 
         std::ifstream f(path);
         if (!f.is_open())
@@ -877,6 +885,65 @@ x^(1/2) = sqrt(x)
         return bindings;
     }
 
+    // Build a user-alias table: every `name = <num>` default from this
+    // FormulaSystem and its cached sub-systems, keyed for recognition by
+    // expr_recognize_constants / fmt_exact_double.
+    //
+    //   - Entries whose NAME collides with a builtin constant (pi, e, phi)
+    //     are excluded — the builtin symbolic form always wins.
+    //   - Same NAME across multiple systems AGREEING in value (within
+    //     EPSILON_REL) → one unqualified entry.
+    //   - Same NAME across multiple systems DISAGREEING → one qualified
+    //     "stem.name" entry per distinct value, no unqualified form.
+    //
+    // The stem is the FormulaSystem's source_label_ (file stem from load_file,
+    // or the label argument from load_string). Called at format_derived time
+    // (after enumerate_candidates has populated sub_systems).
+    std::map<std::string, double> build_alias_table() const {
+        auto& builtins = builtin_constants();
+        // Raw (name, value, stem) tuples.
+        struct Entry { double value; std::string stem; };
+        std::map<std::string, std::vector<Entry>> grouped;
+        auto add_entries = [&](const std::map<std::string, double>& defs,
+                               const std::string& stem) {
+            for (const auto& [name, value] : defs) {
+                if (builtins.count(name)) continue;
+                grouped[name].push_back({value, stem});
+            }
+        };
+        add_entries(this->defaults, this->source_label_);
+        for (const auto& [key, sub_ptr] : this->sub_systems) {
+            if (!sub_ptr) continue;
+            (void)key;
+            add_entries(sub_ptr->defaults, sub_ptr->source_label_);
+        }
+
+        std::map<std::string, double> out;
+        for (auto& [name, entries] : grouped) {
+            // All agree? → unqualified.
+            bool all_agree = true;
+            double first_val = entries.front().value;
+            for (const auto& e : entries) {
+                if (!approx_equal(e.value, first_val)) { all_agree = false; break; }
+            }
+            if (all_agree) {
+                out[name] = first_val;
+                continue;
+            }
+            // Disagreement → emit one qualified entry per distinct value.
+            // Skip entries with empty stem (can't qualify) to keep output
+            // unambiguous.
+            std::set<std::string> seen_qualified;
+            for (const auto& e : entries) {
+                if (e.stem.empty()) continue;
+                std::string qname = e.stem + "." + name;
+                if (seen_qualified.insert(qname).second)
+                    out[qname] = e.value;
+            }
+        }
+        return out;
+    }
+
     // Format a derived ExprPtr as a string.
     // Default (exact) mode:
     //   - If the tree collapses to a pure number, emit fmt_exact_double —
@@ -910,14 +977,15 @@ x^(1/2) = sqrt(x)
             }
             return expr_to_string(subbed);
         }
+        auto aliases = build_alias_table();
         if (auto val = evaluate(distributed)) {
             // Checked<double> already excludes NaN; only guard against infinity.
-            if (!std::isinf(val.value())) return fmt_exact_double(val.value());
+            if (!std::isinf(val.value())) return fmt_exact_double(val.value(), aliases);
         } else {
             trace.calc("derive: symbolic result (cannot evaluate)");
         }
         // Recognize constants and fractions in the expression tree
-        const auto* recognized = expr_recognize_constants(distributed);
+        const auto* recognized = expr_recognize_constants(distributed, aliases);
         return expr_to_string(recognized);
     }
 

@@ -5,8 +5,12 @@
 // fraction and constant recognition to match --derive output ('pi', '5 / 3',
 // etc.). In approximate mode (--approximate, or '~' numeric results), skip
 // recognition and emit fmt_num — users asking for a float get a float.
-static std::string fmt_solve_result(double v, bool try_exact) {
-    return try_exact ? fmt_exact_double(v) : fmt_num(v);
+// User-defined aliases (from .fw `name = <num>` defaults) are threaded
+// through so solve output surfaces the user's names (e.g. `deg`) instead
+// of raw decimals when the numeric value matches.
+static std::string fmt_solve_result(double v, bool try_exact,
+        const std::map<std::string, double>& aliases = {}) {
+    return try_exact ? fmt_exact_double(v, aliases) : fmt_num(v);
 }
 
 int main(int argc, const char* argv[]) {
@@ -216,6 +220,10 @@ int main(int argc, const char* argv[]) {
         // recognition); require an active Scope around the output section.
         ExprArena::Scope solve_fmt_scope(sys.arena);
 
+        // User-defined aliases surface in exact-mode solve output — compute
+        // once per top-level solve and thread into every fmt_solve_result call.
+        auto solve_aliases = sys.build_alias_table();
+
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;
             if (explore_full) {
@@ -231,11 +239,11 @@ int main(int argc, const char* argv[]) {
 
             for (auto& [var, alias] : vars) {
                 if (solved.count(var)) {
-                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode) << '\n';
+                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode, solve_aliases) << '\n';
                 } else {
                     try {
                         double result = sys.resolve(var, query.bindings);
-                        std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode) << '\n';
+                        std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode, solve_aliases) << '\n';
                         solved[var] = result;
                     } catch (const std::runtime_error&) {
                         std::cout << alias << " = ?\n";
@@ -256,7 +264,7 @@ int main(int argc, const char* argv[]) {
                         double result = sys.resolve_one(q.variable, query.bindings);
                         bool exact = is_exact_result(q.variable);
                         std::cout << q.alias << (exact ? " = " : " ~ ")
-                                  << fmt_solve_result(result, exact && !approximate_mode) << '\n';
+                                  << fmt_solve_result(result, exact && !approximate_mode, solve_aliases) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
@@ -264,7 +272,7 @@ int main(int argc, const char* argv[]) {
                             bool exact = is_exact_result(q.variable);
                             for (auto r : result.discrete())
                                 std::cout << q.alias << (exact ? " = " : " ~ ")
-                                          << fmt_solve_result(r, exact && !approximate_mode) << '\n';
+                                          << fmt_solve_result(r, exact && !approximate_mode, solve_aliases) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
                         } else {
