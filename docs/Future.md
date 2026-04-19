@@ -169,7 +169,7 @@ Useful for documentation, papers, and reports. The expression tree already has a
 Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer. GCD normalization, sign normalization, rational arithmetic (add/sub/mul/div/pow). Constant recognition in derive output (`log(2)`, `log(3)`, `sqrt(N)`, `pi`, `e`). Rational display in solve output via `fmt_solve_result` (main.cpp) when the result is exact. No Expr struct changes — sizeof(Expr) unchanged.
 
 **Remaining enhancements:**
-- Extended constant table (configurable extra constants)
+- ~~Extended constant table (configurable extra constants)~~ — shipped 2026-04-19 (ccacc8e / 43cbc0d) via `fmt_exact_double` alias threading and `build_alias_table()`: user-defined `.fw` constants (e.g. `deg = pi/180`) are now recognized in solve + derive output.
 - Rational propagation in evaluate() for exact intermediate results
 
 ## 10a. Extending `evaluate_symbolic` for new number types
@@ -450,12 +450,14 @@ Dotted form interacts with #15 — a shared implementation of path-qualified
 variable names covers both CLI-query dotted access and in-file sub-scope
 references.
 
-## 22. Post-derive simplification and deduplication
+## 22. Post-derive simplification and deduplication — ✅ DONE (2026-04-19, ccacc8e / 43cbc0d / 319c9e3)
 
-### Problem
+Semantic fingerprint dedup shipped. `fingerprint_expr` + `canonicity_score` primitives in `expr.h`; streaming `winners` map in `derive_all`; `build_alias_table()` + `source_label_` on `FormulaSystem`; `RECOGNIZE_FRACTION_MAX_DEN` raised to 360 with `extra_constants` threading. Triangle reproducer: 294 → 159 output lines (46% reduction). 1927/1927 tests pass.
 
-`fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)"` produces 294
-distinct output lines. Many are semantically equivalent, just rendered
+**Original problem statement (archived):**
+
+`fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)"` used to produce 294
+distinct output lines. Many were semantically equivalent, just rendered
 differently — e.g.:
 
 ```
@@ -591,6 +593,18 @@ All 24 warnings cleared (8 `variableScope` + 16 shadow renames). No behavior cha
 ## 26. ~~`system.h:1890` redundantAssignment bug-smell~~ — **done 2026-04-19 (6caf0a4)**
 
 Debugger round confirmed truly-dead code (inner branch fires 2× in test suite but the else-if below independently re-finds the builtin). Four lines deleted; semantically equivalent. Findings preserved in `.fwiz-workflow/debug-findings-system-1890.md`.
+
+## 27. Unified tolerance doctrine
+
+Three independent thresholds were introduced across cycles without a shared rationale: `RECOGNIZE_FRACTION_MAX_DEN=360` (fit.h, fraction recognizer ceiling), `llround(v*1e9)` (expr.h, fingerprint rounding), and the pre-existing `EPSILON_REL` / `EPSILON_ZERO` (solver). These serve different concerns but should eventually be documented in one place — or consolidated where the concerns actually overlap. A "tolerance doctrine" section in Developer.md (or a single named header) that maps each threshold to its role and acceptable range would prevent future ad-hoc additions.
+
+**Reopen trigger:** any new numeric threshold introduced outside an existing named constant.
+
+## 28. Hook B — post-recognition re-simplification
+
+Hook B from the 2026-04-19 dedup cycle (research-brief.md) was deferred. The idea: after `expr_recognize_constants` rewrites numeric leaves into `pi` / `e` / `deg`, re-run `simplify` so freshly-introduced symbolic nodes can fold with their neighbors (e.g. `pi * 2 / pi → 2`). The cycle's visionary/critic synthesis argued the recognizer emits opaque Var nodes, which `simplify` already handles, so Hook B would be speculative. Not shipped.
+
+**Reopen trigger:** a specific derive-output line surfaces where post-recognition re-simplification would collapse `pi*2/pi → 2`, `deg * (180/pi) → 1`, or similar. Add the failing case to the test suite first, then re-evaluate whether Hook B is the right fix or whether a `.fw` rewrite rule suffices.
 
 ## Interaction with existing features
 

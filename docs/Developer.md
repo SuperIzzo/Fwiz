@@ -143,6 +143,10 @@ The core of the system. Contains:
 
 **evaluate_symbolic()** — Exact sibling of `evaluate()`. Returns an `ExprPtr` that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by the simplifier's constant-folding paths (`simplify_once_impl` BINOP num/num and FUNC_CALL all-numeric folds). This is the extension point for new number types — add complex or matrix dispatch here, not in `evaluate()`.
 
+**fingerprint_expr(ExprPtr, free_vars, test_points)** — Schwartz–Zippel numeric fingerprint for semantic comparison. Substitutes free variables at test points and collects finite `evaluate()` outputs. Companion to `evaluate` and `evaluate_symbolic` as a tree-querying primitive. Used by `derive_all` dedup.
+
+**canonicity_score(ExprPtr)** — Lex pair `{non_integer_num_count, leaf_count}` used as a tiebreaker when two candidates share a fingerprint. Lower is more canonical. Integer `NUM` leaves are not penalized.
+
 **substitute()** — Replaces a named variable with an expression throughout the tree.
 
 **substitute_builtin_constants()** — Tree walk; replaces Var nodes whose names appear in `builtin_constants()` (`pi`, `e`, `phi`) with their Num values. Used by the `--approximate` derive path before re-simplification. Other Var nodes pass through unchanged.
@@ -204,6 +208,15 @@ Conditions are checked before solving (if vars known) and after (to validate). G
 
 `mutable bool approximate_mode` on `FormulaSystem` (mirrors `--approximate` CLI flag). `format_derived` reads it: exact path uses `fmt_exact_double` (fit.h) on collapsed-numeric branches; approximate path runs `substitute_builtin_constants` (expr.h) — a tree walk replacing `pi`/`e`/`phi` Var nodes with their Num values — then re-simplifies so adjacent numerics fold.
 
+`std::string source_label_` on `FormulaSystem` — set to the file stem on `load_file` and to the explicit label on `load_string`. `build_alias_table()` walks `this->defaults` and each sub-system's `defaults`, groups constants by name, emits them unqualified when all files agree on the value (within `EPSILON_REL`), and emits `stem.name` qualified forms when the same name carries different values across files. Built-in constants (`pi`, `e`, `phi`) are never entered into the user alias table. `fmt_solve_result` (main.cpp) and `format_derived` (system.h) both thread the table into `fmt_exact_double`.
+
+`derive_all` dedup pipeline — after collecting raw candidates, a streaming `std::map<fp_key, {score, ExprPtr}> winners` retains at most one candidate per semantic fingerprint. Two semantic primitives in `expr.h` drive this:
+
+- **`fingerprint_expr(ExprPtr, free_vars, test_points)`** — Schwartz–Zippel numeric fingerprint: substitutes all free variables at each test point, calls `evaluate`, collects finite values; returns an empty vector when all test points lie outside the expression's domain. Test points use per-variable prime cycling `primes[(i+j)%3]` with `primes={2,3,5}`, keeping magnitudes small enough to avoid triangle-inequality violations.
+- **`canonicity_score(ExprPtr)`** — lex pair `{non_integer_num_count, leaf_count}`. Integer `NUM` leaves are not penalized, so `2*pi` scores the same as `pi`. Lower score wins; ties are broken in favour of the form already in `winners`.
+
+Candidates with empty fingerprints (all test points domain-excluded) fall back to a format-string sentinel: structurally-different always-NaN expressions stay separate; string-identical ones collapse.
+
 Results validated — NaN and infinity rejected, causing fallback to next equation.
 
 Error messages are specific: "No equation found for 'x'", "no value for 'y'", "all equations produced invalid results".
@@ -212,7 +225,7 @@ Error messages are specific: "No equation found for 'x'", "no value for 'y'", "a
 
 Curve fitting: `sample_function`, `fit_base`, `fit_all`, template functions, `recognize_constant`. Also hosts two output helpers shared with the solve/derive pipeline:
 
-**`fmt_exact_double(double v)`** — the single formatter for exact numeric output. Wraps `expr_recognize_constants(Expr::Num(v))` and stringifies the result; falls back to `fmt_num` when nothing matches. Used from `fmt_solve_result` (main.cpp, solve path) and `format_derived` (system.h, derive exact path), closing the historical solve/derive asymmetry where `pi` rendered differently on each path.
+**`fmt_exact_double(double v, aliases={})`** — the single formatter for exact numeric output. Wraps `expr_recognize_constants(Expr::Num(v))` and stringifies the result; falls back to `fmt_num` when nothing matches. Accepts an optional `aliases` map (name → value) so callers can inject file-specific constants (e.g. `deg=pi/180`) that render as their names rather than raw decimals. Used from `fmt_solve_result` (main.cpp) and `format_derived` (system.h). `RECOGNIZE_FRACTION_MAX_DEN` (fit.h, currently 360) governs the denominator ceiling for rational recognition.
 
 ### trace.h
 
@@ -227,7 +240,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-1851+ tests organized into functional tests, edge cases, and robustness groups:
+1927+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -288,7 +301,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 1851+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 1927+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 
