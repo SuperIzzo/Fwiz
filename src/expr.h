@@ -1560,6 +1560,57 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
     return Expr::BinOpExpr(BinOp::DIV, l, r);
 }
 
+// Distribute division over addition for derive-output simplification only:
+//   (a + b) / k   →   a/k + b/k
+//   (a - b) / k   →   a/k - b/k
+// Applies only when k is a numeric literal (is_num). For symbolic k, distributing
+// bloats expressions unnecessarily and would churn the general simplifier — that
+// is why this is NOT called from simplify_div. Intended call site: format_derived
+// (system.h), once, before re-simplification and string formatting. The subsequent
+// simplify() call collapses like-terms across the now-visible individual quotients
+// (e.g., -b/2 + b/2 → 0), which is the whole point of the pass.
+inline ExprPtr distribute_over_sum(const ExprPtr& e) {
+    if (!e) return e;
+    switch (e->type) {
+        case ExprType::NUM:
+        case ExprType::VAR:
+            return e;
+        case ExprType::UNARY_NEG: {
+            auto c = distribute_over_sum(e->child);
+            return c == e->child ? e : Expr::Neg(c);
+        }
+        case ExprType::FUNC_CALL: {
+            std::vector<ExprPtr> new_args;
+            new_args.reserve(e->args.size());
+            bool changed = false;
+            for (auto& a : e->args) {
+                auto na = distribute_over_sum(a);
+                if (na != a) changed = true;
+                new_args.push_back(na);
+            }
+            return changed ? Expr::Call(e->name, new_args) : e;
+        }
+        case ExprType::BINOP: {
+            auto l = distribute_over_sum(e->left);
+            auto r = distribute_over_sum(e->right);
+            if (e->op == BinOp::DIV && is_num(r) && !is_zero(r)
+                && l->type == ExprType::BINOP && is_additive(l->op)) {
+                // (A ± B) / k   →   A/k ± B/k
+                // Recurse on the new quotients so nested additive chains split
+                // all the way down — e.g. ((a + b) + c) / k splits fully to
+                // a/k + b/k + c/k rather than stopping at (a + b)/k + c/k.
+                auto new_left  = distribute_over_sum(Expr::BinOpExpr(BinOp::DIV, l->left, r));
+                auto new_right = distribute_over_sum(Expr::BinOpExpr(BinOp::DIV, l->right, r));
+                return Expr::BinOpExpr(l->op, new_left, new_right);
+            }
+            if (l == e->left && r == e->right) return e;
+            return Expr::BinOpExpr(e->op, l, r);
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    return e;
+}
+
 // ---- Simplify: main entry ----
 
 inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl — impl calls wrapper recursively

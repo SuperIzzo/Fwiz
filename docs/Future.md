@@ -531,6 +531,27 @@ deduplication becomes effective — many of the 294 current outputs collapse.
 - `--fit` interactions: fit output already goes through simplification; no
   change.
 
+### Post-commit follow-up: Semantic (numeric) fingerprint dedup
+
+Distribution over addition (Improvement A) landed. It successfully reduces
+individual expression complexity — `(-b/2 - c/2 + (b+4)/2 - 2)` now simplifies
+to `-c/2` as intended. But `fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)'`
+still produces ~294 output lines. Diagnostic: those 294 lines are not exact-string
+duplicates — they're **294 structurally-distinct derivations** produced by the
+solver exploring different candidate paths. Distribution simplifies each line but
+doesn't merge them.
+
+The real fix: **semantic/numeric fingerprint dedup**. After formatting each
+candidate, evaluate it at several random points in the free-variable space (small
+integer coordinates, avoiding known singularities). Group candidates whose
+fingerprints match to within `EPSILON_REL`. Surface one canonical form per group.
+
+Estimated cost: ~30 lines in `derive_all` — pick 3-5 random-but-seeded test
+points, evaluate each candidate, hash the result tuple, dedupe. Edge cases:
+expressions that evaluate to NaN at some points (fall back to second tuple),
+expressions with different valid domains (rare — accept false-dup as a
+non-blocking loss).
+
 ## Standard Library Ideas
 
 Beyond the collections in #8:

@@ -886,21 +886,28 @@ x^(1/2) = sqrt(x)
         // our own scope so callers don't have to — scopes nest, and the
         // cost of an extra stack frame is negligible for a one-shot format.
         ExprArena::Scope scope(arena);
+        // Distribute division over addition when the denominator is a numeric
+        // literal, then re-simplify. This exposes like-terms hidden inside
+        // (a + b) / k nodes so the simplifier can cancel them — e.g.
+        //   -b/2 - c/2 + (b+4)/2 - 2  →  -c/2
+        // Cross-equation elimination often emits such shapes; local to derive
+        // output so the general simplifier is not affected.
+        auto distributed = simplify(distribute_over_sum(result));
         if (approximate_mode) {
-            auto subbed = simplify(substitute_builtin_constants(result));
+            auto subbed = simplify(substitute_builtin_constants(distributed));
             if (auto val = evaluate(subbed)) {
                 if (!std::isinf(val.value())) return fmt_num(val.value());
             }
             return expr_to_string(subbed);
         }
-        if (auto val = evaluate(result)) {
+        if (auto val = evaluate(distributed)) {
             // Checked<double> already excludes NaN; only guard against infinity.
             if (!std::isinf(val.value())) return fmt_exact_double(val.value());
         } else {
             trace.calc("derive: symbolic result (cannot evaluate)");
         }
         // Recognize constants and fractions in the expression tree
-        auto recognized = expr_recognize_constants(result);
+        auto recognized = expr_recognize_constants(distributed);
         return expr_to_string(recognized);
     }
 

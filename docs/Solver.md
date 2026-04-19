@@ -158,6 +158,8 @@ width = V / h / d
 
 `pi`, `e`, `phi`, `sqrt(2)`, etc. are preserved symbolically. Structural fractions flow through unchanged.
 
+Derive output is post-processed to distribute division over addition when the divisor is a numeric literal (`(a+b)/2 → a/2 + b/2`). This exposes like-terms to the simplifier, so cancellations like `-b/2 + b/2 → 0` fire reliably.
+
 ---
 
 ## 7. Verification
