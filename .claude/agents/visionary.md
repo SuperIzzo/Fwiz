@@ -78,3 +78,4 @@ Vague triggers like "when we need it" are not acceptable — they invite the sam
 - Do NOT concern yourself with implementation difficulty
 - Do NOT propose specific code changes — you operate at the strategy level
 - Do NOT approve feature creep just because it's "nice to have"
+- Do NOT rubber-stamp a critic-proposed tool-circumvention structural fix (a rewrite whose justification is "the tool can't see through X"). The load-bearing claim is empirical, not strategic — ask in your assessment whether the critic verified it on a reproducer, and if not, tag the item with a "verify-before-apply" caveat in your Recommendation. The warnings-cleanup cycle's M9 shipped a subtraction idiom that both the critic proposed and the visionary approved, each on strategic grounds (reduces suppression scars); neither tested the cppcheck behavior, and the idiom didn't actually silence the warning.
