@@ -574,6 +574,30 @@ stdlib/
     hypothesis.fw       # t-test, chi-squared, p-values
 ```
 
+## 23. `group_like` contract inversion (expr.h)
+
+The two lambdas at expr.h:1259/1267 carry `// cppcheck-suppress constParameterReference` because they expose a `double&` write-back interface (`val(x) -> double&`). Structural fix: invert the contract to a `combine(dst, src)` callable — callee receives destination + source, writes the merged value directly, no reference escape. Eliminates both suppressions without silencing cppcheck.
+
+**Reopen trigger:** next warnings-cleanup cycle, or any refactor of additive/multiplicative flattening in expr.h.
+
+## 24. Widen `is_one`/`is_neg_one`/`is_neg` pointer overloads to `const Expr*`
+
+M10 widened `is_num`, `is_var`, `is_atomic`, `is_zero`, `is_neg_num` to `const Expr*`. The remaining three (`is_one`, `is_neg_one`, `is_neg`) were not flagged by cppcheck in that pass and were left at `ExprPtr`. They are now inconsistent with the rest of the set. Widening is a one-line each change per the M10 pattern.
+
+**Reopen trigger:** cppcheck regression on those overloads, or next warnings-cleanup cycle.
+
+## 25. M6/M7 deferred: `variableScope` and shadow renames
+
+Eight `variableScope` warnings remain: 6 in tests.cpp (moving `FormulaSystem` declarations inside try-blocks), 2 in system.h (`dead_ends` and `loaded`). Sixteen shadow warnings remain: 12 `shadowFunction` + 4 `shadowVariable`, largely `ev`/`ss`/`write_fw`/`arena`/`scope` locals in tests.cpp. Plan is in `.fwiz-workflow/design-warnings-cleanup.md` (M6, M7 sections). M7 specifically needs byte-identical diff evidence for the 4 `write_fw` lambda deletions per visionary's review.
+
+**Reopen trigger:** follow-up micro-cycle, or user request.
+
+## 26. `system.h:1890` redundantAssignment bug-smell
+
+Inside the `if (blt == custom_function_defs_.end())` branch, `blt` is reassigned to `custom_function_defs_.end()` — a no-op. This may be dead code from a refactor or a subtle logic error in the custom-function vs builtin lookup path. Requires a debugger round before touching; do not suppress blindly.
+
+**Reopen trigger:** any solver regression on custom function lookup, or routine investigation.
+
 ## Interaction with existing features
 
 - **--verify**: conditions become part of verification — check that inputs satisfy all relevant conditions
