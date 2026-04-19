@@ -63,6 +63,13 @@ Given a planner's proposal and a critic's simplicity review, assess:
 
 ### Recommendation
 {Go ahead / Modify / Reconsider — with specific reasoning}
+
+### Reopen Triggers (for Modify / Reconsider verdicts)
+{When a proposal should be deferred or reduced in scope, specify the concrete condition(s) under which it should be revisited. Examples:
+- "Revisit when docs/Future.md #N ships and its design needs this primitive."
+- "Revisit when a SECOND unrelated feature wants this aux-index mechanism."
+- "Revisit when the test suite contains a case this proposal uniquely solves."
+Vague triggers like "when we need it" are not acceptable — they invite the same proposal to be re-litigated each cycle. See `.fwiz-workflow/design-formula-call-typed.md` for a good set of concrete triggers that saved 180 LOC of speculative infrastructure.}
 ```
 
 ## What You Do NOT Do
