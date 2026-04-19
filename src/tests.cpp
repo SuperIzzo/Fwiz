@@ -1299,9 +1299,11 @@ void test_system_edge() {
 
     // Cannot open nonexistent file
     {
-        FormulaSystem sys;
         bool threw = false;
-        try { sys.load_file("/tmp/nonexistent_fwiz_file.fw"); } catch (...) { threw = true; }
+        try {
+            FormulaSystem sys;
+            sys.load_file("/tmp/nonexistent_fwiz_file.fw");
+        } catch (...) { threw = true; }
         ASSERT(threw, "nonexistent file throws");
     }
 }
@@ -1744,10 +1746,12 @@ void test_file_access() {
 
     // Nonexistent file
     {
-        FormulaSystem sys;
         bool threw = false;
         std::string msg;
-        try { sys.load_file("/tmp/fwiz_no_such_file.fw"); }
+        try {
+            FormulaSystem sys;
+            sys.load_file("/tmp/fwiz_no_such_file.fw");
+        }
         catch (const std::exception& e) { threw = true; msg = e.what(); }
         ASSERT(threw, "nonexistent file throws");
         ASSERT(msg.find("Cannot open") != std::string::npos, "nonexistent: clear message");
@@ -1755,10 +1759,12 @@ void test_file_access() {
 
     // Empty path
     {
-        FormulaSystem sys;
         bool threw = false;
         std::string msg;
-        try { sys.load_file(""); }
+        try {
+            FormulaSystem sys;
+            sys.load_file("");
+        }
         catch (const std::exception& e) { threw = true; msg = e.what(); }
         ASSERT(threw, "empty path throws");
         ASSERT(msg.find("No file path") != std::string::npos, "empty path: clear message");
@@ -1767,10 +1773,12 @@ void test_file_access() {
     // Directory instead of file
     {
         system("mkdir -p /tmp/fwiz_test_dir.fw");
-        FormulaSystem sys;
         bool threw = false;
         std::string msg;
-        try { sys.load_file("/tmp/fwiz_test_dir.fw"); }
+        try {
+            FormulaSystem sys;
+            sys.load_file("/tmp/fwiz_test_dir.fw");
+        }
         catch (const std::exception& e) { threw = true; msg = e.what(); }
         ASSERT(threw, "directory throws");
         ASSERT(msg.find("directory") != std::string::npos, "directory: clear message");
@@ -1779,9 +1787,11 @@ void test_file_access() {
 
     // Nested nonexistent directory path
     {
-        FormulaSystem sys;
         bool threw = false;
-        try { sys.load_file("/tmp/no/such/dir/file.fw"); }
+        try {
+            FormulaSystem sys;
+            sys.load_file("/tmp/no/such/dir/file.fw");
+        }
         catch (...) { threw = true; }
         ASSERT(threw, "nested missing path throws");
     }
@@ -1800,9 +1810,11 @@ void test_file_access() {
     // Broken symlink
     {
         system("ln -sf /tmp/fwiz_nonexistent_target /tmp/fwiz_broken.fw");
-        FormulaSystem sys;
         bool threw = false;
-        try { sys.load_file("/tmp/fwiz_broken.fw"); }
+        try {
+            FormulaSystem sys;
+            sys.load_file("/tmp/fwiz_broken.fw");
+        }
         catch (...) { threw = true; }
         ASSERT(threw, "broken symlink throws");
         system("rm -f /tmp/fwiz_broken.fw");
@@ -5943,24 +5955,24 @@ void test_strategy_coverage() {
 void test_builtin_exhaustive() {
     SECTION("Builtin Functions Exhaustive");
 
-    auto ev = [](const char* s) { return evaluate(parse(s)).value(); };
+    auto eval_str = [](const char* s) { return evaluate(parse(s)).value(); };
     auto ev_checked = [](const char* s) { return evaluate(parse(s)); };
 
     // All 9 builtins
-    ASSERT_NUM(ev("sqrt(16)"), 4, "sqrt(16)=4");
-    ASSERT_NUM(ev("abs(-7)"), 7, "abs(-7)=7");
-    ASSERT_NUM(ev("sin(0)"), 0, "sin(0)=0");
-    ASSERT_NUM(ev("cos(0)"), 1, "cos(0)=1");
-    ASSERT_NUM(ev("tan(0)"), 0, "tan(0)=0");
-    ASSERT_NUM(ev("log(1)"), 0, "log(1)=0");
-    ASSERT_NUM(ev("asin(0)"), 0, "asin(0)=0");
-    ASSERT_NUM(ev("acos(1)"), 0, "acos(1)=0");
-    ASSERT_NUM(ev("atan(0)"), 0, "atan(0)=0");
+    ASSERT_NUM(eval_str("sqrt(16)"), 4, "sqrt(16)=4");
+    ASSERT_NUM(eval_str("abs(-7)"), 7, "abs(-7)=7");
+    ASSERT_NUM(eval_str("sin(0)"), 0, "sin(0)=0");
+    ASSERT_NUM(eval_str("cos(0)"), 1, "cos(0)=1");
+    ASSERT_NUM(eval_str("tan(0)"), 0, "tan(0)=0");
+    ASSERT_NUM(eval_str("log(1)"), 0, "log(1)=0");
+    ASSERT_NUM(eval_str("asin(0)"), 0, "asin(0)=0");
+    ASSERT_NUM(eval_str("acos(1)"), 0, "acos(1)=0");
+    ASSERT_NUM(eval_str("atan(0)"), 0, "atan(0)=0");
 
     // Roundtrip consistency
-    ASSERT_NUM(ev("sin(asin(0.3))"), 0.3, "sin(asin(0.3))=0.3");
-    ASSERT_NUM(ev("cos(acos(0.7))"), 0.7, "cos(acos(0.7))=0.7");
-    ASSERT_NUM(ev("asin(sin(0.5))"), 0.5, "asin(sin(0.5))=0.5");
+    ASSERT_NUM(eval_str("sin(asin(0.3))"), 0.3, "sin(asin(0.3))=0.3");
+    ASSERT_NUM(eval_str("cos(acos(0.7))"), 0.7, "cos(acos(0.7))=0.7");
+    ASSERT_NUM(eval_str("asin(sin(0.5))"), 0.5, "asin(sin(0.5))=0.5");
 
     // Unknown function yields empty Checked
     ASSERT(!ev_checked("foobar(1)").has_value(), "unknown function yields empty");
@@ -5978,14 +5990,14 @@ void test_builtin_exhaustive() {
 void test_operator_metadata() {
     SECTION("Operator Metadata");
 
-    auto ev = [](const char* s) { return evaluate(parse(s)).value(); };
+    auto eval_str = [](const char* s) { return evaluate(parse(s)).value(); };
 
     // All 5 operators evaluate correctly
-    ASSERT_NUM(ev("3 + 4"), 7, "ADD eval");
-    ASSERT_NUM(ev("10 - 3"), 7, "SUB eval");
-    ASSERT_NUM(ev("3 * 4"), 12, "MUL eval");
-    ASSERT_NUM(ev("12 / 4"), 3, "DIV eval");
-    ASSERT_NUM(ev("2 ^ 10"), 1024, "POW eval");
+    ASSERT_NUM(eval_str("3 + 4"), 7, "ADD eval");
+    ASSERT_NUM(eval_str("10 - 3"), 7, "SUB eval");
+    ASSERT_NUM(eval_str("3 * 4"), 12, "MUL eval");
+    ASSERT_NUM(eval_str("12 / 4"), 3, "DIV eval");
+    ASSERT_NUM(eval_str("2 ^ 10"), 1024, "POW eval");
 
     // Precedence in printing: no unnecessary parens
     ASSERT_EQ(expr_to_string(parse("a + b * c")), "a + b * c", "MUL higher than ADD: no parens");
@@ -6006,25 +6018,25 @@ void test_operator_metadata() {
 void test_simplify_rule_interactions() {
     SECTION("Simplifier: Rule Interactions");
 
-    auto ss = [](const char* s) { return expr_to_string(simplify(parse(s))); };
+    auto simp_str = [](const char* s) { return expr_to_string(simplify(parse(s))); };
 
     // Like-terms + constant reassociation: x + 2*x + 3 + 4*x + 1 → 7*x + 4
-    ASSERT_EQ(ss("x + 2 * x + 3 + 4 * x + 1"), "7 * x + 4",
+    ASSERT_EQ(simp_str("x + 2 * x + 3 + 4 * x + 1"), "7 * x + 4",
         "like-terms + constant: x+2x+3+4x+1 → 7x+4");
 
     // Power mul then like-term: x^2 + x*x + 3*x^2
     // x*x → x^2 (mul-to-pow), then x^2 + x^2 + 3*x^2 → 5*x^2 (like-terms)
-    ASSERT_EQ(ss("x^2 + x * x + 3 * x^2"), "5 * x^2",
+    ASSERT_EQ(simp_str("x^2 + x * x + 3 * x^2"), "5 * x^2",
         "pow-mul then like-term: x^2+x*x+3x^2 → 5x^2");
 
     // Symmetric self-division: (2*x) / (2*x) → 1
-    ASSERT_EQ(ss("(2 * x) / (2 * x)"), "1", "(2x)/(2x) → 1");
+    ASSERT_EQ(simp_str("(2 * x) / (2 * x)"), "1", "(2x)/(2x) → 1");
 
     // Negation of subtraction then subtract: -(a-b) - c → b - a - c
-    ASSERT_EQ(ss("-(a - b) - c"), "-a + b - c", "-(a-b)-c → -a+b-c");
+    ASSERT_EQ(simp_str("-(a - b) - c"), "-a + b - c", "-(a-b)-c → -a+b-c");
 
     // Division then multiply back: x / 2 * 2 → x
-    ASSERT_EQ(ss("x / 2 * 2"), "x", "x/2*2 → x");
+    ASSERT_EQ(simp_str("x / 2 * 2"), "x", "x/2*2 → x");
 
     // Deep mixed chain: ((x/2)*3 - 4)*2 + 5
     // x/2*3 → x*1.5, (x*1.5 - 4)*2 → 2*x*1.5 - 8 → x*3 - 8, +5 → x*3 - 3
@@ -6042,10 +6054,10 @@ void test_simplify_rule_interactions() {
     }
 
     // Function arg simplification: sqrt((x+0) * 1) → sqrt(x)
-    ASSERT_EQ(ss("sqrt((x + 0) * 1)"), "sqrt(x)", "func args simplified: sqrt((x+0)*1) → sqrt(x)");
+    ASSERT_EQ(simp_str("sqrt((x + 0) * 1)"), "sqrt(x)", "func args simplified: sqrt((x+0)*1) → sqrt(x)");
 
     // x*x - x*x → 0 (mul-to-pow then like-term subtraction)
-    ASSERT_EQ(ss("x * x - x * x"), "0", "x*x - x*x → 0");
+    ASSERT_EQ(simp_str("x * x - x * x"), "0", "x*x - x*x → 0");
 
     // Alternating powers and constants: x^2 * 2 * x^2 * 3
     // Should eventually reach 6*x^4
@@ -6056,13 +6068,13 @@ void test_simplify_rule_interactions() {
     }
 
     // Chain: 2*x + 3*x - x → 4*x
-    ASSERT_EQ(ss("2 * x + 3 * x - x"), "4 * x", "2x+3x-x → 4x");
+    ASSERT_EQ(simp_str("2 * x + 3 * x - x"), "4 * x", "2x+3x-x → 4x");
 
     // Negation chain: -(-(-x)) → -x
-    ASSERT_EQ(ss("-(-(-x))"), "-x", "triple negation → -x");
+    ASSERT_EQ(simp_str("-(-(-x))"), "-x", "triple negation → -x");
 
     // Mixed div/mul reassociation: ((x / 2) * 3) / 3 → x / 2
-    ASSERT_EQ(ss("((x / 2) * 3) / 3"), "0.5 * x", "((x/2)*3)/3 → 0.5*x");
+    ASSERT_EQ(simp_str("((x / 2) * 3) / 3"), "0.5 * x", "((x/2)*3)/3 → 0.5*x");
 }
 
 void test_simplify_flatten_targets() {
@@ -6204,8 +6216,8 @@ void test_simplify_div_zero_denom() {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(3), Expr::Num(0));
         const auto* s = simplify(e);
         ASSERT(s != nullptr, "simplify(3/0) does not crash");
-        auto ev = s ? evaluate(*s) : Checked<double>{};
-        ASSERT(!ev.has_value(), "simplify(3/0) evaluates to empty Checked");
+        auto result = s ? evaluate(*s) : Checked<double>{};
+        ASSERT(!result.has_value(), "simplify(3/0) evaluates to empty Checked");
     }
 
     // Case 2: MUL(Num(3), Var(x)) / Num(0) — Num-on-left MUL branch.
@@ -6220,8 +6232,8 @@ void test_simplify_div_zero_denom() {
         // fold to a non-DIV form that lies about division-by-zero.
         // Substitute x=5 and check evaluate is empty (NaN sentinel).
         const auto* subst = substitute(s, "x", Expr::Num(5));
-        auto ev = evaluate(*subst);
-        ASSERT(!ev.has_value(), "(3*x)/0 with x=5 stays empty Checked");
+        auto result = evaluate(*subst);
+        ASSERT(!result.has_value(), "(3*x)/0 with x=5 stays empty Checked");
     }
 
     // Case 3: MUL(Var(x), Num(3)) / Num(0) — Num-on-right MUL branch.
@@ -6231,8 +6243,8 @@ void test_simplify_div_zero_denom() {
         auto s = simplify(e);
         ASSERT(s != nullptr, "simplify((x*3)/0) does not crash");
         const auto* subst = substitute(s, "x", Expr::Num(5));
-        auto ev = evaluate(*subst);
-        ASSERT(!ev.has_value(), "(x*3)/0 with x=5 stays empty Checked");
+        auto result = evaluate(*subst);
+        ASSERT(!result.has_value(), "(x*3)/0 with x=5 stays empty Checked");
     }
 
     // Case 4: Num(0) / Num(0) — 0/0 preserves both operands, evaluate empty.
@@ -6242,8 +6254,8 @@ void test_simplify_div_zero_denom() {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(0), Expr::Num(0));
         const auto* s = simplify(e);
         ASSERT(s != nullptr, "simplify(0/0) does not crash");
-        auto ev = s ? evaluate(*s) : Checked<double>{};
-        ASSERT(!ev.has_value(), "simplify(0/0) evaluates to empty Checked");
+        auto result = s ? evaluate(*s) : Checked<double>{};
+        ASSERT(!result.has_value(), "simplify(0/0) evaluates to empty Checked");
     }
 
     // --- Shell cases: end-to-end, CLI must not abort with make_rational. ---
@@ -8893,8 +8905,8 @@ void test_undefined() {
         sys.load_string("y = a / a\n");
         simplify_clear_assumptions();
         RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
-        ExprArena arena;
-        ExprArena::Scope scope(arena);
+        ExprArena arena2;
+        ExprArena::Scope scope2(arena2);
         const auto* e = simplify(parse("a / a"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "1", "inherent: a/a = 1 (got " + expr_to_string(e) + ")");
@@ -8913,8 +8925,8 @@ void test_undefined() {
         sys.load_string("y = log(a^3)\n");
         simplify_clear_assumptions();
         RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
-        ExprArena arena;
-        ExprArena::Scope scope(arena);
+        ExprArena arena2;
+        ExprArena::Scope scope2(arena2);
         const auto* e = simplify(parse("log(a^3)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "3 * log(a)",
@@ -8991,14 +9003,14 @@ void test_positional_args() {
     SECTION("Positional Arguments");
 
     // Write test files for cross-file formula calls with positional args
-    auto write_fw = [](const std::string& path, const std::string& content) {
+    auto write_fw_local = [](const std::string& path, const std::string& content) {
         std::ofstream f(path);
         f << content;
     };
 
     // 1. Basic: square(5) → square(x=5, result=?)
     {
-        write_fw("/tmp/tpa_square.fw",
+        write_fw_local("/tmp/tpa_square.fw",
             "[square(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9014,7 +9026,7 @@ void test_positional_args() {
 
     // 2. Multiple args: myadd(3, 4) → myadd(a=3, b=4, result=?)
     {
-        write_fw("/tmp/tpa_myadd.fw",
+        write_fw_local("/tmp/tpa_myadd.fw",
             "[myadd(a, b) -> result]\nresult = a + b\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9030,7 +9042,7 @@ void test_positional_args() {
 
     // 3. Reverse: solve for input given output
     {
-        write_fw("/tmp/tpa_sq2.fw",
+        write_fw_local("/tmp/tpa_sq2.fw",
             "[sq2(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9046,7 +9058,7 @@ void test_positional_args() {
 
     // 4. Expression args: square(2+3) → square(x=5, result=?)
     {
-        write_fw("/tmp/tpa_sq3.fw",
+        write_fw_local("/tmp/tpa_sq3.fw",
             "[sq3(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9062,7 +9074,7 @@ void test_positional_args() {
 
     // 5. @extern fast path: use C++ function pointer directly
     {
-        write_fw("/tmp/tpa_mysin.fw",
+        write_fw_local("/tmp/tpa_mysin.fw",
             "[mysin(x) -> result]\n@extern sin\nresult = x\n");  // fallback eq
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9078,7 +9090,7 @@ void test_positional_args() {
 
     // 6. @extern with inverse: solve for input given output
     {
-        write_fw("/tmp/tpa_mysqrt.fw",
+        write_fw_local("/tmp/tpa_mysqrt.fw",
             "[mysqrt(x) -> result]\n@extern sqrt\nx = result^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9169,11 +9181,11 @@ void test_semicolon_separator() {
 
     // 4. Single-line function def works end-to-end
     {
-        auto write_fw = [](const std::string& path, const std::string& content) {
+        auto write_fw_local = [](const std::string& path, const std::string& content) {
             std::ofstream f(path);
             f << content;
         };
-        write_fw("/tmp/tpa_oneline.fw",
+        write_fw_local("/tmp/tpa_oneline.fw",
             "[oneline(x) -> result] result = x * 10\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
@@ -9189,11 +9201,11 @@ void test_semicolon_separator() {
 
     // 5. Sugar: [f(x) -> result] = expr  →  result = expr
     {
-        auto write_fw = [](const std::string& path, const std::string& content) {
+        auto write_fw_local = [](const std::string& path, const std::string& content) {
             std::ofstream f(path);
             f << content;
         };
-        write_fw("/tmp/tpa_sugar.fw", "[sugar(x) -> result] = x^2 + 1\n");
+        write_fw_local("/tmp/tpa_sugar.fw", "[sugar(x) -> result] = x^2 + 1\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
         sys.load_string("y = tpa_sugar(3)\n");
@@ -9224,11 +9236,11 @@ void test_semicolon_separator() {
 
     // 7. Inline header + semicolons with = sugar
     {
-        auto write_fw = [](const std::string& path, const std::string& content) {
+        auto write_fw_local = [](const std::string& path, const std::string& content) {
             std::ofstream f(path);
             f << content;
         };
-        write_fw("/tmp/tpa_sugar2.fw",
+        write_fw_local("/tmp/tpa_sugar2.fw",
             "[sugar2(x) -> result] = x^2 iff x >= 0; = -x^2 iff x < 0\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";

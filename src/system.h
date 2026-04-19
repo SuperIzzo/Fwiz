@@ -1218,8 +1218,8 @@ x^(1/2) = sqrt(x)
 
         // Try solving for exact values
         std::vector<double> exact_results;
-        DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
         try {
+            DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
             exact_results = solve_all(target, prepared, {}, 0, dead_ends);
 
             // Cross-equation validation: verify each candidate against ALL equations
@@ -1915,11 +1915,11 @@ private:
         sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
 
         // Try loading from file first; fall back to embedded definition
-        bool loaded = false;
         if (!def_source) {
             sub->load_file(abs_path, section);
         } else {
             // Try file first (user can override definitions)
+            bool loaded = false;
             try {
                 std::ifstream f(abs_path);
                 if (f.is_open()) {
