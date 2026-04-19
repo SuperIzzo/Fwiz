@@ -249,6 +249,16 @@ public:
     // SolveBudgetExceededError (not a runtime_error — bypasses the many
     // silent-catch sites in the solver). Insurance net: should never fire
     // in practice given Part A's dead-end sharing.
+    //
+    // Value chosen at 100k (not the triangle-hang design's original 1k intent)
+    // because the rectangle puzzle test (area=12, perimeter=14 solve for w)
+    // legitimately consumes ~12k charges — 200 scan samples × 2 probe_vars ×
+    // recursive resolves each. 1k crashed that test. 100k gives a ~60s
+    // wall-clock ceiling on truly pathological inputs (e.g. genuinely
+    // under-constrained triangle queries) while never firing on legitimate
+    // hard problems. A principled reduction would require shrinking
+    // NUMERIC_DEFAULT_SAMPLES or refining the system-probe fallback — logged
+    // as a follow-up in docs/Future.md if it becomes a user complaint.
     static constexpr int MAX_SOLVE_BUDGET = 100000;
     static inline thread_local int solve_budget_remaining_ = 0;
     static inline thread_local int solve_budget_depth_ = 0; // nesting depth

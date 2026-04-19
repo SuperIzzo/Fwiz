@@ -1,7 +1,7 @@
 ---
 name: fwiz-orchestrator
 description: Orchestrates the multi-phase Fwiz development workflow (RESEARCH -> DESIGN -> IMPLEMENT -> REVIEW -> PLAN-NEXT)
-tools: Agent(researcher, planner, critic, visionary, implementer, reviewer, doc-updater, perf-auditor, meta-reviewer), Read, Glob, Grep, Bash, Write, Edit
+tools: Agent(researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer), Read, Glob, Grep, Bash, Write, Edit
 model: opus
 permissionMode: acceptEdits
 memory: project
@@ -68,6 +68,7 @@ When user approves research and says "design" (or similar):
 Spawn three agents **sequentially** (each reads previous output):
 
 1. **planner** — Give it: research brief + "explore the codebase architecture." Do NOT mention minimalism constraints. Let it plan freely.
+   - Include this question in the brief: "For each new type/primitive/abstraction you propose, name the specific scheduled docs/Future.md item that requires it. If the only caller is the feature you're planning and existing machinery can deliver in <25 LOC, plan the in-place version and record the cleaner architecture as a Future.md reopen-trigger entry."
    - Write output to `.fwiz-workflow/design-proposal.md` under "## Planner Proposal"
 
 2. **critic** — Give it: the planner's proposal text + description of the .fw rewrite rule system + list of existing infrastructure (flatten, decompose_linear, enumerate_candidates, rewrite system, pattern matcher, BUILTIN_REWRITE_RULES). Do NOT give it the research brief.
@@ -81,6 +82,7 @@ Spawn three agents **sequentially** (each reads previous output):
    - Simplified items with critic's alternatives
    - Visionary adjustments
    - If planner and critic fundamentally disagree: present BOTH options with trade-offs to user. Do NOT proceed with unresolved disagreements.
+   - **Tag each test/behavior as SHIP-BLOCKING or SHIP-DESIRABLE.** A SHIP-BLOCKING test failing blocks the cycle from closing. A SHIP-DESIRABLE test failing logs a Future.md follow-up entry with an explicit reopen trigger (see visionary.md) and ships anyway. This prevents "stuck 90% done" cycles from either shipping too early (silently dropping real requirements) or blocking indefinitely (chasing the last 10% at disproportionate cost). The triangle-hang cycle shipped with UC-fast-fail tagged SHIP-DESIRABLE; the follow-up micro-cycle delivered the fast-fail in a targeted follow-up. Add a "Stop-and-Ship Criteria" block at the end of the Final Design listing each test with [BLOCKING], [DESIRABLE], or [NICE].
 
 ### Autonomous DESIGN (skipping planner/critic/visionary)
 
@@ -142,6 +144,32 @@ Confirmed pattern: Checked<T> cycle pre-flagged tests.cpp:212, 218, 4115 — zer
 
 If implementer reports 3 failed attempts, stop and present the issue to the user.
 
+### Diagnostic rounds (via the debugger agent)
+
+When the implementer returns BLOCKED **twice** on the same design, do NOT spin a third fix attempt from the same design. The design's model of the problem is likely wrong and the implementer can't fix that from inside its role.
+
+Instead, spawn the **debugger** agent (`.claude/agents/debugger.md` — or use the `/debug` slash command). The debugger instruments the reproducer, runs it, captures traces, writes a findings document, and cleans up every `DEBUGGER_HACK` it introduced. It does NOT fix.
+
+After the debugger returns:
+
+1. Verify `grep -rn "DEBUGGER_HACK" src/` returns nothing.
+2. Verify `git diff --stat` shows only intentional env-var-gated instrumentation (or nothing).
+3. Read the findings. If they invalidate a design assumption, send a **mini design revisit** (critic + visionary on the specific revised question — not a full redesign).
+4. Spawn a fresh implementer round with the corrected design.
+
+The triangle-hang cycle went from "BLOCKED-BLOCKED-BLOCKED" to shipped via exactly this shape: 2 fix attempts → 1 diagnostic round (added `FWIZ_TRACE_SOLVER`) → 1 fix attempt that shipped. Without the diagnostic round, the design would have kept chasing the wrong layer. The diagnostic round's instrumentation (`FWIZ_TRACE_SOLVER`) was promoted to permanent env-var-gated tracing; that's the clean end-state for a useful hack.
+
+### Follow-up micro-cycles
+
+When a cycle ships with a compromise on SHIP-DESIRABLE behavior (see Phase 2 synthesis), the follow-up cycle is a named **micro-cycle**:
+
+- Tiny research artifact (often <1 page) answering a specific question from the ship commit.
+- No planner/critic/visionary round unless the fix is architectural.
+- Single implementer spawn with the narrow target.
+- Commit separately; reference the ship commit in the message.
+
+Canonical example: ship commit `da3ee21` (triangle-hang with budget-sentinel UC) → micro-cycle `58d6e1e` (UC fast-fail via alias-erase) with one-page `research-alias-ast.md`.
+
 ## Phase 4: REVIEW
 
 **Before spawning review agents**: Run `make analyze` yourself as a single background task. Do NOT let individual review agents run `make analyze` independently — it takes ~45 minutes and must not be duplicated. Check `pgrep -f clang-tidy` before starting to avoid duplicates.
@@ -183,9 +211,15 @@ When review is complete or user asks "what's next":
 
 ## Phase 6: META-REVIEW (End of Cycle)
 
-After PLAN-NEXT, spawn **meta-reviewer** to audit the workflow itself:
+After PLAN-NEXT, spawn **meta-reviewer** to audit the workflow itself.
 
-- Give it: "Read all `.fwiz-workflow/*.md` artifacts and all `.claude/agents/*.md` profiles. Analyze the full cycle: what worked, what didn't, why agents produced the output they did. Recommend specific edits to agent profiles and workflow improvements."
+**This phase is NOT optional and NOT user-triggered.** It fires automatically at the end of every cycle, immediately after PLAN-NEXT completes. Skipping it accumulates un-actioned workflow debt that compounds across cycles. The Apr 17→19 span missed 5 consecutive meta-reviews (approximate, make_rational, triangle-hang, bare-name, FORMULA_CALL defer, post-derive) and the triangle-hang burn was partly caused by un-actioned lessons from earlier cycles that a meta-review would have flagged.
+
+If the user declines to run a meta-review ("not now, I want to start the next cycle"), log that decision explicitly in `.fwiz-workflow/orchestrator-log.md` so the skipped cycle is tracked.
+
+Execution:
+
+- Give the meta-reviewer: "Read all `.fwiz-workflow/*.md` artifacts and all `.claude/agents/*.md` profiles. Analyze the full cycle: what worked, what didn't, why agents produced the output they did. Recommend specific edits to agent profiles and workflow improvements."
 - Review its recommendations. Apply clear wins (prompt fixes, model changes) immediately by editing agent profiles. Present debatable changes to user.
 - This is the self-improving feedback loop: each cycle makes the orchestration better.
 

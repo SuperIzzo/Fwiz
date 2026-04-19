@@ -158,10 +158,20 @@ Activate with `claude --agent fwiz-orchestrator` for multi-phase development:
 USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → repeat
 ```
 
-**Agents** (in `.claude/agents/`): orchestrator, researcher, planner, critic, visionary, implementer, reviewer, doc-updater, perf-auditor. Each has focused context and restricted tools — separation of concerns.
+**Agents** (in `.claude/agents/`): orchestrator, researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer. Each has focused context and restricted tools — separation of concerns.
+
+**Slash commands** (in `.claude/commands/`): `/debug <reproducer>` spawns the debugger agent against a specific failing case.
 
 **Artifacts** (in `.fwiz-workflow/`, gitignored): research-brief.md, design-proposal.md, implementation-log.md, review-notes.md, next-priorities.md.
 
 **Quality bar**: `make test && make sanitize && make analyze` + periodic data locality / disassembly audits on hot paths.
 
 **Core principle**: least code, least features, maximum flexibility, tiny fast core, infinite extendability via .fw rules.
+
+### Recovery protocols
+
+- **3-strike implementer rule**: if the implementer reports BLOCKED three times on the same design, the design is wrong. Do not spawn a fourth attempt — revise the design (mini critic+visionary round on the specific failing hypothesis).
+- **Diagnostic round**: after two BLOCKED reports, the next spawn is the `debugger` agent (or the `/debug` command). It instruments, measures, and writes findings — does NOT fix. See `.claude/agents/debugger.md`.
+- **Ship-with-followup**: if the cycle has shipped SHIP-BLOCKING tests but has SHIP-DESIRABLE outstanding, close the cycle, log Future.md entries with reopen triggers, and spin a micro-cycle for the follow-up.
+- **Measure before design** (hang/perf tasks): research phase MUST include an "Empirical bisection" section — run the reproducer with every orthogonal flag, time each, identify which variants fail the same way. Skip only if the user explicitly says "the hang is in [specific layer]" with authority. Triangle-hang wasted two design rounds this way.
+- **Meta-review fires automatically** at end of every cycle, not on user request. See `.claude/agents/fwiz-orchestrator.md` Phase 6.
