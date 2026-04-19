@@ -207,7 +207,7 @@ inline std::string diag_set_str(const std::set<std::string>& s) {
 inline std::string diag_expr_preview(const ExprPtr& e, size_t limit = 60) {
     if (!e) return "<null>";
     std::string s = expr_to_string(e);
-    if (s.size() > limit) s = s.substr(0, limit) + "...";
+    if (s.size() > limit) { s.resize(limit); s += "..."; }
     return s;
 }
 

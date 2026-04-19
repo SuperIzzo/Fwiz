@@ -9,7 +9,7 @@ static std::string fmt_solve_result(double v, bool try_exact) {
     return try_exact ? fmt_exact_double(v) : fmt_num(v);
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, const char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: fwiz [flags] <formula>(var=?, var=?alias, var=value, ...)\n"
                   << "       fwiz [flags] (var=?, var=value, ...) \"equations\"\n"
