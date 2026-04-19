@@ -6446,7 +6446,7 @@ void test_derive_formula_call() {
         sys.load_file("/tmp/tdf_unfold.fw");
         try {
             auto result = sys.derive("n", {}, {{"y", "y"}});
-            ASSERT_EQ(result, "(y - 4) / 2", "derive: unfold formula call and solve for input");
+            ASSERT_EQ(result, "y / 2 - 2", "derive: unfold formula call and solve for input");
         } catch (const std::exception& e) {
             ASSERT(false, std::string("derive: unfold threw: ") + e.what());
         }
@@ -6464,7 +6464,7 @@ void test_derive_formula_call() {
         sys.load_file("/tmp/tdf_rev.fw");
         try {
             auto result = sys.derive("x", {}, {{"y", "y"}});
-            ASSERT_EQ(result, "(y - 1) / 3", "derive: reverse through formula call");
+            ASSERT_EQ(result, "y / 3 + (-1) / 3", "derive: reverse through formula call");
         } catch (const std::exception& e) {
             ASSERT(false, std::string("derive: reverse unfold threw: ") + e.what());
         }
@@ -6570,7 +6570,7 @@ void test_derive_formula_call() {
         FormulaSystem sys;
         sys.load_file("/tmp/tdf_reappear.fw");
         auto result = sys.derive("n", {}, {{"y", "y"}});
-        ASSERT_EQ(result, "(y - 3) / 3", "derive: unfold with target reappearing");
+        ASSERT_EQ(result, "y / 3 - 1", "derive: unfold with target reappearing");
     }
 
     // Unfold falls back when body contains formula call outputs (recursive)
@@ -10182,6 +10182,26 @@ void test_solve_derive_output_parity() {
     }
 }
 
+void test_derive_distribution() {
+    SECTION("Derive post-simplification: (a+b)/k distributes over numeric k, exposing cancellations");
+    // Only Case 1 — Case 2 (whole-query count reduction) requires
+    // semantic/numeric dedup across structurally-distinct candidates,
+    // tracked as a separate Future.md item.
+    {
+        FormulaSystem sys;
+        sys.load_string("y = -b/2 - c/2 + (b+4)/2 - 2");
+        auto result = sys.derive("y", {}, {{"b", "b"}, {"c", "c"}});
+        // Before distribution: something like "-b/2 - c/2 + (b + 4) / 2 - 2".
+        // After distribution + simplify, only -c/2 survives.
+        bool clean = result.find("b") == std::string::npos
+                  && result.find("4") == std::string::npos
+                  && result.find("c") != std::string::npos;
+        ASSERT(clean,
+            "derive distribution: -b/2 - c/2 + (b+4)/2 - 2 should lose b and 4 (got: '"
+            + result + "')");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -10430,6 +10450,7 @@ int main() {
     test_approximate_solve();
     test_approximate_derive_partial_eval();
     test_solve_derive_output_parity();
+    test_derive_distribution();
     test_checked_type();
 
     std::cout << "\n===============\n";
