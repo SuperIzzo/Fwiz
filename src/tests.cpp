@@ -6398,12 +6398,14 @@ void test_derive_basic() {
     }
 
     // Defaults are substituted numerically
+    // After 2026-04-19 dedup cycle (RECOGNIZE_FRACTION_MAX_DEN=360), 9.81
+    // recognizes as the exact fraction 981/100.
     {
         write_fw("/tmp/td3.fw", "g = 9.81\nforce = mass * g\n");
         FormulaSystem sys;
         sys.load_file("/tmp/td3.fw");
         auto result = sys.derive("force", {}, {{"mass", "m"}});
-        ASSERT_EQ(result, "9.81 * m", "derive: default substituted");
+        ASSERT_EQ(result, "981 / 100 * m", "derive: default substituted");
     }
 }
 
@@ -9880,12 +9882,13 @@ void test_rational_solve_output() {
         ASSERT(WEXITSTATUS(rc2) != 0, "solve output: 10/5 does not emit '/ 1'");
     }
 
-    // Non-recognizable decimal falls back to decimal rendering
+    // Decimal with denominator ≤ RECOGNIZE_FRACTION_MAX_DEN (360) now renders
+    // as an exact fraction. Post 2026-04-19 dedup cycle: 0.37 → 37/100.
     {
         write_fw("/tmp/trso_dec.fw", "a = b + 0.37\n");
         int rc = system("./bin/fwiz '/tmp/trso_dec(a=?, b=0)' 2>/dev/null "
-                        "| grep -q 'a = 0.37'");
-        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.37 displays as decimal");
+                        "| grep -q 'a = 37 / 100'");
+        ASSERT(WEXITSTATUS(rc) == 0, "solve output: 0.37 displays as 37/100 fraction");
     }
 
     // Numeric-approximate result must use '~' AND NOT render a fraction
@@ -10213,6 +10216,54 @@ void test_derive_distribution() {
     }
 }
 
+// ============================================================================
+// Semantic deduplication of --derive output (2026-04-19 cycle)
+// Milestone 1: raise RECOGNIZE_FRACTION_MAX_DEN to 360, add extra_constants
+// to fmt_exact_double.
+// ============================================================================
+void test_semantic_dedup_m1() {
+    SECTION("Semantic Dedup — M1 (fraction recognizer bound)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // 1. recognize_constant(pi/180) should return pi with p=1, q=180.
+    //    With max_den=12 this returns nullopt (denominator 180 is out of range).
+    {
+        auto r = recognize_constant(0.01745329251994);
+        ASSERT(r.has_value(), "M1-1: recognize_constant(pi/180) has value");
+        ASSERT(r && r->constant == "pi" && r->p == 1 && r->q == 180 && r->power == 1,
+               "M1-1: recognize_constant(pi/180) = pi/180 form");
+    }
+
+    // 2. Regression: 180/pi still recognized (power=-1 path).
+    {
+        auto r = recognize_constant(57.2957795130823);
+        ASSERT(r.has_value(), "M1-2: recognize_constant(180/pi) has value");
+        ASSERT(r && r->constant == "pi" && r->power == -1 && r->p == 180 && r->q == 1,
+               "M1-2: recognize_constant(180/pi) = 180 * pi^-1 form");
+    }
+
+    // 3. Boundary — recognize_fraction(1/360, MAX_DEN) pure fraction (SHIP-DESIRABLE).
+    //    The public default on recognize_fraction remains 12; recognize_constant
+    //    internally uses RECOGNIZE_FRACTION_MAX_DEN (360). Verify the bound works.
+    {
+        auto f = recognize_fraction(1.0 / 360.0, RECOGNIZE_FRACTION_MAX_DEN);
+        ASSERT(f && f->p == 1 && f->q == 360, "M1-3: recognize_fraction(1/360, 360) = 1/360");
+    }
+
+    // 4. fmt_exact_double accepts extra_constants parameter and forwards it.
+    {
+        std::map<std::string, double> extras = {{"deg", 0.01745329251994}};
+        // Without extras: recognizes as pi/180 form via M1-1.
+        // With extras: "deg" entry takes precedence by exact value match.
+        // Either way, the raw decimal should NOT appear.
+        std::string out_with = fmt_exact_double(0.01745329251994, extras);
+        ASSERT(out_with.find("0.01745") == std::string::npos,
+               "M1-4: fmt_exact_double with deg alias does not emit raw decimal (got: " + out_with + ")");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -10463,6 +10514,9 @@ int main() {
     test_solve_derive_output_parity();
     test_derive_distribution();
     test_checked_type();
+
+    // Semantic dedup of --derive output (2026-04-19 cycle)
+    test_semantic_dedup_m1();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
