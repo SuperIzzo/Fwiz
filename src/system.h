@@ -904,7 +904,7 @@ x^(1/2) = sqrt(x)
         // output so the general simplifier is not affected.
         auto distributed = simplify(distribute_over_sum(result));
         if (approximate_mode) {
-            auto subbed = simplify(substitute_builtin_constants(distributed));
+            const auto* subbed = simplify(substitute_builtin_constants(distributed));
             if (auto val = evaluate(subbed)) {
                 if (!std::isinf(val.value())) return fmt_num(val.value());
             }
@@ -917,7 +917,7 @@ x^(1/2) = sqrt(x)
             trace.calc("derive: symbolic result (cannot evaluate)");
         }
         // Recognize constants and fractions in the expression tree
-        auto recognized = expr_recognize_constants(distributed);
+        const auto* recognized = expr_recognize_constants(distributed);
         return expr_to_string(recognized);
     }
 
@@ -1031,7 +1031,7 @@ x^(1/2) = sqrt(x)
                         { target_in_cond = true; break; }
                 if (!target_in_cond) continue;
 
-                ExprPtr rhs_val = substitute_bindings(eq.rhs, bindings, target);
+                const Expr* rhs_val = substitute_bindings(eq.rhs, bindings, target);
                 bool matches = true;
                 if (auto it = bindings.find(eq.lhs_var); it != bindings.end()) {
                     auto lhs_num = evaluate(*it->second);
@@ -2997,7 +2997,7 @@ private:
 
         trace.calc("evaluate: " + expr_to_string(resolved), depth + 2);
         simplify_clear_assumptions();
-        auto simplified = simplify(resolved);
+        const auto* simplified = simplify(resolved);
         auto assumptions = simplify_get_assumptions();
         for (const auto& a : assumptions)
             trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
