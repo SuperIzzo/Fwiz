@@ -1406,9 +1406,10 @@ private:
                     return true; // moved to a new source group — stop enumeration
                 // Check pre-condition
                 if (c.condition && !check_condition(*c.condition, bindings)) return false;
-                size_t before = results.size();
+                size_t added = results.size();
                 try_expr_all(c.expr, c.desc, c.condition);
-                if (results.size() > before && winning_expr_group < 0)
+                added = results.size() - added;
+                if (added > 0 && winning_expr_group < 0)
                     winning_expr_group = c.source_group;
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 if (formula_depth_ >= max_formula_depth) return false;
