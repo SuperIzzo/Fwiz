@@ -139,7 +139,7 @@ The core of the system. Contains:
 
 **evaluate()** — Evaluates a fully numeric expression tree. Returns `Checked<double>`: empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined` sentinel, null pointer). Division by zero also yields empty, via NaN sentinel — not a separate case. Built-in functions are dispatched via a static lookup table. Stays real-valued permanently — do not extend for complex or matrix types.
 
-`Checked<T>` (expr.h:30-89) makes check discipline type-enforced rather than convention-enforced — the complement to the "exceptions for exceptional cases only" principle. `sizeof(Checked<double>) == sizeof(double)`; no hidden bool. Test with `has_value()` / `operator bool`; unwrap with `.value()` (asserts on empty in debug). `.value_or_nan()` is the named boundary escape for handing `double` off to the pure-numeric root-finder layer (`find_numeric_roots`, `adaptive_scan`, `newton_solve`, `bisection_solve`) which has its own `isfinite` discipline — its use should stay rare and grep-worthy.
+`Checked<T>` (expr.h:30-89) makes check discipline type-enforced rather than convention-enforced — the complement to the "exceptions for exceptional cases only" principle. `sizeof(Checked<double>) == sizeof(double)`; no hidden bool. Test with `has_value()` / `operator bool`; unwrap with `.value()` (asserts on empty in debug). `.value_or_nan()` is the named boundary escape for handing `double` off to the pure-numeric root-finder layer (`find_numeric_roots`, `adaptive_scan`, `newton_solve`, `bisection_solve`) which has its own `isfinite` discipline — its use should stay rare and grep-worthy. The `Checked(T v)` constructor is deliberately NOT `explicit`: `return some_double;` in `Checked<double>`-returning functions is load-bearing throughout the evaluate paths. Three markers at the declaration document this intent: `// cppcheck-suppress noExplicitConstructor` silences cppcheck, `/*implicit*/` is the human-facing signal, and trailing `// NOLINT(google-explicit-constructor)` silences clang-tidy. All three are load-bearing — remove any one and `make analyze` will fire.
 
 **evaluate_symbolic()** — Exact sibling of `evaluate()`. Returns an `ExprPtr` that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by the simplifier's constant-folding paths (`simplify_once_impl` BINOP num/num and FUNC_CALL all-numeric folds). This is the extension point for new number types — add complex or matrix dispatch here, not in `evaluate()`.
 
@@ -406,6 +406,10 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 - **`ExprPtr` (`Expr*`)** — for return types, struct fields, and functions that may return or accept nullptr (substitute, simplify, solve_for).
 - **Pointer overloads** — thin null-checking wrappers that dereference and delegate to the reference version.
 
+### Pointer const deduction
+
+`const auto` on a pointer deduces `T* const` (pointer itself is const, pointee is mutable) — cppcheck's `constVariablePointer` check still fires. The correct idiom is `const auto* sol = fn(...)`, which deduces `const T*` (pointee const). Empirically verified: `const auto` does NOT silence `constVariablePointer`. Use `const auto*` at every local pointer declaration site where the pointee is not mutated.
+
 ### constexpr and inline
 
 - **`constexpr`** — type predicates (`is_num`, `is_zero`, etc.), enum queries (`is_additive`), compile-time constants
@@ -454,6 +458,7 @@ Prefer data tables and registries over switch statements and if-else chains:
 - **Semantic tests for output flexibility** — when simplifier output order may vary, test by evaluating with specific values rather than string comparison
 - **Accept either ordering** for commutative operations: `ASSERT(r == "x * y" || r == "y * x", ...)`
 - **Run the full pipeline** before committing: `make test && make sanitize && make analyze`
+- **cppcheck inline suppressions** require the `--inline-suppr` flag, which is included in the Makefile's `analyze` target. A `// cppcheck-suppress <id>` comment has no effect unless the tool is invoked with `--inline-suppr`.
 
 ### Test organization
 
