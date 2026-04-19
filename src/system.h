@@ -1190,7 +1190,7 @@ x^(1/2) = sqrt(x)
 
     // RAII guard for function inverter thread-local
     struct FuncInverterGuard {
-        FuncInverterGuard(FuncInverter fn) { solve_set_func_inverter(std::move(fn)); }
+        explicit FuncInverterGuard(FuncInverter fn) { solve_set_func_inverter(std::move(fn)); }
         ~FuncInverterGuard() { solve_set_func_inverter(nullptr); }
     };
 

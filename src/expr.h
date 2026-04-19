@@ -65,7 +65,8 @@ public:
     // If v is NaN (legitimate IEEE-754 propagation, e.g. from eval_div(1,0)),
     // the result is empty per the "NaN IS the empty sentinel" contract. No
     // assert — NaN-in is a total, deliberate part of the contract.
-    /*implicit*/ Checked(T v) noexcept : val_(v) {}
+    // cppcheck-suppress noExplicitConstructor
+    /*implicit*/ Checked(T v) noexcept : val_(v) {} // NOLINT(google-explicit-constructor)
 
     bool has_value()         const noexcept { return !std::isnan(val_); }
     explicit operator bool() const noexcept { return has_value(); }
@@ -355,7 +356,7 @@ public:
     static ExprArena* current() { return current_; }
     struct Scope {
         ExprArena* prev;
-        Scope(ExprArena& a) : prev(current_) { current_ = &a; }
+        explicit Scope(ExprArena& a) : prev(current_) { current_ = &a; }
         ~Scope() { current_ = prev; }
     };
     size_t size() const { return chunks.empty() ? 0 : (chunks.size()-1) * CHUNK_SIZE + next_in_chunk; }
@@ -1355,7 +1356,7 @@ inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
 
 // RAII guard: sets rewrite rules + exhaustiveness flags + bindings + custom functions
 struct RewriteRulesGuard {
-    RewriteRulesGuard(const std::vector<RewriteRule>* rules,
+    explicit RewriteRulesGuard(const std::vector<RewriteRule>* rules,
                       const std::vector<bool>* exhaustive = nullptr,
                       const std::map<std::string, double>* bindings = nullptr,
                       const std::map<std::string, double(*)(double)>* custom_funcs = nullptr) {
