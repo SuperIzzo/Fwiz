@@ -2627,7 +2627,7 @@ private:
                     continue;
                 }
                 try {
-                    std::set<std::string> visited_copy = visited;
+                    const auto& visited_copy = visited;
                     double val = solve_recursive(v, bindings, visited_copy, depth + 1, dead_ends);
                     expr = substitute(expr, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
