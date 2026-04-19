@@ -1010,14 +1010,84 @@ x^(1/2) = sqrt(x)
         FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
-        // Collect ALL results from enumerate_candidates
-        std::vector<std::string> results;
-        std::set<std::string> seen;
+        // --- Semantic fingerprint dedup setup (2026-04-19 cycle) ---
+        // Build 3 prime test points for every free variable in the output.
+        // Free vars are the keys of symbolic_bindings — those become VARs in
+        // the derived expression. Schwartz–Zippel: distinct small primes per
+        // variable per row minimize accidental cancellations. Values stay
+        // ≤ 5, so pairwise differences are ≤ 3 — friendlier to domain
+        // constraints like the triangle inequality than multiplicative
+        // schemes (which inflate magnitudes and differences).
+        std::vector<std::string> free_vars;
+        free_vars.reserve(symbolic_bindings.size());
+        for (auto& [k, v] : symbolic_bindings) { (void)v; free_vars.push_back(k); }
+        static constexpr double primes[3] = {2.0, 3.0, 5.0};
+        std::vector<std::map<std::string, double>> test_points(3);
+        for (size_t i = 0; i < 3; i++) {
+            for (size_t j = 0; j < free_vars.size(); j++) {
+                test_points[i][free_vars[j]] = primes[(i + j) % 3];
+            }
+        }
 
-        auto add_result = [&](const ExprPtr& result) {
+        // Winners map: fingerprint_key → {score, representative ExprPtr}.
+        // Map iteration order IS output order (lex on rounded-double vector,
+        // or the all-empty sentinel counter) — deterministic across runs.
+        using Key = std::vector<int64_t>;
+        std::map<Key, std::pair<std::pair<int, int>, ExprPtr>> winners;
+        int64_t empty_fp_counter = 0;
+
+        // Substitute all non-free numeric bindings (e.g. defaults like
+        // `deg = 0.01745...`) into a fingerprint probe so evaluation sees
+        // concrete numbers for every Var node that isn't a free variable.
+        // Without this, a surviving Var("deg") makes evaluate() return
+        // empty and the candidate falls into the unique-sentinel path,
+        // preventing the merge we want.
+        auto subst_for_fingerprint = [&](ExprPtr e) {
+            if (!e) return e;
+            std::set<std::string> free_set(free_vars.begin(), free_vars.end());
+            for (auto& [name, val] : bindings) {
+                if (free_set.count(name)) continue;
+                if (name == target) continue;
+                if (auto nv = evaluate(*val)) {
+                    e = substitute(e, name, Expr::Num(nv.value()));
+                }
+            }
+            return e;
+        };
+
+        // Empty-fingerprint candidates (all test points domain-excluded) use
+        // a formatted-string sentinel: identical rendered output collapses
+        // to one entry, but structurally distinct "always-NaN" trees (e.g.
+        // log(b) vs log(-b) at positive test points) stay separated by
+        // their distinct strings. This sits within the design's intent —
+        // the rule "must NOT merge" domain-distinct candidates is upheld
+        // (distinct strings → distinct keys), while the pathological case
+        // where many candidates format identically collapses gracefully.
+        std::map<std::string, int64_t> empty_fp_keys;
+        auto consider_result = [&](const ExprPtr& result) {
             if (!result) return;
-            auto s = format_derived(result);
-            if (seen.insert(s).second) results.push_back(s);
+            auto probe = subst_for_fingerprint(result);
+            auto fp = fingerprint_expr(probe, free_vars, test_points);
+            Key key;
+            if (fp.empty()) {
+                // Hash by formatted string so structurally different
+                // always-NaN candidates stay separate, but exact string
+                // clones collapse. Negative range keeps these sentinel
+                // keys lexicographically before real numeric keys.
+                auto s = format_derived(result);
+                auto [it, inserted] = empty_fp_keys.emplace(
+                    s, std::numeric_limits<int64_t>::min() + empty_fp_counter);
+                if (inserted) empty_fp_counter++;
+                key.push_back(it->second);
+            } else {
+                key.reserve(fp.size());
+                for (double v : fp) key.push_back(llround(v * 1e9));
+            }
+            auto score = canonicity_score(result);
+            auto it = winners.find(key);
+            if (it == winners.end() || score < it->second.first) {
+                winners[key] = {score, result};
+            }
         };
 
         std::map<std::string, double> numeric;
@@ -1034,7 +1104,7 @@ x^(1/2) = sqrt(x)
 
             if (c.type == CandidateType::EXPR) {
                 auto b = bindings;
-                add_result(try_derive(c.expr, target, b, {}, 0, dead_ends));
+                consider_result(try_derive(c.expr, target, b, {}, 0, dead_ends));
             } else if (c.type == CandidateType::FORMULA_REV) {
                 // Unfold sub-system equations and collect all solutions
                 // (sub-system load failure → no reverse solutions from this candidate)
@@ -1065,13 +1135,13 @@ x^(1/2) = sqrt(x)
                             if (!sol.expr) continue;
                             if (is_var(binding_expr) && binding_expr->name == target) {
                                 auto b = bindings;
-                                add_result(try_derive(sol.expr, target, b, {}, 0, dead_ends));
+                                consider_result(try_derive(sol.expr, target, b, {}, 0, dead_ends));
                             } else {
                                 auto final_sols = solve_for_all(sol.expr, binding_expr, target);
                                 for (auto& fs : final_sols) {
                                     if (!fs.expr) continue;
                                     auto b = bindings;
-                                    add_result(try_derive(fs.expr, target, b, {}, 0, dead_ends));
+                                    consider_result(try_derive(fs.expr, target, b, {}, 0, dead_ends));
                                 }
                             }
                         }
@@ -1082,15 +1152,29 @@ x^(1/2) = sqrt(x)
                 // Forward formula call — derive into sub-system
                 auto b = bindings;
                 auto result = derive_recursive(target, b, {}, 0, dead_ends);
-                add_result(result);
+                consider_result(result);
                 return result != nullptr; // stop if found (forward is single-valued)
             }
             return false; // don't stop — collect all
         });
 
+        // Emit winners phase: format each survivor in fingerprint-key order.
+        std::vector<std::string> results;
+        results.reserve(winners.size());
+        for (auto& [key, sc_expr] : winners) {
+            (void)key;
+            results.push_back(format_derived(sc_expr.second));
+        }
+
         // If no equation-based results, check iff conditions for constraint inversion.
         // For piecewise functions: "result = 1 iff x > 0" → "x > 0 if result = 1"
+        //
+        // Fingerprinting does not apply to inverted conditions (they are
+        // formatted strings, not expression trees). Scope a local `seen`
+        // set here to keep condition-string dedup without reintroducing a
+        // top-level dedup mechanism that would clash with the winner map.
         if (results.empty()) {
+            std::set<std::string> seen;
             for (auto& eq : equations) {
                 if (!eq.condition || !eq.bidirectional) continue;
                 bool target_in_cond = false;

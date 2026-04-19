@@ -10356,6 +10356,174 @@ void test_semantic_dedup_m2() {
     }
 }
 
+// ============================================================================
+// Milestone 3: semantic fingerprint primitive + streaming dedup in derive_all.
+// ============================================================================
+void test_semantic_dedup_m3() {
+    SECTION("Semantic Dedup — M3 (fingerprint + streaming dedup)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // M3-a. fingerprint_expr primitive works.
+    {
+        // e = x + 2*y at {x=3, y=5} → 3 + 2*5 = 13.
+        auto e = parse("x + 2 * y");
+        std::vector<std::string> free_vars = {"x", "y"};
+        std::vector<std::map<std::string, double>> test_points = {
+            {{"x", 3.0}, {"y", 5.0}}
+        };
+        auto fp = fingerprint_expr(e, free_vars, test_points);
+        ASSERT(fp.size() == 1, "M3-a: fingerprint has 1 value");
+        ASSERT(fp.size() == 1 && std::abs(fp[0] - 13.0) < 1e-9,
+               "M3-a: fingerprint of x + 2y at {x=3,y=5} = 13");
+    }
+    // M3-a2. Fingerprint skips empty (NaN) evaluations.
+    {
+        auto e = parse("log(-1)");
+        std::vector<std::string> free_vars;
+        std::vector<std::map<std::string, double>> test_points = {{}};
+        auto fp = fingerprint_expr(e, free_vars, test_points);
+        ASSERT(fp.empty(), "M3-a2: fingerprint of log(-1) skips NaN → empty");
+    }
+    // M3-a3. canonicity_score: integer literals not penalized.
+    {
+        auto e_int = parse("3 * x + 1");       // 0 non-int literals
+        auto e_dec = parse("3.14 * x + 1");    // 1 non-int literal
+        auto s_int = canonicity_score(e_int);
+        auto s_dec = canonicity_score(e_dec);
+        ASSERT(s_int.first == 0, "M3-a3: int literal count for '3*x+1' = 0");
+        ASSERT(s_dec.first == 1, "M3-a3: non-int literal count for '3.14*x+1' = 1");
+        ASSERT(s_int < s_dec, "M3-a3: integer form beats decimal form (lex pair)");
+    }
+
+    // M3-6 (SHIP-BLOCKING): Triangle reproducer — no two output lines share
+    // a fingerprint at prime test points, AND total line count bounded.
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/triangle.fw");
+        auto results = sys.derive_all("A", {{"a", 4}, {"B", 20}},
+                                      {{"c", "c"}, {"b", "b"}});
+        ASSERT(!results.empty(), "M3-6: triangle derive has results");
+        // Design: invariant, not count threshold. A count cap would be
+        // numerology (see design-proposal.md: "'<30 lines' is numerology").
+        // Reparse each line as RHS expression; fingerprint; all distinct.
+        std::vector<std::string> free_vars = {"b", "c"};
+        std::vector<std::map<std::string, double>> test_points;
+        // Five test points chosen to exercise multiple branch-cut domains:
+        //   {7,9}, {11,13}, {5,8} — acute A, acute B (generic case)
+        //   {2,3}                — obtuse A (b²+c²<16), distinguishes
+        //                          asin(sin(A)) = π−A from acos-direct
+        //   {6,3}                — obtuse B (b²>c²+16), distinguishes
+        //                          asin(sin(B)) = π−B from acos-direct
+        // Without branch-distinguishing coverage, algebraically non-equivalent
+        // forms that coincide on the acute domain would register as
+        // false-positive semantic duplicates.
+        test_points.push_back({{"b", 7.0}, {"c", 9.0}});
+        test_points.push_back({{"b", 11.0}, {"c", 13.0}});
+        test_points.push_back({{"b", 5.0}, {"c", 8.0}});
+        test_points.push_back({{"b", 2.0}, {"c", 3.0}});
+        test_points.push_back({{"b", 6.0}, {"c", 3.0}});
+
+        std::set<std::vector<int64_t>> seen_fps;
+        int dup_count = 0;
+        for (const auto& line : results) {
+            try {
+                auto e = parse(line);
+                auto fp = fingerprint_expr(e, free_vars, test_points);
+                if (fp.empty()) continue; // empty-fp candidates stand alone
+                std::vector<int64_t> key;
+                for (double v : fp) key.push_back(llround(v * 1e9));
+                if (!seen_fps.insert(key).second) dup_count++;
+            // NOLINTNEXTLINE(bugprone-empty-catch) — unparseable line → skip
+            } catch (...) {}
+        }
+        ASSERT(dup_count == 0,
+               "M3-6: triangle derive: no two output lines share a fingerprint (dups: " + std::to_string(dup_count) + ")");
+    }
+
+    // M3-7 (SHIP-BLOCKING): commutative z = x+y vs z = y+x → 1 result.
+    {
+        FormulaSystem sys;
+        sys.load_string("z = x + y\nz = y + x\n");
+        auto results = sys.derive_all("z", {}, {{"x", "x"}, {"y", "y"}});
+        ASSERT(results.size() == 1,
+               "M3-7: commutative x+y/y+x dedups to 1 result (got " + std::to_string(results.size()) + ")");
+    }
+
+    // M3-8 (SHIP-BLOCKING): canonicity — symbolic 180/pi beats numeric 57.2957...
+    {
+        // System produces two forms of the same value: symbolic via alias
+        // (rdeg = 180/pi) and numeric via raw decimal. Dedup should retain
+        // the symbolic form.
+        FormulaSystem sys;
+        // deg = pi/180 via "deg = 0.01745..." will resolve through recognition
+        // to pi/180 in derived output. Two paths:
+        //   z = 1/deg * acos(x)   (becomes ~ (1/pi*180) * acos(x) style)
+        //   z = 57.2957795 * acos(x)
+        // With dedup, we want the symbolic form (lower non-int NUM count).
+        sys.load_string(
+            "deg = 0.01745329251994\n"
+            "z = 1 / deg * acos(x)\n"
+            "z = 57.2957795130823 * acos(x)\n");
+        auto results = sys.derive_all("z", {}, {{"x", "x"}});
+        ASSERT(!results.empty(), "M3-8: has results");
+        // One result retained, and it should prefer a form that does not
+        // contain the raw decimal.
+        bool has_decimal = false;
+        for (const auto& r : results)
+            if (r.find("57.2957") != std::string::npos) { has_decimal = true; break; }
+        ASSERT(results.size() == 1, "M3-8: two forms of same acos dedup to 1");
+        ASSERT(!has_decimal, "M3-8: retained form is not the raw decimal (got: " + results[0] + ")");
+    }
+
+    // M3-9 (SHIP-BLOCKING): domain mismatch — log(-x) vs log(x) stand alone.
+    // At positive test points log(-x) is NaN → empty fingerprint → unique key.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "z = log(b)\n"
+            "z = log(-b)\n");
+        auto results = sys.derive_all("z", {}, {{"b", "b"}});
+        ASSERT(results.size() == 2,
+               "M3-9: log(b) and log(-b) stand alone (got " + std::to_string(results.size()) + ")");
+    }
+
+    // M3-10 (SHIP-BLOCKING): candidate with 'undefined' subexpression stands
+    // alone — does not merge with the defined equivalent.
+    {
+        // Use an 'undefined' subexpression directly via rewrite rule so the
+        // candidate has it after simplification.
+        FormulaSystem sys;
+        sys.load_string(
+            "z = x\n"
+            "z = x + 0 * undefined\n");
+        auto results = sys.derive_all("z", {}, {{"x", "x"}});
+        // The 'undefined' candidate has an empty fingerprint (evaluate returns
+        // empty at every test point). It must NOT merge with z = x.
+        bool has_defined = false, has_undefined_form = false;
+        for (const auto& r : results) {
+            if (r == "x") has_defined = true;
+            if (r.find("undefined") != std::string::npos) has_undefined_form = true;
+        }
+        ASSERT(has_defined, "M3-10: defined form z=x present");
+        ASSERT(has_undefined_form, "M3-10: undefined form retained, stands alone");
+    }
+
+    // M3-11 (SHIP-BLOCKING): determinism — same input, two runs, same output.
+    {
+        auto run = []() {
+            FormulaSystem sys;
+            sys.load_file("examples/triangle.fw");
+            return sys.derive_all("A", {{"a", 4}, {"B", 20}},
+                                  {{"c", "c"}, {"b", "b"}});
+        };
+        auto r1 = run();
+        auto r2 = run();
+        ASSERT(r1 == r2, "M3-11: derive_all is deterministic across runs");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -10610,6 +10778,7 @@ int main() {
     // Semantic dedup of --derive output (2026-04-19 cycle)
     test_semantic_dedup_m1();
     test_semantic_dedup_m2();
+    test_semantic_dedup_m3();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

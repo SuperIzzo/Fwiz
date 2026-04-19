@@ -1059,6 +1059,82 @@ inline Checked<double> evaluate(const Expr* e) {
     return evaluate(*e);
 }
 
+// ============================================================================
+//  Semantic fingerprint primitive — evaluate an expression at a set of test
+//  points with specified free-variable values. Used by derive_all to dedupe
+//  numerically-equivalent candidates (commutative shuffles, algebraic
+//  identities) without needing exact structural equality.
+//
+//  Points at which evaluate() returns empty (NaN, unresolved variable,
+//  division by zero, etc.) are SKIPPED — not recorded. The returned vector
+//  may therefore be shorter than test_points. An all-empty fingerprint
+//  (returned as empty vector) signals a candidate whose domain excludes
+//  every test point; callers must treat such candidates as non-merging
+//  (usually by assigning a unique sentinel key).
+// ============================================================================
+
+inline std::vector<double> fingerprint_expr(
+        ExprPtr e,
+        const std::vector<std::string>& free_vars,
+        const std::vector<std::map<std::string, double>>& test_points) {
+    std::vector<double> result;
+    if (!e) return result;
+    result.reserve(test_points.size());
+    for (const auto& point : test_points) {
+        ExprPtr substituted = e;
+        for (const auto& name : free_vars) {
+            auto it = point.find(name);
+            if (it == point.end()) continue;
+            substituted = substitute(substituted, name, Expr::Num(it->second));
+        }
+        auto v = evaluate(substituted);
+        if (!v) continue;
+        double d = v.value();
+        if (!std::isfinite(d)) continue;
+        result.push_back(d);
+    }
+    return result;
+}
+
+// ============================================================================
+//  Canonicity score — pair<non_integer_num_count, leaf_count>.
+//  Lower is "more canonical" (lex compare via built-in pair ordering).
+//  Integer NUM leaves are NOT penalized — they're the cleanest form.
+//  Used by derive_all to pick the best representative when two candidates
+//  share a fingerprint.
+// ============================================================================
+
+inline std::pair<int, int> canonicity_score(ExprPtr e) {
+    if (!e) return {0, 0};
+    int non_int = 0;
+    int leaves = 0;
+    std::function<void(ExprPtr)> walk = [&](ExprPtr n) {
+        if (!n) return;
+        switch (n->type) {
+            case ExprType::NUM:
+                leaves++;
+                if (!is_integer_value(n->num)) non_int++;
+                return;
+            case ExprType::VAR:
+                leaves++;
+                return;
+            case ExprType::UNARY_NEG:
+                walk(n->child);
+                return;
+            case ExprType::BINOP:
+                walk(n->left);
+                walk(n->right);
+                return;
+            case ExprType::FUNC_CALL:
+                for (auto& a : n->args) walk(a);
+                return;
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); return;
+        }
+    };
+    walk(e);
+    return {non_int, leaves};
+}
+
 // Symbolic sibling of evaluate(): preserves exact arithmetic in the returned
 // tree (e.g. 1/3 stays as DIV(Num(1), Num(3))) instead of collapsing to a
 // double. Used by the simplifier's constant-folding paths to centralize the
