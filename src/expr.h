@@ -196,9 +196,9 @@ public:
     bool empty() const { return intervals_.empty() && discrete_.empty(); }
 
     bool contains(double v) const {
-        for (auto& iv : intervals_)
+        for (const auto& iv : intervals_)
             if (iv.contains(v)) return true;
-        for (auto& d : discrete_)
+        for (const auto& d : discrete_)
             if (std::abs(d - v) < EPSILON_ZERO) return true;
         return false;
     }
@@ -212,8 +212,8 @@ public:
         ValueSet result;
 
         // Interval ∩ Interval
-        for (auto& a : intervals_)
-            for (auto& b : other.intervals_) {
+        for (const auto& a : intervals_)
+            for (const auto& b : other.intervals_) {
                 double lo = std::max(a.low, b.low);
                 double hi = std::min(a.high, b.high);
                 bool lo_inc = (a.low == b.low) ? (a.low_inclusive && b.low_inclusive)
@@ -225,13 +225,13 @@ public:
             }
 
         // Discrete points: keep only those in both sets
-        for (auto& d : discrete_)
+        for (const auto& d : discrete_)
             if (other.contains(d)) result.discrete_.push_back(d);
-        for (auto& d : other.discrete_)
+        for (const auto& d : other.discrete_)
             if (this->contains(d)) {
                 // Avoid duplicates
                 bool dup = false;
-                for (auto& rd : result.discrete_)
+                for (const auto& rd : result.discrete_)
                     if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
                 if (!dup) result.discrete_.push_back(d);
             }
@@ -245,9 +245,9 @@ public:
         result.intervals_.insert(result.intervals_.end(),
             other.intervals_.begin(), other.intervals_.end());
         result.discrete_ = discrete_;
-        for (auto& d : other.discrete_) {
+        for (const auto& d : other.discrete_) {
             bool dup = false;
-            for (auto& rd : result.discrete_)
+            for (const auto& rd : result.discrete_)
                 if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
             if (!dup) result.discrete_.push_back(d);
         }
@@ -274,14 +274,14 @@ public:
         for (double d : discrete_)
             all.push_back({d, d, true, true});
         std::sort(all.begin(), all.end(),
-            [](auto& a, auto& b) {
+            [](const auto& a, const auto& b) {
                 return a.low < b.low || (a.low == b.low && a.low_inclusive > b.low_inclusive);
             });
         // Walk intervals tracking coverage boundary and its inclusivity
         constexpr double INF = std::numeric_limits<double>::infinity();
         double covered_to = -INF;
         bool covered_inclusive = false;  // is covered_to itself included?
-        for (auto& iv : all) {
+        for (const auto& iv : all) {
             // Can this interval extend from where we left off?
             if (iv.low > covered_to) return false;  // numeric gap
             if (iv.low == covered_to && covered_to != -INF
@@ -304,7 +304,7 @@ public:
 
         std::vector<std::string> parts;
 
-        for (auto& iv : intervals_) {
+        for (const auto& iv : intervals_) {
             std::string s;
             s += iv.low_inclusive ? "[" : "(";
             s += (iv.low == -std::numeric_limits<double>::infinity()) ? "-inf" : fmt_num(iv.low);
@@ -1254,14 +1254,16 @@ inline void group_like(Vec& items, GetKey key, GetVal val, Nullify nullify) {
 
 inline void group_additive(std::vector<std::pair<double, ExprPtr>>& terms) {
     group_like(terms,
-        [](auto& t) { return t.second; },
+        [](const auto& t) { return t.second; },
+        // cppcheck-suppress constParameterReference
         [](auto& t) -> double& { return t.first; },
         [](auto& t) { t.first = 0; t.second = nullptr; });
 }
 
 inline void group_multiplicative(std::vector<std::pair<ExprPtr, double>>& factors) {
     group_like(factors,
-        [](auto& f) { return f.first; },
+        [](const auto& f) { return f.first; },
+        // cppcheck-suppress constParameterReference
         [](auto& f) -> double& { return f.second; },
         [](auto& f) { f.second = 0; f.first = nullptr; });
 }
@@ -1971,7 +1973,7 @@ inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
     // lhs = f(inner) where f has an inverse → inner = f⁻¹(rhs)
     if (lhs->type == ExprType::FUNC_CALL && lhs->args.size() == 1
         && contains_var(lhs->args[0], target)) {
-        auto& inverter = solve_func_inverter_();
+        const auto& inverter = solve_func_inverter_();
         if (inverter) {
             auto new_rhs = inverter(lhs->name, rhs);
             if (new_rhs) return recurse(lhs->args[0], new_rhs);

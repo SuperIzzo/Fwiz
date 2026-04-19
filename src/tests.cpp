@@ -5536,7 +5536,7 @@ void test_verify_variable() {
         auto results = sys.verify_variable("A", 40, {{"A", 40}, {"B", 60}, {"C", 80}});
         ASSERT(!results.empty(), "consistent: has results");
         bool all_pass = true;
-        for (auto& r : results) if (!r.pass) all_pass = false;
+        for (const auto& r : results) if (!r.pass) all_pass = false;
         ASSERT(all_pass, "consistent: all pass");
     }
 
@@ -5548,7 +5548,7 @@ void test_verify_variable() {
         auto results = sys.verify_variable("A", 40, {{"A", 40}, {"B", 60}, {"C", 120}});
         ASSERT(!results.empty(), "inconsistent: has results");
         bool any_fail = false;
-        for (auto& r : results) if (!r.pass) any_fail = true;
+        for (const auto& r : results) if (!r.pass) any_fail = true;
         ASSERT(any_fail, "inconsistent: some fail");
     }
 
@@ -5589,7 +5589,7 @@ void test_verify_variable() {
         auto results = sys.verify_variable("x", 5, {{"x", 5}, {"y", 6}});
         ASSERT(!results.empty(), "inversion: has results");
         bool found_pass = false;
-        for (auto& r : results) if (r.pass) found_pass = true;
+        for (const auto& r : results) if (r.pass) found_pass = true;
         ASSERT(found_pass, "inversion: x=6-1=5 passes");
     }
 
@@ -5602,7 +5602,7 @@ void test_verify_variable() {
         auto results = sys.verify_variable("y", 6, {{"y", 6}, {"x", 5}});
         ASSERT(results.size() >= 2, "multiple: at least 2 results");
         int passes = 0, fails = 0;
-        for (auto& r : results) { if (r.pass) passes++; else fails++; }
+        for (const auto& r : results) { if (r.pass) passes++; else fails++; }
         ASSERT(passes >= 1, "multiple: at least one pass");
         ASSERT(fails >= 1, "multiple: at least one fail");
     }
@@ -7173,7 +7173,7 @@ void test_fit_sampling() {
     {
         auto f = [](double x) { return x < 0 ? std::numeric_limits<double>::quiet_NaN() : x; };
         auto samples = sample_function(f, -10, 10, 100);
-        for (auto& s : samples)
+        for (const auto& s : samples)
             ASSERT(std::isfinite(s.y), "fit sample: no NaN/Inf in results");
     }
 
@@ -7765,7 +7765,7 @@ void test_fit_edge_cases() {
         auto f = [](double x) { return x < 0 ? std::sqrt(x) : x; };
         auto samples = sample_function(f, -10, 10, 100);
         // Negative x produces NaN, should be filtered
-        for (auto& s : samples)
+        for (const auto& s : samples)
             ASSERT(std::isfinite(s.y), "fit: NaN filtered from samples");
     }
 
@@ -7885,7 +7885,7 @@ void test_fit_templates_edge() {
         auto samples = sample_function(f, 1, 5, 200);
         auto fits = fit_all(samples, "x", {}, 0.99, 3);
         bool found_exact = false;
-        for (auto& fit : fits)
+        for (const auto& fit : fits)
             if (fit.r_squared > 0.9999) found_exact = true;
         ASSERT(found_exact, "template: x^x found via product inner composition");
     }
@@ -8373,7 +8373,7 @@ void test_iff_semantics() {
         sys.load_file("/tmp/tiff1.fw", "mysign");
         auto results = sys.derive_all("x", {}, {{"result", "result"}});
         bool has_iff = false;
-        for (auto& r : results)
+        for (const auto& r : results)
             if (r.find("iff") != std::string::npos) has_iff = true;
         ASSERT(has_iff, "iff: exclusive branches produce iff in output");
     }
@@ -8389,7 +8389,7 @@ void test_iff_semantics() {
         auto results = sys.derive_all("x", {}, {{"result", "result"}});
         // The two result=1 branches should downgrade to "if"
         bool found_if_not_iff = false;
-        for (auto& r : results)
+        for (const auto& r : results)
             if (r.find(" if ") != std::string::npos && r.find("iff") == std::string::npos)
                 found_if_not_iff = true;
         ASSERT(found_if_not_iff, "iff: overlapping branches downgrade to if");
@@ -8571,7 +8571,7 @@ void test_rewrite_rules() {
         ASSERT(!results.empty(), "cos(-a) rewrite: has result");
         // Should simplify to y = cos(a)
         bool found_clean = false;
-        for (auto& r : results)
+        for (const auto& r : results)
             if (r.find("cos(a)") != std::string::npos) found_clean = true;
         ASSERT(found_clean, "cos(-a) rewrite: y = cos(a) (got " + results[0] + ")");
     }
@@ -8583,7 +8583,7 @@ void test_rewrite_rules() {
         auto results = sys.derive_all("y", {}, {{"a", "a"}});
         ASSERT(!results.empty(), "sin(-a) rewrite: has result");
         bool found_clean = false;
-        for (auto& r : results)
+        for (const auto& r : results)
             if (r.find("-sin(a)") != std::string::npos
                 || r.find("-(sin(a))") != std::string::npos) found_clean = true;
         ASSERT(found_clean, "sin(-a) rewrite: y = -sin(a) (got " + results[0] + ")");
@@ -8596,7 +8596,7 @@ void test_rewrite_rules() {
         auto results = sys.derive_all("y", {}, {{"a", "a"}});
         ASSERT(!results.empty(), "abs(abs) rewrite: has result");
         bool found_clean = false;
-        for (auto& r : results)
+        for (const auto& r : results)
             if (r == "abs(a)") found_clean = true;
         ASSERT(found_clean, "abs(abs) rewrite: y = abs(a) (got " + results[0] + ")");
     }
@@ -8652,7 +8652,7 @@ void test_rewrite_rules() {
         ASSERT(expr_to_string(e) == "3 * log(a)",
             "log condition: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
         bool found = false;
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             if (a.desc.find("a") != std::string::npos
                 && a.desc.find("!= 0") != std::string::npos)
                 found = true;
@@ -8670,7 +8670,7 @@ void test_rewrite_rules() {
         ASSERT(expr_to_string(e) == "(a + 1)^2",
             "custom condition: foo(a+1) = (a+1)^2 (got " + expr_to_string(e) + ")");
         bool found = false;
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             if (a.desc.find("a + 1") != std::string::npos
                 && a.desc.find("> 0") != std::string::npos)
                 found = true;
@@ -8690,7 +8690,7 @@ void test_rewrite_rules() {
         ASSERT(expr_to_string(e) == "a + b",
             "compound condition: magic(a,b) = a+b (got " + expr_to_string(e) + ")");
         bool found = false;
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             if (a.desc.find("a > 0") != std::string::npos
                 && a.desc.find("b > 0") != std::string::npos)
                 found = true;
@@ -8791,7 +8791,7 @@ void test_undefined() {
         FormulaSystem sys;
         sys.load_string("x/x = undefined iff x = 0\n");
         bool found_undef = false;
-        for (auto& r : sys.rewrite_rules)
+        for (const auto& r : sys.rewrite_rules)
             if (r.is_undefined_branch && r.desc.find("x/x") != std::string::npos)
                 found_undef = true;
         ASSERT(found_undef, "parse: x/x = undefined branch detected");
@@ -8848,7 +8848,7 @@ void test_undefined() {
         FormulaSystem sys;
         sys.load_builtins();
         bool found_exhaustive = false;
-        for (auto& g : sys.rewrite_rule_groups_) {
+        for (const auto& g : sys.rewrite_rule_groups_) {
             if (g.pattern_key == "x / x") {
                 found_exhaustive = g.exhaustive;
                 ASSERT(g.rule_indices.size() == 2,
@@ -8863,7 +8863,7 @@ void test_undefined() {
         FormulaSystem sys;
         sys.load_string("log(x^n) = n * log(x) iff x != 0\n");
         bool found_non_exhaustive = false;
-        for (auto& g : sys.rewrite_rule_groups_) {
+        for (const auto& g : sys.rewrite_rule_groups_) {
             if (g.pattern_key.find("log") != std::string::npos
                 && g.rule_indices.size() == 1) {
                 found_non_exhaustive = !g.exhaustive;
@@ -8880,7 +8880,7 @@ void test_undefined() {
             "foo(x) = -x^2 iff x < 0\n"
         );
         bool found_exhaustive = false;
-        for (auto& g : sys.rewrite_rule_groups_) {
+        for (const auto& g : sys.rewrite_rule_groups_) {
             if (g.pattern_key == "foo(x)" && g.rule_indices.size() == 2)
                 found_exhaustive = g.exhaustive;
         }
@@ -8899,7 +8899,7 @@ void test_undefined() {
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "1", "inherent: a/a = 1 (got " + expr_to_string(e) + ")");
         bool found_inherent = false;
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             if (a.desc.find("a") != std::string::npos
                 && a.desc.find("!= 0") != std::string::npos
                 && a.inherent)
@@ -8920,7 +8920,7 @@ void test_undefined() {
         ASSERT(expr_to_string(e) == "3 * log(a)",
             "non-inherent: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
         bool found_non_inherent = false;
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             if (a.desc.find("a") != std::string::npos
                 && a.desc.find("!= 0") != std::string::npos
                 && !a.inherent)
@@ -9152,7 +9152,7 @@ void test_semicolon_separator() {
         sys.load_string("[sq(x) -> result]; result = x^2\n");
         // The section should have the equation
         bool found = false;
-        for (auto& s : sys.sections_)
+        for (const auto& s : sys.sections_)
             if (s.name == "sq" && s.lines.size() >= 1) found = true;
         ASSERT(found, "semicolon section: [sq] has lines");
     }
@@ -9162,7 +9162,7 @@ void test_semicolon_separator() {
         FormulaSystem sys;
         sys.load_string("[cube(x) -> result] result = x^3\n");
         bool found = false;
-        for (auto& s : sys.sections_)
+        for (const auto& s : sys.sections_)
             if (s.name == "cube" && s.lines.size() >= 1) found = true;
         ASSERT(found, "inline section: [cube] has lines");
     }
@@ -9468,7 +9468,7 @@ void test_simultaneous_equations() {
         try {
             auto results = sys.derive_all("x", {}, {{"s", "s"}, {"d", "d"}});
             bool found = false;
-            for (auto& r : results) {
+            for (const auto& r : results) {
                 // Should produce something like (s + d) / 2 or (s + d) * 0.5
                 if (r.find("s") != std::string::npos && r.find("d") != std::string::npos)
                     found = true;
@@ -9818,7 +9818,7 @@ void test_rational_derive() {
         sys.load_string("y = x ^ 2");
         auto results = sys.derive_all("x", {}, {{"y", "y"}});
         bool found_sqrt = false;
-        for (auto& r : results) {
+        for (const auto& r : results) {
             if (r.find("1 / 2") != std::string::npos || r.find("sqrt") != std::string::npos)
                 found_sqrt = true;
         }

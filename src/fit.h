@@ -146,11 +146,11 @@ inline double poly_eval(const std::vector<double>& c, double x) {
 inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& samples,
         const std::function<double(double)>& predict) {
     double y_mean = 0;
-    for (auto& s : samples) y_mean += s.y;
+    for (const auto& s : samples) y_mean += s.y;
     y_mean /= static_cast<double>(samples.size());
     double ss_res = 0, ss_tot = 0;
     result.max_error = 0;
-    for (auto& s : samples) {
+    for (const auto& s : samples) {
         double predicted = predict(s.x);
         if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
         double residual = s.y - predicted;
@@ -181,7 +181,7 @@ inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degre
     auto A = vandermonde(samples, degree);
     std::vector<double> b;
     b.reserve(samples.size());
-    for (auto& s : samples) b.push_back(s.y);
+    for (const auto& s : samples) b.push_back(s.y);
 
     result.coefficients = least_squares_solve(A, b);
 
@@ -449,7 +449,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
 
     std::vector<FitSample> log_samples;
     log_samples.reserve(samples.size());
-    for (auto& s : samples)
+    for (const auto& s : samples)
         if (s.x > 0 && s.y > 0)
             log_samples.push_back({std::log(s.x), std::log(s.y)});
     if (log_samples.size() < 3) return result;
@@ -457,7 +457,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
     b.reserve(log_samples.size());
-    for (auto& s : log_samples) b.push_back(s.y);
+    for (const auto& s : log_samples) b.push_back(s.y);
     auto coeffs = least_squares_solve(A, b);
     double a = std::exp(coeffs[0]), power = coeffs[1];
 
@@ -479,7 +479,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     std::vector<FitSample> log_samples;
-    for (auto& s : samples)
+    for (const auto& s : samples)
         if (s.y > 0) log_samples.push_back({s.x, std::log(s.y)});
     if (log_samples.size() < 3) { FitResult r; r.degree = -1; return r; }
 
@@ -492,7 +492,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         auto A = vandermonde(log_samples, 1);
         std::vector<double> b;
         b.reserve(log_samples.size());
-        for (auto& s : log_samples) b.push_back(s.y);
+        for (const auto& s : log_samples) b.push_back(s.y);
         auto coeffs = least_squares_solve(A, b);
         double a = std::exp(coeffs[0]), rate = coeffs[1];
 
@@ -518,7 +518,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         auto A = vandermonde(log_samples, 2);
         std::vector<double> b;
         b.reserve(log_samples.size());
-        for (auto& s : log_samples) b.push_back(s.y);
+        for (const auto& s : log_samples) b.push_back(s.y);
         auto coeffs = least_squares_solve(A, b);
         double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2];
         double a = std::exp(c0);
@@ -571,7 +571,7 @@ inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
     b.reserve(log_samples.size());
-    for (auto& s : log_samples) b.push_back(s.y);
+    for (const auto& s : log_samples) b.push_back(s.y);
     auto coeffs = least_squares_solve(A, b);
     double intercept = coeffs[0], slope = coeffs[1];
 
@@ -602,7 +602,7 @@ inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
 
     // Estimate frequency via zero-crossing count
     double y_mean = 0;
-    for (auto& s : samples) y_mean += s.y;
+    for (const auto& s : samples) y_mean += s.y;
     y_mean /= static_cast<double>(samples.size());
     int zero_crossings = 0;
     for (size_t i = 1; i < samples.size(); i++)
@@ -685,7 +685,7 @@ inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
         auto A = vandermonde(inv_samples, 1);
         std::vector<double> bv;
         bv.reserve(inv_samples.size());
-        for (auto& s : inv_samples) bv.push_back(s.y);
+        for (const auto& s : inv_samples) bv.push_back(s.y);
         auto coeffs = least_squares_solve(A, bv);
         // 1/(y-c) = coeffs[0] + coeffs[1]*x = (x + coeffs[0]/coeffs[1]) / (1/coeffs[1])
         // So a = 1/coeffs[1], b = coeffs[0]/coeffs[1]
@@ -695,10 +695,10 @@ inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
 
         // Compute R²
         double y_mean = 0;
-        for (auto& s : samples) y_mean += s.y;
+        for (const auto& s : samples) y_mean += s.y;
         y_mean /= static_cast<double>(samples.size());
         double ss_res = 0, ss_tot = 0, max_err = 0;
-        for (auto& s : samples) {
+        for (const auto& s : samples) {
             double predicted = a / (s.x + b) + c_try;
             if (!std::isfinite(predicted)) { ss_res = 1e30; break; }
             double residual = s.y - predicted;
@@ -913,13 +913,13 @@ inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         });
         level_inners.push_back(pr);
     }
-    for (auto& f : fits)
+    for (const auto& f : fits)
         if (f.r_squared > 0.5 && f.expr) level_inners.push_back(f);
 
     // Iterate composition levels
     for (int lvl = 2; lvl <= depth; lvl++) {
         double best_so_far = 0;
-        for (auto& f : fits) best_so_far = std::max(best_so_far, f.r_squared);
+        for (const auto& f : fits) best_so_far = std::max(best_so_far, f.r_squared);
 
         auto new_fits = compose_level(samples, level_inners, var,
             extra_constants, min_r2, best_so_far);

@@ -39,6 +39,7 @@ analyze:
 	@which cppcheck > /dev/null 2>&1 && ( \
 		echo "=== cppcheck ===" && \
 		cppcheck --enable=warning,style,performance --std=c++17 \
+			--inline-suppr \
 			--suppress=passedByValue --suppress=useStlAlgorithm \
 			--suppress=throwInEntryPoint \
 			--suppress=syntaxError:src/tests.cpp \
