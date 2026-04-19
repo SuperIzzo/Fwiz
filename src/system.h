@@ -1406,10 +1406,13 @@ private:
                     return true; // moved to a new source group — stop enumeration
                 // Check pre-condition
                 if (c.condition && !check_condition(*c.condition, bindings)) return false;
-                size_t added = results.size();
+                size_t before = results.size();
                 try_expr_all(c.expr, c.desc, c.condition);
-                added = results.size() - added;
-                if (added > 0 && winning_expr_group < 0)
+                // cppcheck-suppress knownConditionTrueFalse
+                // try_expr_all mutates results via a captured-by-reference lambda
+                // closure (see try_expr_all definition earlier in this method);
+                // cppcheck cannot trace that and constant-folds the comparison.
+                if (results.size() > before && winning_expr_group < 0)
                     winning_expr_group = c.source_group;
             } else if (c.type == CandidateType::FORMULA_FWD) {
                 if (formula_depth_ >= max_formula_depth) return false;
