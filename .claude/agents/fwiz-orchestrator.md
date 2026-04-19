@@ -70,6 +70,7 @@ Spawn three agents **sequentially** (each reads previous output):
 1. **planner** — Give it: research brief + "explore the codebase architecture." Do NOT mention minimalism constraints. Let it plan freely.
    - Include this question in the brief: "For each new type/primitive/abstraction you propose, name the specific scheduled docs/Future.md item that requires it. If the only caller is the feature you're planning and existing machinery can deliver in <25 LOC, plan the in-place version and record the cleaner architecture as a Future.md reopen-trigger entry."
    - Write output to `.fwiz-workflow/design-proposal.md` under "## Planner Proposal"
+   - **Verify the planner actually wrote the file**: after the planner returns, check `ls -la .fwiz-workflow/design*.md` and confirm mtime > the spawn timestamp. Planners have a failure mode of saying "writing to file now" and returning without the Write tool call — happened twice in recent cycles. If no file appeared, either re-spawn with "your first tool call MUST be Write, do not produce a plan only in your response" or materialize the file yourself from the response (log that you did). Do NOT proceed to critic without a file on disk.
 
 2. **critic** — Give it: the planner's proposal text + description of the .fw rewrite rule system + list of existing infrastructure (flatten, decompose_linear, enumerate_candidates, rewrite system, pattern matcher, BUILTIN_REWRITE_RULES). Do NOT give it the research brief.
    - Append output under "## Simplicity Critique"
