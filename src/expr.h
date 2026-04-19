@@ -585,7 +585,7 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
         case ExprType::VAR:       if (e.name != "undefined") out.insert(e.name); break;
         case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
         case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
-        case ExprType::FUNC_CALL: for (auto& a : e.args) collect_vars(*a, out); break;
+        case ExprType::FUNC_CALL: for (const auto* a : e.args) collect_vars(*a, out); break;
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
 }
@@ -597,7 +597,7 @@ inline bool contains_var(const Expr& e, const std::string& v) {
         case ExprType::VAR:       return e.name == v;
         case ExprType::BINOP:     return contains_var(*e.left, v) || contains_var(*e.right, v);
         case ExprType::UNARY_NEG: return contains_var(*e.child, v);
-        case ExprType::FUNC_CALL: for (auto& a : e.args) if (contains_var(*a, v)) return true;
+        case ExprType::FUNC_CALL: for (const auto* a : e.args) if (contains_var(*a, v)) return true;
                                   return false;
         case ExprType::COUNT_: assert(false && "invalid ExprType"); return false;
     }
@@ -625,9 +625,9 @@ inline bool expr_equal(const Expr& a, const Expr& b) {
     return false;
 }
 // Pointer overloads for convenience
-inline void collect_vars(ExprPtr e, std::set<std::string>& out) { if (e) collect_vars(*e, out); }
-inline bool contains_var(ExprPtr e, const std::string& v) { return e && contains_var(*e, v); }
-inline bool expr_equal(ExprPtr a, ExprPtr b) {
+inline void collect_vars(const Expr* e, std::set<std::string>& out) { if (e) collect_vars(*e, out); }
+inline bool contains_var(const Expr* e, const std::string& v) { return e && contains_var(*e, v); }
+inline bool expr_equal(const Expr* a, const Expr* b) {
     if (a == b) return true;
     if (!a || !b) return false;
     return expr_equal(*a, *b);
@@ -957,8 +957,8 @@ inline std::string expr_to_string(const Expr& e) {
     return "?";
 }
 // Pointer overloads
-inline int precedence(ExprPtr e) { return e ? precedence(*e) : 5; }
-inline std::string expr_to_string(ExprPtr e) { return e ? expr_to_string(*e) : "?"; }
+inline int precedence(const Expr* e) { return e ? precedence(*e) : 5; }
+inline std::string expr_to_string(const Expr* e) { return e ? expr_to_string(*e) : "?"; }
 
 // ============================================================================
 //  Substitute
@@ -1053,7 +1053,7 @@ inline Checked<double> evaluate(const Expr& e) {
     }
     return {};
 }
-inline Checked<double> evaluate(ExprPtr e) {
+inline Checked<double> evaluate(const Expr* e) {
     if (!e) return {};
     return evaluate(*e);
 }
@@ -1083,7 +1083,7 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
     }
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
         bool all_num = true;
-        for (auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
+        for (const auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
         // evaluate() can still return empty here (e.g. multi-arg function
         // with args.size() != 1) — fall through to tree-as-is on failure.
         if (all_num) {
