@@ -1885,11 +1885,6 @@ private:
         // Check custom and builtin function definitions
         auto& builtins = builtin_function_defs();
         auto blt = custom_function_defs_.find(file_part);
-        if (blt == custom_function_defs_.end()) {
-            auto bit = builtins.find(file_part);
-            if (bit != builtins.end()) blt = custom_function_defs_.end(); // use builtins below
-        }
-        // Check builtins if not in custom
         const std::string* def_source = nullptr;
         if (blt != custom_function_defs_.end())
             def_source = &blt->second;
