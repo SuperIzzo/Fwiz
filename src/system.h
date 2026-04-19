@@ -1578,7 +1578,7 @@ private:
         return call;
     }
 
-    std::pair<std::vector<Token>, std::vector<FormulaCall>>
+    static std::pair<std::vector<Token>, std::vector<FormulaCall>>
     extract_formula_calls(const std::vector<Token>& tok) {
         // Quick check: any QUESTION inside parens?
         int paren_depth = 0;
@@ -1689,8 +1689,8 @@ private:
     }
 
     // Check if a condition is satisfied given current bindings
-    bool check_condition(const Condition& cond,
-                         const std::map<std::string, double>& bindings) const {
+    static bool check_condition(const Condition& cond,
+                         const std::map<std::string, double>& bindings) {
         auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
             // Substitute known bindings into lhs and rhs
             ExprPtr lhs = c.lhs, rhs = c.rhs;
@@ -2241,9 +2241,9 @@ private:
 
     // Build a mapping from sub-system variable names to parent-scope expressions,
     // substituting known bindings into the call's binding expressions.
-    std::map<std::string, ExprPtr> derive_unfold_bindings(
+    static std::map<std::string, ExprPtr> derive_unfold_bindings(
             const FormulaCall& call,
-            const std::map<std::string, ExprPtr>& bindings) const {
+            const std::map<std::string, ExprPtr>& bindings) {
         std::map<std::string, ExprPtr> parent_map;
         for (auto& [sv, expr] : call.bindings)
             parent_map[sv] = substitute_bindings(expr, bindings);
