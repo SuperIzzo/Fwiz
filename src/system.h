@@ -49,7 +49,7 @@ struct Condition {
                          const std::map<std::string, double>& bindings = {}) const {
         ValueSet result = ValueSet::all();
         for (size_t i = 0; i < clauses.size(); i++) {
-            auto& c = clauses[i];
+            const auto& c = clauses[i];
             // Check if this clause constrains `var`
             bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
             bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
@@ -144,7 +144,7 @@ inline void dump_dead_ends(std::ostream& os, const DeadEndSet& de) {
         if (!first) os << ", ";
         os << "(" << var << ", {";
         bool first_k = true;
-        for (auto& k : keys) {
+        for (const auto& k : keys) {
             if (!first_k) os << ",";
             os << k;
             first_k = false;
@@ -195,7 +195,7 @@ inline std::string diag_keyset_str(const std::map<std::string, double>& m) {
 inline std::string diag_set_str(const std::set<std::string>& s) {
     std::string out = "{";
     bool first = true;
-    for (auto& v : s) {
+    for (const auto& v : s) {
         if (!first) out += ",";
         out += v;
         first = false;
@@ -356,7 +356,7 @@ public:
     static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
         std::vector<Section> result;
         result.push_back({"", {}, {}, {}, {}}); // top-level (unnamed)
-        for (auto& line : all_lines) {
+        for (const auto& line : all_lines) {
             auto trimmed = trim(line);
             // Section header: [name(args) -> return] optional_first_line
             if (trimmed.size() >= 3 && trimmed.front() == '[') {
@@ -398,7 +398,7 @@ public:
     // Load parsed lines into this system (shared by load_file and load_string)
     void load_lines(const std::vector<std::string>& lines) {
         int line_num = 0;
-        for (auto& raw : lines) {
+        for (const auto& raw : lines) {
             line_num++;
             std::string line = trim(raw);
             if (line.empty() || line[0] == '#') continue;
@@ -422,7 +422,7 @@ public:
     // "triangle.right" loads: top-level → [triangle] → [triangle.right]
     void load_section(const std::string& section) {
         // Always load top-level (unnamed section)
-        for (auto& s : sections_)
+        for (const auto& s : sections_)
             if (s.name.empty()) { load_lines(s.lines); break; }
 
         if (section.empty()) {
@@ -442,9 +442,9 @@ public:
         }
 
         // Load each ancestor section in order
-        for (auto& ancestor : chain) {
+        for (const auto& ancestor : chain) {
             bool found = false;
-            for (auto& s : sections_) {
+            for (const auto& s : sections_) {
                 if (s.name == ancestor) {
                     // Apply return_var sugar: lines starting with "=" get return_var prepended
                     if (!s.return_var.empty()) {
@@ -473,7 +473,7 @@ public:
         auto& consts = builtin_constants();
         if (!consts.count(name)) return false;
         if (defaults.count(name)) return false;
-        for (auto& eq : equations)
+        for (const auto& eq : equations)
             if (eq.lhs_var == name) return false;
         return true;
     }
@@ -484,7 +484,7 @@ public:
             trace.step("  equation: " + eq.lhs_var + " = " + expr_to_string(eq.rhs));
         for (auto& [k, v] : defaults)
             trace.step("  default: " + k + " = " + fmt_num(v));
-        for (auto& fc : formula_calls)
+        for (const auto& fc : formula_calls)
             trace.step("  formula call: " + fc.file_stem + "(" + fc.query_var + "=?" + fc.output_var + ")");
     }
 
@@ -595,7 +595,7 @@ x^(1/2) = sqrt(x)
             bool all_have_conditions = true;
 
             for (size_t idx : group.rule_indices) {
-                auto& rule = rewrite_rules[idx];
+                const auto& rule = rewrite_rules[idx];
                 if (rule.condition.empty()) {
                     // Unconditional rule → covers everything
                     group.exhaustive = true;
@@ -656,7 +656,7 @@ x^(1/2) = sqrt(x)
                 // Find section metadata with positional args
                 std::vector<std::string> pos_args;
                 std::string return_var;
-                for (auto& sec : sub.sections_) {
+                for (const auto& sec : sub.sections_) {
                     if (sec.name == "" || sec.name == file_stem
                         || file_stem.find('.') != std::string::npos) {
                         if (!sec.positional_args.empty()) {
@@ -668,7 +668,7 @@ x^(1/2) = sqrt(x)
                 }
                 // Also check first section with matching args count
                 if (pos_args.empty()) {
-                    for (auto& sec : sub.sections_) {
+                    for (const auto& sec : sub.sections_) {
                         if (!sec.positional_args.empty()) {
                             pos_args = sec.positional_args;
                             return_var = sec.return_var;
@@ -978,7 +978,7 @@ x^(1/2) = sqrt(x)
                     std::string sub_target = c.sub_var;
                     ExprPtr binding_expr = parent_map[sub_target];
 
-                    for (auto& eq : sub_sys.equations) {
+                    for (const auto& eq : sub_sys.equations) {
                         if (eq.lhs_var != c.call->query_var) continue;
                         if (eq.condition && !sub_sys.check_condition(*eq.condition, numeric))
                             continue;
@@ -1157,7 +1157,7 @@ x^(1/2) = sqrt(x)
             try {
                 auto& sub = load_sub_system(func_name);
                 // Find the section with positional args (the function definition)
-                for (auto& sec : sub.sections_) {
+                for (const auto& sec : sub.sections_) {
                     if (sec.positional_args.empty()) continue;
                     // The input variable is the first positional arg
                     // The return variable is sec.return_var (or "result")
@@ -1228,7 +1228,7 @@ x^(1/2) = sqrt(x)
             // Only cross-validate when there are multiple equations with known LHS values
             // (single-equation multiple roots are already valid by construction)
             int known_lhs_count = 0;
-            for (auto& eq : equations)
+            for (const auto& eq : equations)
                 if (prepared.count(eq.lhs_var)) known_lhs_count++;
             if (exact_results.size() > 1 && known_lhs_count > 1) {
                 std::vector<double> validated;
@@ -1289,7 +1289,7 @@ x^(1/2) = sqrt(x)
                 }
             }
         }
-        for (auto& gc : global_conditions)
+        for (const auto& gc : global_conditions)
             constraints = constraints.intersect(gc.to_valueset(target, prepared));
 
         bool has_constraints = !constraints.empty()
@@ -1382,7 +1382,7 @@ private:
                 // Check equation condition
                 if (cond && !check_condition(*cond, b)) return;
                 // Check global conditions
-                for (auto& gc : global_conditions)
+                for (const auto& gc : global_conditions)
                     if (!check_condition(gc, b)) return;
                 // Deduplicate
                 for (auto r : results)
@@ -1425,7 +1425,7 @@ private:
                             if (std::abs(r - val) < EPSILON_ZERO) return false;
                         // Check global conditions
                         auto b = bindings; b[target] = val;
-                        for (auto& gc : global_conditions)
+                        for (const auto& gc : global_conditions)
                             if (!check_condition(gc, b)) return false;
                         results.push_back(val);
                     }
@@ -1478,7 +1478,7 @@ private:
                 std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
                           << " exit=exhausted missing=" << diag_set_str(missing) << "]\n";
             std::string list;
-            for (auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
+            for (const auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
             throw std::runtime_error("Cannot solve for '" + target + "': no value for " + list);
         }
         if (results.empty()) {
@@ -1583,7 +1583,7 @@ private:
         // Quick check: any QUESTION inside parens?
         int paren_depth = 0;
         bool has_call = false;
-        for (auto& t : tok) {
+        for (const auto& t : tok) {
             if (t.type == TokenType::LPAREN) paren_depth++;
             else if (t.type == TokenType::RPAREN) paren_depth--;
             else if (t.type == TokenType::QUESTION && paren_depth > 0) { has_call = true; break; }
@@ -1932,7 +1932,7 @@ private:
         // named section, load that section (common for single-function .fw files)
         if (sub->equations.empty() && section.empty()) {
             std::string auto_section;
-            for (auto& s : sub->sections_) {
+            for (const auto& s : sub->sections_) {
                 if (!s.name.empty()) {
                     if (!auto_section.empty()) { auto_section.clear(); break; } // multiple
                     auto_section = s.name;
@@ -2139,7 +2139,7 @@ private:
                         u_exprs.push_back(e2.rhs);
                     } else if (contains_var(e2.rhs, u)) {
                         auto sols = solve_for_all(Expr::Var(e2.lhs_var), e2.rhs, u);
-                        for (auto& s : sols) if (s.expr) u_exprs.push_back(s.expr);
+                        for (const auto& s : sols) if (s.expr) u_exprs.push_back(s.expr);
                     } else continue;
                     for (auto& u_expr : u_exprs) {
                         if (contains_var(u_expr, u)) continue; // circular
@@ -2186,7 +2186,7 @@ private:
                                     v_exprs.push_back(e3.rhs);
                                 } else if (contains_var(e3.rhs, v)) {
                                     auto vs = solve_for_all(Expr::Var(e3.lhs_var), e3.rhs, v);
-                                    for (auto& s : vs) if (s.expr) v_exprs.push_back(s.expr);
+                                    for (const auto& s : vs) if (s.expr) v_exprs.push_back(s.expr);
                                 } else continue;
                                 for (auto& v_expr : v_exprs) {
                                     if (contains_var(v_expr, v)) continue;
@@ -2279,7 +2279,7 @@ private:
 
         simplify_clear_assumptions();
         auto result = simplify(resolved);
-        for (auto& a : simplify_get_assumptions())
+        for (const auto& a : simplify_get_assumptions())
             trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 1);
 
         // If the target appears in the resolved expression, we have:
@@ -2400,7 +2400,7 @@ private:
                         std::set<std::string> remaining;
                         collect_vars(unfolded, remaining);
                         bool has_formula_output = false;
-                        for (auto& fc : sub_sys.formula_calls)
+                        for (const auto& fc : sub_sys.formula_calls)
                             if (remaining.count(fc.output_var))
                                 { has_formula_output = true; break; }
                         if (!has_formula_output) {
@@ -2451,7 +2451,7 @@ private:
                         parent_map[sv] = expr;
                     std::string sub_target = c.sub_var;
                     ExprPtr binding_expr = parent_map[sub_target];
-                    for (auto& eq : sub_sys.equations) {
+                    for (const auto& eq : sub_sys.equations) {
                         if (eq.lhs_var != c.call->query_var) continue;
                         // Check sub-system equation condition if possible
                         if (eq.condition) {
@@ -2563,7 +2563,7 @@ private:
         double lo = NUMERIC_DEFAULT_LO, hi = NUMERIC_DEFAULT_HI;
 
         auto apply_valueset = [&](const ValueSet& vs) {
-            for (auto& iv : vs.intervals()) {
+            for (const auto& iv : vs.intervals()) {
                 if (!std::isinf(iv.low) && iv.low > lo) lo = iv.low;
                 if (!std::isinf(iv.high) && iv.high < hi) hi = iv.high;
             }
@@ -2573,7 +2573,7 @@ private:
         if (eq_condition) apply_valueset(eq_condition->to_valueset(target, bindings));
 
         // Global conditions
-        for (auto& gc : global_conditions)
+        for (const auto& gc : global_conditions)
             apply_valueset(gc.to_valueset(target, bindings));
 
         return {lo, hi};
@@ -2683,7 +2683,7 @@ private:
             for (auto& [bvar, bval] : bindings) {
                 if (bvar == target) continue;
                 bool found = false;
-                for (auto& pv : probe_vars) if (pv == bvar) { found = true; break; }
+                for (const auto& pv : probe_vars) if (pv == bvar) { found = true; break; }
                 if (!found) probe_vars.push_back(bvar);
             }
 
@@ -2733,7 +2733,7 @@ private:
             test_binds[target] = r;
             bool ok = true;
             if (eq_condition && !check_condition(*eq_condition, test_binds)) ok = false;
-            for (auto& gc : global_conditions)
+            for (const auto& gc : global_conditions)
                 if (!check_condition(gc, test_binds)) ok = false;
             if (ok) filtered.push_back(r);
         }
@@ -2907,7 +2907,7 @@ private:
                     return false;
                 }
                 // Check global conditions
-                for (auto& gc : global_conditions) {
+                for (const auto& gc : global_conditions) {
                     if (!check_condition(gc, bindings)) {
                         trace.step("  global condition failed, trying next", depth + 1);
                         bindings.erase(target);
@@ -2942,7 +2942,7 @@ private:
                 + "': all equations produced invalid results (NaN or infinity)");
         if (!missing.empty()) {
             std::string list;
-            for (auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
+            for (const auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
             throw std::runtime_error("Cannot solve for '" + target + "': no value for " + list);
         }
         throw std::runtime_error("Cannot solve for '" + target + "'");
@@ -2998,7 +2998,7 @@ private:
         simplify_clear_assumptions();
         auto simplified = simplify(resolved);
         auto assumptions = simplify_get_assumptions();
-        for (auto& a : assumptions)
+        for (const auto& a : assumptions)
             trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
         auto result_opt = evaluate(simplified);
         if (!result_opt) {
