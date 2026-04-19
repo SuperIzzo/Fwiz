@@ -341,7 +341,7 @@ void test_substitute() {
     ASSERT_EQ(expr_to_string(simplify(r2)), "16", "sub x=10,y=3 => 16");
 
     // Substitute with expression
-    auto r3 = substitute(e, "x", parse("a + b"));
+    const auto* r3 = substitute(e, "x", parse("a + b"));
     ASSERT_EQ(expr_to_string(r3), "a + b + y * 2", "sub x=(a+b)");
 
     // Substitute in function call
@@ -351,7 +351,7 @@ void test_substitute() {
     ASSERT_NUM((evaluate(simplify(r5)).value()), 5, "sub in sqrt(3^2+4^2)=5");
 
     // No-op substitute (var not present)
-    auto r6 = substitute(parse("a + b"), "z", Expr::Num(99));
+    const auto* r6 = substitute(parse("a + b"), "z", Expr::Num(99));
     ASSERT_EQ(expr_to_string(r6), "a + b", "sub missing var is no-op");
 }
 
@@ -461,49 +461,49 @@ void test_solve_for() {
 
     // x = y + 5 => y = x - 5
     {
-        auto sol = solve_for(Expr::Var("x"), parse("y + 5"), "y");
+        const auto* sol = solve_for(Expr::Var("x"), parse("y + 5"), "y");
         ASSERT(sol != nullptr, "can solve y+5 for y");
         ASSERT_EQ(expr_to_string(sol), "x - 5", "y = x - 5");
     }
 
     // x = y * 2 - 5 => y = (x + 5) / 2
     {
-        auto sol = solve_for(Expr::Var("x"), parse("y * 2 - 5"), "y");
+        const auto* sol = solve_for(Expr::Var("x"), parse("y * 2 - 5"), "y");
         ASSERT(sol != nullptr, "can solve y*2-5 for y");
         ASSERT_EQ(expr_to_string(sol), "(x + 5) / 2", "y = (x+5)/2");
     }
 
     // x = y + 3*y => y = x / 4
     {
-        auto sol = solve_for(Expr::Var("x"), parse("y + 3 * y"), "y");
+        const auto* sol = solve_for(Expr::Var("x"), parse("y + 3 * y"), "y");
         ASSERT(sol != nullptr, "can solve y+3y for y");
         ASSERT_EQ(expr_to_string(sol), "x / 4", "y = x/4");
     }
 
     // distance = speed * time => time = distance / speed
     {
-        auto sol = solve_for(Expr::Var("distance"), parse("speed * time"), "time");
+        const auto* sol = solve_for(Expr::Var("distance"), parse("speed * time"), "time");
         ASSERT(sol != nullptr, "can solve speed*time for time");
         ASSERT_EQ(expr_to_string(sol), "distance / speed", "time = distance/speed");
     }
 
     // x = 3*y + 2*y - 10 => y = (x + 10) / 5
     {
-        auto sol = solve_for(Expr::Var("x"), parse("3*y + 2*y - 10"), "y");
+        const auto* sol = solve_for(Expr::Var("x"), parse("3*y + 2*y - 10"), "y");
         ASSERT(sol != nullptr, "can solve 3y+2y-10 for y");
         ASSERT_EQ(expr_to_string(sol), "(x + 10) / 5", "y = (x+10)/5");
     }
 
     // Nonlinear: x = y^2 => now solvable via inversion: y = sqrt(x)
     {
-        auto sol = solve_for(Expr::Var("x"), parse("y^2"), "y");
+        const auto* sol = solve_for(Expr::Var("x"), parse("y^2"), "y");
         ASSERT(sol != nullptr, "y^2 solvable via inversion");
         ASSERT_EQ(expr_to_string(sol), "sqrt(x)", "y^2 → y = sqrt(x)");
     }
 
     // Solve for x when x is on the LHS already: x = a + b => x = a + b
     {
-        auto sol = solve_for(Expr::Var("x"), parse("a + b"), "x");
+        const auto* sol = solve_for(Expr::Var("x"), parse("a + b"), "x");
         ASSERT(sol != nullptr, "can solve for x on LHS");
         // Flattener may reorder: a+b or b+a both valid
         auto s = expr_to_string(sol);
@@ -887,7 +887,7 @@ void test_parser_edge() {
         ASSERT_EQ(expr_to_string(e), "x^2^3", "x^2^3 parses fully");
         ASSERT(p.at_end(), "x^2^3 no trailing tokens");
         // Verify: x=2, should be 2^(2^3) = 2^8 = 256
-        auto v = substitute(e, "x", Expr::Num(2));
+        const auto* v = substitute(e, "x", Expr::Num(2));
         ASSERT_NUM((evaluate(v).value()), 256, "2^2^3 = 2^8 = 256");
     }
 
@@ -1509,21 +1509,21 @@ void test_parser_garbage() {
     {
         auto tokens = Lexer("x y").tokenize();
         Parser p(tokens);
-        auto e = p.parse_expr();
+        const auto* e = p.parse_expr();
         ASSERT_EQ(expr_to_string(e), "x", "x y: parses x");
         ASSERT(!p.at_end(), "x y: has trailing tokens");
     }
     {
         auto tokens = Lexer("(x))").tokenize();
         Parser p(tokens);
-        auto e = p.parse_expr();
+        const auto* e = p.parse_expr();
         ASSERT_EQ(expr_to_string(e), "x", "(x)): parses x");
         ASSERT(!p.at_end(), "(x)): trailing close paren");
     }
     {
         auto tokens = Lexer("x = y").tokenize();
         Parser p(tokens);
-        auto e = p.parse_expr();
+        const auto* e = p.parse_expr();
         ASSERT_EQ(expr_to_string(e), "x", "x = y: parses x");
         ASSERT(!p.at_end(), "x = y: = is trailing");
     }
@@ -1873,12 +1873,12 @@ void test_numeric_extremes() {
 
     // Inf arithmetic
     {
-        auto e = Expr::BinOpExpr(BinOp::ADD,
+        const auto* e = Expr::BinOpExpr(BinOp::ADD,
             Expr::Num(std::numeric_limits<double>::infinity()), Expr::Num(1));
         ASSERT(std::isinf((evaluate(e).value_or_nan())), "inf + 1 = inf");
     }
     {
-        auto e = Expr::BinOpExpr(BinOp::MUL,
+        const auto* e = Expr::BinOpExpr(BinOp::MUL,
             Expr::Num(std::numeric_limits<double>::infinity()), Expr::Num(0));
         ASSERT(std::isnan((evaluate(e).value_or_nan())), "inf * 0 = NaN");
     }
@@ -1911,7 +1911,7 @@ void test_numeric_extremes() {
     {
         // Parser reads this as -(1^0.5) = -1, not (-1)^0.5
         // Build it manually
-        auto e = Expr::BinOpExpr(BinOp::POW, Expr::Num(-1), Expr::Num(0.5));
+        const auto* e = Expr::BinOpExpr(BinOp::POW, Expr::Num(-1), Expr::Num(0.5));
         ASSERT(std::isnan((evaluate(e).value_or_nan())), "(-1)^0.5 = NaN");
     }
 
@@ -1928,7 +1928,7 @@ void test_numeric_extremes() {
     // NaN in arithmetic
     {
         double nan = std::numeric_limits<double>::quiet_NaN();
-        auto e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(nan), Expr::Num(5));
+        const auto* e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(nan), Expr::Num(5));
         ASSERT(std::isnan((evaluate(e).value_or_nan())), "NaN + 5 = NaN");
     }
 
@@ -2166,21 +2166,21 @@ void test_depth_evaluate() {
 
     // Moderate depth: correct result
     {
-        auto e = substitute(build_deep_add(100), "x", Expr::Num(0));
+        const auto* e = substitute(build_deep_add(100), "x", Expr::Num(0));
         ASSERT_NUM((evaluate(e).value()), 100, "depth 100: evaluate = 100");
     }
     {
-        auto e = substitute(build_deep_add(1000), "x", Expr::Num(0));
+        const auto* e = substitute(build_deep_add(1000), "x", Expr::Num(0));
         ASSERT_NUM((evaluate(e).value()), 1000, "depth 1000: evaluate = 1000");
     }
     {
-        auto e = substitute(build_deep_add(DEPTH_HIGH), "x", Expr::Num(0));
+        const auto* e = substitute(build_deep_add(DEPTH_HIGH), "x", Expr::Num(0));
         ASSERT_NUM((evaluate(e).value()), DEPTH_HIGH, "depth HIGH: evaluate");
     }
 
     // With a non-zero base value
     {
-        auto e = substitute(build_deep_add(DEPTH_MED), "x", Expr::Num(42));
+        const auto* e = substitute(build_deep_add(DEPTH_MED), "x", Expr::Num(42));
         ASSERT_NUM((evaluate(e).value()), DEPTH_MED + 42, "depth MED: x=42, evaluate");
     }
 }
@@ -2191,18 +2191,18 @@ void test_depth_simplify() {
     // Simplify at moderate depth — shouldn't crash
     {
         auto e = build_deep_add(100);
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         // After simplify, should still contain x and constants
         ASSERT(contains_var(s, "x"), "depth 100 simplify: x preserved");
     }
     {
         auto e = build_deep_add(1000);
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT(contains_var(s, "x"), "depth MED simplify: x preserved");
     }
     {
         auto e = build_deep_add(DEPTH_MED);
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT(contains_var(s, "x"), "depth MED simplify: x preserved");
     }
     // Verify simplify produces correct result when evaluated
@@ -2220,19 +2220,19 @@ void test_depth_substitute() {
     // Substitute at depth
     {
         auto e = build_deep_add(1000);
-        auto s = substitute(e, "x", Expr::Num(7));
+        const auto* s = substitute(e, "x", Expr::Num(7));
         ASSERT_NUM((evaluate(s).value()), 1007, "depth 1000: sub x=7, eval = 1007");
     }
     {
         auto e = build_deep_add(DEPTH_HIGH);
-        auto s = substitute(e, "x", Expr::Num(0));
+        const auto* s = substitute(e, "x", Expr::Num(0));
         ASSERT_NUM((evaluate(s).value()), DEPTH_HIGH, "depth HIGH: sub and eval");
     }
 
     // Substitute with expression (not just number)
     {
         auto e = build_deep_add(500);
-        auto s = substitute(e, "x", Expr::BinOpExpr(BinOp::MUL, Expr::Var("y"), Expr::Num(2)));
+        const auto* s = substitute(e, "x", Expr::BinOpExpr(BinOp::MUL, Expr::Var("y"), Expr::Num(2)));
         ASSERT(contains_var(s, "y"), "depth 500: sub x=2y preserves y");
         ASSERT(!contains_var(s, "x"), "depth 500: sub x=2y removes x");
     }
@@ -2243,7 +2243,7 @@ void test_depth_collect_vars() {
 
     // Deep tree with one variable
     {
-        auto e = build_deep_add(DEPTH_MED);
+        const auto* e = build_deep_add(DEPTH_MED);
         std::set<std::string> vars;
         collect_vars(e, vars);
         ASSERT(vars.size() == 1, "depth MED: only 1 var (x)");
@@ -2256,14 +2256,14 @@ void test_depth_tostring() {
 
     // Printing a deep tree
     {
-        auto e = build_deep_add(100);
+        const auto* e = build_deep_add(100);
         auto s = expr_to_string(e);
         ASSERT(s.size() > 100, "depth 100: string is long");
         // Should start with x and contain lots of " + 1"
         ASSERT(s.find("x") != std::string::npos, "depth 100: string contains x");
     }
     {
-        auto e = build_deep_add(DEPTH_HIGH);
+        const auto* e = build_deep_add(DEPTH_HIGH);
         auto s = expr_to_string(e);
         ASSERT(s.size() > (size_t)DEPTH_HIGH, "depth HIGH: string output doesn't crash");
     }
@@ -2309,27 +2309,27 @@ void test_deep_functions() {
     // sqrt(sqrt(sqrt(...(x)...))) at moderate depth
     {
         auto e = build_deep_func(10);
-        auto s = substitute(e, "x", Expr::Num(1));
+        const auto* s = substitute(e, "x", Expr::Num(1));
         // sqrt^10(1) = 1
         ASSERT_NUM((evaluate(s).value()), 1, "sqrt^10(1) = 1");
     }
     {
         // sqrt^20(1e300) — repeated sqrt of a large number converges to 1
         auto e = build_deep_func(100);
-        auto s = substitute(e, "x", Expr::Num(1e300));
+        const auto* s = substitute(e, "x", Expr::Num(1e300));
         double r = (evaluate(s).value());
         ASSERT(r > 0.99 && r < 1.01, "sqrt^100(1e300) converges near 1");
     }
     {
         // Deep nested functions at depth 1000
         auto e = build_deep_func(DEPTH_MED);
-        auto s = substitute(e, "x", Expr::Num(1));
+        const auto* s = substitute(e, "x", Expr::Num(1));
         ASSERT_NUM((evaluate(s).value()), 1, "sqrt^1000(1) = 1");
     }
 
     // collect_vars through deep func nesting
     {
-        auto e = build_deep_func(500);
+        const auto* e = build_deep_func(500);
         std::set<std::string> vars;
         collect_vars(e, vars);
         ASSERT(vars.size() == 1 && vars.count("x"), "deep func: 1 var x");
@@ -2341,13 +2341,13 @@ void test_wide_expressions() {
 
     // Wide expression with many unique variables
     {
-        auto e = build_wide_vars(100);
+        const auto* e = build_wide_vars(100);
         std::set<std::string> vars;
         collect_vars(e, vars);
         ASSERT(vars.size() == 100, "100 vars collected");
     }
     {
-        auto e = build_wide_vars(DEPTH_MED);
+        const auto* e = build_wide_vars(DEPTH_MED);
         std::set<std::string> vars;
         collect_vars(e, vars);
         ASSERT(vars.size() == (size_t)DEPTH_MED, "MED vars collected");
@@ -2366,7 +2366,7 @@ void test_wide_expressions() {
 
     // Wide expression to_string
     {
-        auto e = build_wide_vars(DEPTH_MED);
+        const auto* e = build_wide_vars(DEPTH_MED);
         auto s = expr_to_string(e);
         ASSERT(s.size() > (size_t)DEPTH_MED, "MED-var expr to_string");
     }
@@ -2379,19 +2379,19 @@ void test_parse_deep_string() {
     {
         auto s = build_deep_parse_string(100);
         auto e = parse(s);
-        auto v = substitute(e, "x", Expr::Num(0));
+        const auto* v = substitute(e, "x", Expr::Num(0));
         ASSERT_NUM((evaluate(v).value()), 100, "parse depth 100: eval = 100");
     }
     {
         auto s = build_deep_parse_string(1000);
         auto e = parse(s);
-        auto v = substitute(e, "x", Expr::Num(0));
+        const auto* v = substitute(e, "x", Expr::Num(0));
         ASSERT_NUM((evaluate(v).value()), 1000, "parse depth 1000: eval = 1000");
     }
     {
         // Parse depth 5000 — stress the parser's recursion
         auto s = build_deep_parse_string(DEPTH_MED);
-        auto e = parse(s);
+        const auto* e = parse(s);
         ASSERT(contains_var(e, "x"), "parse depth MED: succeeds");
     }
 
@@ -2400,7 +2400,7 @@ void test_parse_deep_string() {
         std::string s = "x";
         for (int i = 0; i < 1000; i++) s += " + 1";
         auto e = parse(s);
-        auto v = substitute(e, "x", Expr::Num(0));
+        const auto* v = substitute(e, "x", Expr::Num(0));
         ASSERT_NUM((evaluate(v).value()), 1000, "parse flat 1000 terms: eval = 1000");
     }
 }
@@ -3941,7 +3941,7 @@ void test_simplifier_convergence() {
     // Check that simplify reaches fixpoint (no change on further iterations)
     auto check_fixpoint = [](const char* label, ExprPtr e) {
         auto s = simplify(e);
-        auto s2 = simplify_once(s);
+        const auto* s2 = simplify_once(s);
         ASSERT(expr_to_string(s) == expr_to_string(s2),
             std::string(label) + ": at fixpoint after simplify");
     };
@@ -3959,14 +3959,14 @@ void test_simplifier_convergence() {
         auto s = simplify(e);
         ASSERT_EQ(expr_to_string(s), "-a + b", "-(a-b) settles to -a + b");
         // Verify no oscillation: simplifying again gives same result
-        auto s2 = simplify(s);
+        const auto* s2 = simplify(s);
         ASSERT_EQ(expr_to_string(s2), "-a + b", "-a + b is stable");
     }
 
     // Double neg of subtraction
     {
         auto e = Expr::Neg(Expr::Neg(Expr::BinOpExpr(BinOp::SUB, Expr::Var("a"), Expr::Var("b"))));
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT_EQ(expr_to_string(s), "a - b", "--(a-b) settles to a - b");
     }
 }
@@ -4253,17 +4253,17 @@ void test_audit_fmt_num_ub() {
 
     // Also verify the same fix in expr_to_string
     {
-        auto e = Expr::Num(std::numeric_limits<double>::infinity());
+        const auto* e = Expr::Num(std::numeric_limits<double>::infinity());
         std::string s = expr_to_string(e);
         ASSERT(!s.empty(), "expr_to_string(inf) doesn't crash");
     }
     {
-        auto e = Expr::Num(std::numeric_limits<double>::quiet_NaN());
+        const auto* e = Expr::Num(std::numeric_limits<double>::quiet_NaN());
         std::string s = expr_to_string(e);
         ASSERT(!s.empty(), "expr_to_string(NaN) doesn't crash");
     }
     {
-        auto e = Expr::Num(1e19);
+        const auto* e = Expr::Num(1e19);
         std::string s = expr_to_string(e);
         ASSERT(!s.empty(), "expr_to_string(1e19) doesn't crash");
     }
@@ -4340,13 +4340,13 @@ void test_audit_switch_safety() {
     {
         auto num = Expr::Num(5);
         auto var = Expr::Var("x");
-        auto neg = Expr::Neg(var);
-        auto add = Expr::BinOpExpr(BinOp::ADD, num, var);
-        auto sub = Expr::BinOpExpr(BinOp::SUB, num, var);
-        auto mul = Expr::BinOpExpr(BinOp::MUL, num, var);
-        auto div = Expr::BinOpExpr(BinOp::DIV, num, var);
-        auto pow = Expr::BinOpExpr(BinOp::POW, num, var);
-        auto func = Expr::Call("sqrt", {var});
+        const auto* neg = Expr::Neg(var);
+        const auto* add = Expr::BinOpExpr(BinOp::ADD, num, var);
+        const auto* sub = Expr::BinOpExpr(BinOp::SUB, num, var);
+        const auto* mul = Expr::BinOpExpr(BinOp::MUL, num, var);
+        const auto* div = Expr::BinOpExpr(BinOp::DIV, num, var);
+        const auto* pow = Expr::BinOpExpr(BinOp::POW, num, var);
+        const auto* func = Expr::Call("sqrt", {var});
 
         // Each type should have a distinct, correct precedence
         ASSERT(precedence(add) == 1, "ADD precedence = 1");
@@ -5825,7 +5825,7 @@ void test_solve_for_zero_guard() {
         // 3*c + 0 = 0 → c = 0
         auto lhs = Parser(Lexer("3 * c").tokenize()).parse_expr();
         auto rhs = Expr::Num(0);
-        auto sol = solve_for(lhs, rhs, "c");
+        const auto* sol = solve_for(lhs, rhs, "c");
         ASSERT(sol != nullptr, "concrete coeff: solution found");
         double val = (evaluate(sol).value());
         ASSERT_NUM(val, 0, "concrete coeff: c=0");
@@ -5854,7 +5854,7 @@ void test_solve_for_zero_guard() {
         // 2*c + 6 = 0 → c = -3
         auto lhs = Parser(Lexer("2 * c + 6").tokenize()).parse_expr();
         auto rhs = Expr::Num(0);
-        auto sol = solve_for(lhs, rhs, "c");
+        const auto* sol = solve_for(lhs, rhs, "c");
         ASSERT(sol != nullptr, "numeric coeff nonzero rest: found");
         double val = (evaluate(sol).value());
         ASSERT_NUM(val, -3, "numeric coeff nonzero rest: c=-3");
@@ -6037,7 +6037,7 @@ void test_simplify_rule_interactions() {
     // One to any power: 1^x → 1
     // (not currently simplified, but should evaluate correctly)
     {
-        auto e = simplify(parse("1^999"));
+        const auto* e = simplify(parse("1^999"));
         ASSERT_EQ(expr_to_string(e), "1", "1^999 → 1");
     }
 
@@ -8142,7 +8142,7 @@ void test_simplify_assumptions() {
     // x/x → 1, assumes x != 0
     {
         simplify_clear_assumptions();
-        auto expr = simplify(parse("x / x"));
+        const auto* expr = simplify(parse("x / x"));
         auto assumptions = simplify_get_assumptions();
         ASSERT_EQ(expr_to_string(expr), "1", "assumption: x/x → 1");
         ASSERT(assumptions.size() == 1, "assumption: one assumption for x/x");
@@ -8154,7 +8154,7 @@ void test_simplify_assumptions() {
     // a*b/a → b, assumes a != 0
     {
         simplify_clear_assumptions();
-        auto expr = simplify(parse("a * b / a"));
+        const auto* expr = simplify(parse("a * b / a"));
         auto assumptions = simplify_get_assumptions();
         ASSERT_EQ(expr_to_string(expr), "b", "assumption: a*b/a → b");
         ASSERT(assumptions.size() == 1, "assumption: one assumption for a*b/a");
@@ -8182,7 +8182,7 @@ void test_simplify_assumptions() {
     // Complex: (x-3)*z/(x-3) → z, assumes x-3 != 0
     {
         simplify_clear_assumptions();
-        auto expr = simplify(parse("(x - 3) * z / (x - 3)"));
+        const auto* expr = simplify(parse("(x - 3) * z / (x - 3)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT_EQ(expr_to_string(expr), "z", "assumption: (x-3)*z/(x-3) → z");
         ASSERT(!assumptions.empty(), "assumption: has assumption for (x-3)*z/(x-3)");
@@ -8194,7 +8194,7 @@ void test_simplify_assumptions() {
     // sin(x)/sin(x) → 1, assumes sin(x) != 0
     {
         simplify_clear_assumptions();
-        auto expr = simplify(parse("sin(x) / sin(x)"));
+        const auto* expr = simplify(parse("sin(x) / sin(x)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT_EQ(expr_to_string(expr), "1", "assumption: sin(x)/sin(x) → 1");
         ASSERT(!assumptions.empty(), "assumption: has assumption for sin(x)/sin(x)");
@@ -8203,7 +8203,7 @@ void test_simplify_assumptions() {
     // Dedup: x*x/x → x with only one assumption (not two)
     {
         simplify_clear_assumptions();
-        auto expr = simplify(parse("x * x / x"));
+        const auto* expr = simplify(parse("x * x / x"));
         auto assumptions = simplify_get_assumptions();
         ASSERT_EQ(expr_to_string(expr), "x", "assumption: x*x/x → x");
         ASSERT(assumptions.size() == 1, "assumption: dedup — one assumption for x*x/x");
@@ -8344,7 +8344,7 @@ void test_simplify_common_factor() {
 
     // sum / (-x) → -(sum/x) → correct sign
     {
-        auto expr = simplify(p("(a*x + b*x) / (0 - x)"));
+        const auto* expr = simplify(p("(a*x + b*x) / (0 - x)"));
         // Should simplify cleanly (neg pulled out, then distributed)
         ASSERT(expr_to_string(expr).find("/") == std::string::npos,
             "factor: sum/(-x) cancels fully");
@@ -8647,7 +8647,7 @@ void test_rewrite_rules() {
         RewriteRulesGuard rr_guard(&sys.rewrite_rules);
         ExprArena arena;
         ExprArena::Scope scope(arena);
-        auto e = simplify(parse("log(a^3)"));
+        const auto* e = simplify(parse("log(a^3)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "3 * log(a)",
             "log condition: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
@@ -8665,7 +8665,7 @@ void test_rewrite_rules() {
         sys.load_string("y = foo(bar)\nfoo(x) = x^2 iff x > 0\n");
         simplify_clear_assumptions();
         RewriteRulesGuard rr_guard(&sys.rewrite_rules);
-        auto e = simplify(parse("foo(a + 1)"));
+        const auto* e = simplify(parse("foo(a + 1)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "(a + 1)^2",
             "custom condition: foo(a+1) = (a+1)^2 (got " + expr_to_string(e) + ")");
@@ -8685,7 +8685,7 @@ void test_rewrite_rules() {
         RewriteRulesGuard rr_guard(&sys.rewrite_rules);
         ExprArena arena;
         ExprArena::Scope scope(arena);
-        auto e = simplify(parse("magic(a, b)"));
+        const auto* e = simplify(parse("magic(a, b)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "a + b",
             "compound condition: magic(a,b) = a+b (got " + expr_to_string(e) + ")");
@@ -8895,7 +8895,7 @@ void test_undefined() {
         RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
         ExprArena arena;
         ExprArena::Scope scope(arena);
-        auto e = simplify(parse("a / a"));
+        const auto* e = simplify(parse("a / a"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "1", "inherent: a/a = 1 (got " + expr_to_string(e) + ")");
         bool found_inherent = false;
@@ -8915,7 +8915,7 @@ void test_undefined() {
         RewriteRulesGuard rr_guard(&sys.rewrite_rules, &sys.rewrite_exhaustive_flags_);
         ExprArena arena;
         ExprArena::Scope scope(arena);
-        auto e = simplify(parse("log(a^3)"));
+        const auto* e = simplify(parse("log(a^3)"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(expr_to_string(e) == "3 * log(a)",
             "non-inherent: log(a^3) = 3*log(a) (got " + expr_to_string(e) + ")");
@@ -9756,7 +9756,7 @@ void test_rational_fractions() {
     // Note: parser handles "1 / (-3)" as DIV(1, NEG(3)), simplifier normalizes
     {
         auto e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(-3));
-        auto s = simplify(e);
+        const auto* s = simplify(e);
         ASSERT_EQ(expr_to_string(s), "(-1) / 3", "1/(-3) → (-1)/3 sign normalized");
     }
 
@@ -9949,7 +9949,7 @@ void test_evaluate_symbolic() {
     // DIV of two integers: preserved as structural fraction, NOT folded to double
     {
         const auto* e = Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), Expr::Num(3));
-        auto r = evaluate_symbolic(*e);
+        const auto* r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "1 / 3",
                   "evaluate_symbolic: 1/3 preserved as fraction");
     }
@@ -9957,14 +9957,14 @@ void test_evaluate_symbolic() {
     // MUL of two integers: folded to Num
     {
         const auto* e = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Num(3));
-        auto r = evaluate_symbolic(*e);
+        const auto* r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "6", "evaluate_symbolic: 2 * 3 = 6");
     }
 
     // ADD(Num, Var): symbolic RHS — tree returned unchanged
     {
         const auto* e = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Var("x"));
-        auto r = evaluate_symbolic(*e);
+        const auto* r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "1 + x",
                   "evaluate_symbolic: Num + Var returned as-is");
     }
@@ -9973,7 +9973,7 @@ void test_evaluate_symbolic() {
     // not attempt to fold. Guards the extension-point contract.
     {
         const auto* e = Expr::Call("sin", {Expr::Var("x")});
-        auto r = evaluate_symbolic(*e);
+        const auto* r = evaluate_symbolic(*e);
         ASSERT_EQ(expr_to_string(r), "sin(x)",
                   "evaluate_symbolic: FUNC_CALL with symbolic arg returned as-is");
     }

@@ -364,7 +364,7 @@ inline ExprPtr expr_recognize_constants(const ExprPtr& e,
 // recognition, and stringifies. If nothing recognizes, falls back to fmt_num.
 // Requires an active ExprArena::Scope (like expr_recognize_constants).
 inline std::string fmt_exact_double(double v) {
-    auto e = expr_recognize_constants(Expr::Num(v));
+    const auto* e = expr_recognize_constants(Expr::Num(v));
     return (e->type == ExprType::NUM) ? fmt_num(v) : expr_to_string(e);
 }
 

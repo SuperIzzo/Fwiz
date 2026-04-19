@@ -428,14 +428,14 @@ constexpr bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
 constexpr bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
 constexpr bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
 // Pointer versions (null-safe, for struct fields)
-inline bool is_num(const ExprPtr e)     { return e && is_num(*e); }
-inline bool is_var(const ExprPtr e)     { return e && is_var(*e); }
-inline bool is_atomic(const ExprPtr e)  { return e && is_atomic(*e); }
-inline bool is_zero(const ExprPtr e)    { return e && is_zero(*e); }
+inline bool is_num(const Expr* e)     { return e && is_num(*e); }
+inline bool is_var(const Expr* e)     { return e && is_var(*e); }
+inline bool is_atomic(const Expr* e)  { return e && is_atomic(*e); }
+inline bool is_zero(const Expr* e)    { return e && is_zero(*e); }
 inline bool is_one(const ExprPtr e)     { return e && is_one(*e); }
 inline bool is_neg_one(const ExprPtr e) { return e && is_neg_one(*e); }
 inline bool is_neg(const ExprPtr e)     { return e && is_neg(*e); }
-inline bool is_neg_num(const ExprPtr e) { return e && is_neg_num(*e); }
+inline bool is_neg_num(const Expr* e) { return e && is_neg_num(*e); }
 
 constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
 constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
@@ -1084,7 +1084,7 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
     }
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
         bool all_num = true;
-        for (const auto& a : e.args) if (!is_num(a)) { all_num = false; break; }
+        for (const auto* a : e.args) if (!is_num(a)) { all_num = false; break; }
         // evaluate() can still return empty here (e.g. multi-arg function
         // with args.size() != 1) — fall through to tree-as-is on failure.
         if (all_num) {
