@@ -271,10 +271,10 @@ public:
     bool covers_reals() const {
         if (intervals_.empty() && discrete_.empty()) return false;
         // Merge all coverage into sorted intervals (discrete points become [v,v])
-        std::vector<Interval> all = intervals_;
+        std::vector<Interval> all_intervals = intervals_;
         for (double d : discrete_)
-            all.push_back({d, d, true, true});
-        std::sort(all.begin(), all.end(),
+            all_intervals.push_back({d, d, true, true});
+        std::sort(all_intervals.begin(), all_intervals.end(),
             [](const auto& a, const auto& b) {
                 return a.low < b.low || (a.low == b.low && a.low_inclusive > b.low_inclusive);
             });
@@ -282,7 +282,7 @@ public:
         constexpr double INF = std::numeric_limits<double>::infinity();
         double covered_to = -INF;
         bool covered_inclusive = false;  // is covered_to itself included?
-        for (const auto& iv : all) {
+        for (const auto& iv : all_intervals) {
             // Can this interval extend from where we left off?
             if (iv.low > covered_to) return false;  // numeric gap
             if (iv.low == covered_to && covered_to != -INF
@@ -432,9 +432,9 @@ inline bool is_num(const Expr* e)     { return e && is_num(*e); }
 inline bool is_var(const Expr* e)     { return e && is_var(*e); }
 inline bool is_atomic(const Expr* e)  { return e && is_atomic(*e); }
 inline bool is_zero(const Expr* e)    { return e && is_zero(*e); }
-inline bool is_one(const ExprPtr e)     { return e && is_one(*e); }
-inline bool is_neg_one(const ExprPtr e) { return e && is_neg_one(*e); }
-inline bool is_neg(const ExprPtr e)     { return e && is_neg(*e); }
+inline bool is_one(const Expr* e)     { return e && is_one(*e); }
+inline bool is_neg_one(const Expr* e) { return e && is_neg_one(*e); }
+inline bool is_neg(const Expr* e)     { return e && is_neg(*e); }
 inline bool is_neg_num(const Expr* e) { return e && is_neg_num(*e); }
 
 constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
