@@ -12,9 +12,19 @@ constexpr double FIT_R2_THRESHOLD       = 0.9999;
 constexpr double FIT_PERFECT_THRESHOLD  = 1e-10;
 constexpr double FIT_COEFF_SNAP_TOL     = 1e-6;
 
+// Upper bound on denominators considered by recognize_fraction when the
+// recognizer is scanning for a rational multiplier. 360 covers degree↔radian
+// (pi/180), common trig denominators, and small integer ratios; user-defined
+// aliases (e.g. `eng = pi/1000`) handle the long tail via the extra_constants
+// parameter threaded through expr_recognize_constants → fmt_exact_double.
+// Was 12 before the 2026-04-19 dedup cycle — too tight to catch pi/180 in
+// triangle output.
+constexpr int    RECOGNIZE_FRACTION_MAX_DEN = 360;
+
 static_assert(FIT_DEFAULT_SAMPLES >= 50);
 static_assert(FIT_MAX_DEGREE >= 1 && FIT_MAX_DEGREE <= 20);
 static_assert(FIT_R2_THRESHOLD > 0.99 && FIT_R2_THRESHOLD <= 1.0);
+static_assert(RECOGNIZE_FRACTION_MAX_DEN > 0 && RECOGNIZE_FRACTION_MAX_DEN < 10000);
 
 // ============================================================================
 //  Sampling
@@ -246,7 +256,7 @@ inline std::optional<ConstantForm> recognize_constant(double x,
     if (!std::isfinite(x) || std::abs(x) < tol) return std::nullopt;
 
     // If it's already a simple fraction, no constant needed
-    if (recognize_fraction(x, 12, tol)) return std::nullopt;
+    if (recognize_fraction(x, RECOGNIZE_FRACTION_MAX_DEN, tol)) return std::nullopt;
 
     // Build combined constant table: builtins + common roots + extras
     auto& builtins = builtin_constants();
@@ -268,7 +278,7 @@ inline std::optional<ConstantForm> recognize_constant(double x,
         for (int pw : powers) {
             double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
             double quotient = x / cv;
-            auto frac = recognize_fraction(quotient, 12, tol);
+            auto frac = recognize_fraction(quotient, RECOGNIZE_FRACTION_MAX_DEN, tol);
             if (frac) return ConstantForm{frac->p, frac->q, name, pw};
         }
     }
@@ -332,7 +342,7 @@ inline ExprPtr expr_recognize_constants(const ExprPtr& e,
             if (is_integer_value(e->num)) return e; // already clean
             if (is_zero(*e)) return e;
             // Try fraction first
-            auto frac = recognize_fraction(e->num);
+            auto frac = recognize_fraction(e->num, RECOGNIZE_FRACTION_MAX_DEN);
             if (frac) return make_rational(frac->p, frac->q);
             // Try constant recognition
             auto cf = recognize_constant(e->num, extra_constants);
@@ -363,8 +373,12 @@ inline ExprPtr expr_recognize_constants(const ExprPtr& e,
 // derive output paths. Wraps the NUM in a leaf, runs constant/fraction
 // recognition, and stringifies. If nothing recognizes, falls back to fmt_num.
 // Requires an active ExprArena::Scope (like expr_recognize_constants).
-inline std::string fmt_exact_double(double v) {
-    const auto* e = expr_recognize_constants(Expr::Num(v));
+// extra_constants: user-defined aliases (e.g. {"deg", pi/180}); these are
+// threaded through into recognition so derive/solve output surfaces user
+// names instead of raw decimals.
+inline std::string fmt_exact_double(double v,
+        const std::map<std::string, double>& extra_constants = {}) {
+    const auto* e = expr_recognize_constants(Expr::Num(v), extra_constants);
     return (e->type == ExprType::NUM) ? fmt_num(v) : expr_to_string(e);
 }
 
