@@ -103,6 +103,25 @@ When implementer reports BLOCKED with "all candidates NaN / domain-violating at 
 
 When the implementer returns BLOCKED **twice** on the same design, do NOT spin a third attempt — the design's model is likely wrong. Spawn the **debugger** agent (`.claude/agents/debugger.md` or `/debug`): it instruments, traces, writes findings, cleans every `DEBUGGER_HACK`. It does NOT fix. After it returns: (1) `grep -rn "DEBUGGER_HACK" src/` returns nothing; (2) `git diff --stat` shows only intentional env-var-gated instrumentation (or nothing); (3) if findings invalidate a design assumption, send a **mini design revisit** (critic + visionary on the revised question — not a full redesign); (4) spawn a fresh implementer round. Canonical trigger: triangle-hang cycle (`da3ee21`) — 2 BLOCKED → debugger round (promoted `FWIZ_TRACE_SOLVER`) → ship.
 
+### Single-BLOCK recovery — inline revisit vs critic-visionary respawn
+
+When the implementer returns BLOCKED **once** with a thorough diagnostic that already names the design assumption it invalidated, the recovery path is NOT a debugger round (only 1 block) and NOT always a fresh critic+visionary spawn. Choose:
+
+- **Inline orchestrator revisit** — appropriate when (a) the implementer's diagnostic already identifies the failing design hypothesis; (b) the fix is a scope shrink (drop a flag, drop a filter, drop a CLI mode), not a scope widen; (c) no new architectural decision is required; (d) the user is available to approve the revised spec in one round-trip. Orchestrator appends a "Revised M{n} after implementer block" section to `design-proposal.md` documenting the original-vs-revised spec and the cycle evidence that forced the change. Then re-spawn a fresh implementer with the revised section as the only design context. Canonical: derive-ordering cycle 2026-04-19T23:55 — sentinel-suppression dropped, discriminator-flip kept, Defect A fix added as cleanup bonus.
+- **Mini critic+visionary respawn** — appropriate when the diagnostic reveals a new architectural question (new primitive, new abstraction, new bound/threshold), or when the user's original Q&A was based on an incorrect model of the bucket/population/class the planner proposed to filter. If the revised direction will re-introduce any of the planner-rejected alternatives, the critic should hear it.
+
+Default when uncertain: inline revisit first (faster, 1 round-trip). If user pushes back or the revised spec still has architectural ambiguity, escalate to critic+visionary. Log which path you chose and why.
+
+### Phase overlap — next-cycle research during current-cycle REVIEW
+
+When `make analyze` is running in background during REVIEW (typical ~45 min wait), treat that window as free capacity for the NEXT cycle's RESEARCH if the user surfaces a natural scope-scoping question ("are there more X? let's plan the next cycle on that"). Permitted overlap:
+
+- **Allowed**: running reproducers, categorizing output, writing a research brief to `.fwiz-workflow/research-brief.md` (rotating the previous one to `research-brief-<prev-scope>.md` first).
+- **Not allowed**: spawning planner/critic/visionary for the next cycle while the current cycle's review is open — design phase must wait for the current cycle to CLOSE and the user to approve the research.
+- **Not allowed**: writing `next-priorities.md` for the next cycle before current cycle's review completes. The review may produce SHIP-DESIRABLE items that belong in next-priorities.
+
+Canonical: derive-ordering cycle 2026-04-20T00:50 — user asked "check if there are more tautological entries" mid-REVIEW (analyze still running). Orchestrator ran the reproducer, captured 159-line output, wrote 6-category research brief. When review completed, next-priorities.md referenced the already-written brief cleanly. ~30 min wall-clock saved vs serial; zero risk of cross-phase context contamination because RESEARCH is strictly read-only on the current cycle's artifacts.
+
 ### Follow-up micro-cycles
 
 When a cycle ships with a compromise on SHIP-DESIRABLE behavior (see Phase 2 synthesis), the follow-up is a named **micro-cycle**: tiny research artifact (often <1 page) answering a specific question from the ship commit; no planner/critic/visionary round unless the fix is architectural; single implementer spawn with the narrow target; commit separately, referencing the ship commit.
@@ -141,6 +160,7 @@ Wait for the completion notification on `run_in_background`. Do NOT poll partial
 1. **Tag every background task** with task-id, log path, launch timestamp. Before reading any `/tmp/fwiz-*.log`, check mtime vs launch timestamp — if mtime < launch, it's stale.
 2. **Never start a duplicate long task** (make sanitize, make analyze) while another runs. Check `pgrep -f clang-tidy` / `pgrep -f fwiz_asan` first.
 3. **Hung-task threshold**: 2x expected duration. `make analyze` takes ~45 min; not hung before 90 min silence.
+4. **Watcher-pattern self-match**: NEVER use `while pgrep -f <name>; do sleep N; done` as a wait loop for a named process — the loop's own shell cmdline contains `<name>` and matches itself, so the loop runs forever after the task completes. Prefer (a) `run_in_background: true` directly on the task itself (orchestrator receives a completion notification, no watcher needed); (b) `pkill -0 <stored_pid>` on a PID captured at launch; or (c) a pattern keyed on a unique output-file sentinel (`while [ ! -f /tmp/fwiz-analyze.done ]; do sleep 30; done`) that can't match the watcher's own argv. Canonical miss: derive-ordering cycle 2026-04-20T03:30 — `while pgrep -f clang-tidy` kept the wait-loop alive for ~1 hour after analyze actually completed; the user had to surface it ("is analyze still running?"). Cost: ~1hr user-perceived stall. See orchestrator-log.md entry 2026-04-20T03:30.
 
 ## Cycle-Completion Checklist
 
