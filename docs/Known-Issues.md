@@ -63,7 +63,7 @@ $ fwiz --derive '(x=?, y=y) y = 2^x'
 x = log(y) / log(2)
 ```
 
-## 7. `--derive` output duplication — RESOLVED
+## 7. `--derive` output duplication and ordering — RESOLVED
 
-`fwiz --derive` previously produced hundreds of semantically-equivalent output lines (294 for the triangle reproducer). Resolved by semantic fingerprint dedup in `derive_all`: `fingerprint_expr` evaluates each candidate at prime-cycled test points; candidates sharing a fingerprint are merged, retaining the most canonical form via `canonicity_score`. The triangle reproducer now produces 159 lines. Residual variation is genuine algebraic non-equivalence (different branch-cut coverage at obtuse-angle test points), not duplication.
+`fwiz --derive` previously produced hundreds of semantically-equivalent output lines (294 for the triangle reproducer) in arbitrary order. Resolved in two cycles: (1) semantic fingerprint dedup in `derive_all` — `fingerprint_expr` evaluates each candidate at prime-cycled test points; candidates sharing a fingerprint are merged, retaining the most canonical form via `canonicity_score`; (2) results now emitted in ascending `canonicity_score` order (`{leaf_count, non_integer_num_count}`) so the simplest formula appears first and always-NaN sentinel forms appear last. `--derive N` caps output at N results after sorting. The triangle reproducer produces 159 lines; residual variation is genuine algebraic non-equivalence (different branch-cut coverage at obtuse-angle test points), not duplication.
 

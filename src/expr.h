@@ -1105,20 +1105,21 @@ inline std::vector<double> fingerprint_expr(
 }
 
 // ============================================================================
-//  Canonicity score — pair<non_integer_num_count, leaf_count>.
+//  Canonicity score — pair<leaf_count, non_integer_num_count>.
 //  Lower is "more canonical" (lex compare via built-in pair ordering).
-//  Integer NUM leaves are NOT penalized — they're the cleanest form.
-//  Used by derive_all to pick the best representative when two candidates
-//  share a fingerprint.
+//  Size first (fewer leaves = simpler), canonical form second (integer NUM
+//  leaves are NOT penalized — they're the cleanest form). Used by derive_all
+//  to pick the best representative when two candidates share a fingerprint,
+//  and to sort the emit list ascending from simple to complex.
 // ============================================================================
 
 inline std::pair<int, int> canonicity_score(ExprPtr e) {
     if (!e) return {0, 0};
     switch (e->type) {
         case ExprType::NUM:
-            return {is_integer_value(e->num) ? 0 : 1, 1};
+            return {1, is_integer_value(e->num) ? 0 : 1};
         case ExprType::VAR:
-            return {0, 1};
+            return {1, 0};
         case ExprType::UNARY_NEG:
             return canonicity_score(e->child);
         case ExprType::BINOP: {

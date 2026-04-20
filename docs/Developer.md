@@ -145,7 +145,7 @@ The core of the system. Contains:
 
 **fingerprint_expr(ExprPtr, free_vars, test_points)** — Schwartz–Zippel numeric fingerprint for semantic comparison. Substitutes free variables at test points and collects finite `evaluate()` outputs. Companion to `evaluate` and `evaluate_symbolic` as a tree-querying primitive. Used by `derive_all` dedup.
 
-**canonicity_score(ExprPtr)** — Lex pair `{non_integer_num_count, leaf_count}` used as a tiebreaker when two candidates share a fingerprint. Lower is more canonical. Integer `NUM` leaves are not penalized.
+**canonicity_score(ExprPtr)** — Lex pair `{leaf_count, non_integer_num_count}` measuring expression complexity. Lower is simpler/more canonical. `leaf_count` is the primary key (size first); `non_integer_num_count` is the secondary tiebreaker (penalizes raw decimal literals). Integer `NUM` leaves are not penalized on the secondary key. Used by `derive_all` to sort output ascending — simplest formulas first — and to break ties when two candidates share a fingerprint.
 
 **substitute()** — Replaces a named variable with an expression throughout the tree.
 
@@ -213,9 +213,11 @@ Conditions are checked before solving (if vars known) and after (to validate). G
 `derive_all` dedup pipeline — after collecting raw candidates, a streaming `std::map<fp_key, {score, ExprPtr}> winners` retains at most one candidate per semantic fingerprint. Two semantic primitives in `expr.h` drive this:
 
 - **`fingerprint_expr(ExprPtr, free_vars, test_points)`** — Schwartz–Zippel numeric fingerprint: substitutes all free variables at each test point, calls `evaluate`, collects finite values; returns an empty vector when all test points lie outside the expression's domain. Test points use per-variable prime cycling `primes[(i+j)%3]` with `primes={2,3,5}`, keeping magnitudes small enough to avoid triangle-inequality violations.
-- **`canonicity_score(ExprPtr)`** — lex pair `{non_integer_num_count, leaf_count}`. Integer `NUM` leaves are not penalized, so `2*pi` scores the same as `pi`. Lower score wins; ties are broken in favour of the form already in `winners`.
+- **`canonicity_score(ExprPtr)`** — lex pair `{leaf_count, non_integer_num_count}`. Integer `NUM` leaves are not penalized on the secondary key, so `2*pi` scores the same as `pi`. Lower score wins; ties are broken in favour of the form already in `winners`.
 
-Candidates with empty fingerprints (all test points domain-excluded) fall back to a format-string sentinel: structurally-different always-NaN expressions stay separate; string-identical ones collapse.
+Candidates with empty fingerprints (all test points domain-excluded) fall back to a format-string sentinel: structurally-different always-NaN expressions stay separate; string-identical ones collapse. Sentinel-bucket candidates sort after real-fingerprint candidates because their discriminator byte is `1` vs `0` for real fingerprints — `std::map` ordering ensures real results appear first without any filtering.
+
+The `derive_all` emit loop sorts all winners ascending by `canonicity_score` before output, so the simplest formula is always first. `--derive N` (N ≥ 1) caps the final result list at N entries after sorting. The `free_vars` list used for fingerprinting is populated from the values (not keys) of `symbolic_bindings`, aligning with the variable names that actually appear in derived expressions after alias substitution.
 
 Results validated — NaN and infinity rejected, causing fallback to next equation.
 
@@ -240,7 +242,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-1927+ tests organized into functional tests, edge cases, and robustness groups:
+1944+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -301,7 +303,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 1927+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 1944+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 
