@@ -1024,15 +1024,17 @@ x^(1/2) = sqrt(x)
 
         // --- Semantic fingerprint dedup setup (2026-04-19 cycle) ---
         // Build 3 prime test points for every free variable in the output.
-        // Free vars are the keys of symbolic_bindings — those become VARs in
-        // the derived expression. Schwartz–Zippel: distinct small primes per
+        // Free vars are the VALUES of symbolic_bindings — the aliased names
+        // that actually appear as VARs in the derived expression after
+        // build_alias_table() substitution (see ~l.880). Schwartz–Zippel:
+        // distinct small primes per
         // variable per row minimize accidental cancellations. Values stay
         // ≤ 5, so pairwise differences are ≤ 3 — friendlier to domain
         // constraints like the triangle inequality than multiplicative
         // schemes (which inflate magnitudes and differences).
         std::vector<std::string> free_vars;
         free_vars.reserve(symbolic_bindings.size());
-        for (auto& [k, v] : symbolic_bindings) { (void)v; free_vars.push_back(k); }
+        for (auto& [k, v] : symbolic_bindings) { (void)k; free_vars.push_back(v); }
         static constexpr double primes[3] = {2.0, 3.0, 5.0};
         std::vector<std::map<std::string, double>> test_points(3);
         for (size_t i = 0; i < 3; i++) {
@@ -1044,11 +1046,11 @@ x^(1/2) = sqrt(x)
         // Winners map: fingerprint_key → {score, representative ExprPtr}.
         // Key shape uses a leading discriminator byte to make the two buckets
         // (empty-fp sentinel vs real fingerprint) structurally disjoint:
-        //   {0, counter}                — sentinel (sorts first → preserves
-        //                                  emit order where always-NaN
-        //                                  candidates come before real-fp
-        //                                  winners, as in the initial design).
-        //   {1, fp_0, fp_1, ..., fp_k}  — real fingerprint buckets.
+        //   {0, fp_0, fp_1, ..., fp_k}  — real fingerprint buckets (sort first).
+        //   {1, counter}                — sentinel (sorts last → always-NaN
+        //                                  candidates appear at the bottom
+        //                                  after the emit-loop ascending
+        //                                  canonicity sort).
         // The discriminator guarantees no cross-bucket collision is possible
         // regardless of fingerprint magnitude.
         using Key = std::vector<int64_t>;
@@ -1095,10 +1097,10 @@ x^(1/2) = sqrt(x)
                 auto s = format_derived(result, aliases);
                 auto [it, inserted] = empty_fp_keys.emplace(s, empty_fp_counter);
                 if (inserted) empty_fp_counter++;
-                key = {0, it->second};  // sentinel discriminator
+                key = {1, it->second};  // sentinel discriminator (sorts last)
             } else {
                 key.reserve(fp.size() + 1);
-                key.push_back(1);  // real-fingerprint discriminator
+                key.push_back(0);  // real-fingerprint discriminator (sorts first)
                 for (double v : fp) key.push_back(llround(v * FINGERPRINT_SCALE));
             }
             auto score = canonicity_score(result);
@@ -1176,16 +1178,22 @@ x^(1/2) = sqrt(x)
             return false; // don't stop — collect all
         });
 
-        // Emit winners phase: format each survivor in fingerprint-key order.
-        // Sentinel keys ({0, counter}) sort before real-fp keys ({1, ...}) so
-        // always-NaN candidates appear first, matching the pre-discriminator
-        // emit order.
-        std::vector<std::string> results;
-        results.reserve(winners.size());
+        // Emit winners phase: format each survivor, then sort ascending by
+        // canonicity_score so the simplest form appears first and always-NaN
+        // sentinels appear last. Ordering within equal canonicity is stable
+        // (std::map is ordered by fingerprint key — sentinels sort after real
+        // fingerprints because their discriminator byte is 1 vs 0).
+        std::vector<std::pair<std::pair<int, int>, std::string>> scored;
+        scored.reserve(winners.size());
         for (auto& [key, sc_expr] : winners) {
             (void)key;
-            results.push_back(format_derived(sc_expr.second, aliases));
+            scored.push_back({sc_expr.first, format_derived(sc_expr.second, aliases)});
         }
+        std::sort(scored.begin(), scored.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<std::string> results;
+        results.reserve(scored.size());
+        for (auto& [sc, s] : scored) { (void)sc; results.push_back(std::move(s)); }
 
         // If no equation-based results, check iff conditions for constraint inversion.
         // For piecewise functions: "result = 1 iff x > 0" → "x > 0 if result = 1"

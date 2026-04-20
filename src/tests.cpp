@@ -10386,15 +10386,35 @@ void test_semantic_dedup_m3() {
         auto fp = fingerprint_expr(e, free_vars, test_points);
         ASSERT(fp.empty(), "M3-a2: fingerprint of log(-1) skips NaN → empty");
     }
-    // M3-a3. canonicity_score: integer literals not penalized.
+    // M3-a3 (M1-a1). canonicity_score: integer literals not penalized.
+    // Revised M1: pair semantics flipped — .first=leaf_count, .second=non_int_num_count.
     {
         auto e_int = parse("3 * x + 1");       // 0 non-int literals
         auto e_dec = parse("3.14 * x + 1");    // 1 non-int literal
         auto s_int = canonicity_score(e_int);
         auto s_dec = canonicity_score(e_dec);
-        ASSERT(s_int.first == 0, "M3-a3: int literal count for '3*x+1' = 0");
-        ASSERT(s_dec.first == 1, "M3-a3: non-int literal count for '3.14*x+1' = 1");
+        ASSERT(s_int.second == 0, "M3-a3: int literal count for '3*x+1' = 0");
+        ASSERT(s_dec.second == 1, "M3-a3: non-int literal count for '3.14*x+1' = 1");
         ASSERT(s_int < s_dec, "M3-a3: integer form beats decimal form (lex pair)");
+    }
+
+    // M1-a2 (NEW). canonicity_score pair semantics: leaf primary, non-int secondary.
+    {
+        auto e_int_leaf = Expr::Num(2.0);
+        auto e_dec_leaf = Expr::Num(3.14);
+        auto e_var_leaf = Expr::Var("x");
+        auto s_int_leaf = canonicity_score(e_int_leaf);
+        auto s_dec_leaf = canonicity_score(e_dec_leaf);
+        auto s_var_leaf = canonicity_score(e_var_leaf);
+        ASSERT(s_int_leaf.first == 1 && s_int_leaf.second == 0,
+               "M1-a2: Num(2.0) = {1, 0} (integer leaf)");
+        ASSERT(s_dec_leaf.first == 1 && s_dec_leaf.second == 1,
+               "M1-a2: Num(3.14) = {1, 1} (non-integer leaf)");
+        ASSERT(s_var_leaf.first == 1 && s_var_leaf.second == 0,
+               "M1-a2: Var(x) = {1, 0}");
+        auto e_sum = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1.0), Expr::Var("x"));
+        auto s_sum = canonicity_score(e_sum);
+        ASSERT(s_sum.first == 2, "M1-a2: Num(1)+Var(x) has .first==2 (two leaves)");
     }
 
     // M3-6 (SHIP-BLOCKING): Triangle reproducer — no two output lines share
@@ -10521,6 +10541,125 @@ void test_semantic_dedup_m3() {
         auto r1 = run();
         auto r2 = run();
         ASSERT(r1 == r2, "M3-11: derive_all is deterministic across runs");
+    }
+
+    // M1-a3 (NEW, SHIP-BLOCKING): triangle reproducer — first result simpler than last.
+    // Under revised M1 with ascending canonicity sort, the simplest form is first.
+    {
+        FormulaSystem sys;
+        sys.load_file("examples/triangle.fw");
+        auto results = sys.derive_all("A", {{"a", 4}, {"B", 20}},
+                                      {{"c", "c"}, {"b", "b"}});
+        ASSERT(results.size() >= 2, "M1-a3: triangle derive has 2+ results");
+        if (results.size() >= 2) {
+            // Reparse and canonicity_score first vs last. First should be
+            // strictly simpler (fewer leaves) than last.
+            auto e_first = parse(results.front());
+            auto e_last  = parse(results.back());
+            auto sc_first = canonicity_score(e_first);
+            auto sc_last  = canonicity_score(e_last);
+            ASSERT(sc_first.first < sc_last.first,
+                   "M1-a3: first result strictly simpler than last "
+                   "(first: " + std::to_string(sc_first.first) +
+                   ", last: " + std::to_string(sc_last.first) +
+                   ", first line: " + results.front() +
+                   ", last line: " + results.back() + ")");
+        }
+    }
+
+    // M1-a4 (NEW, SHIP-BLOCKING): sentinels sort LAST, still emitted.
+    // z=x has real fingerprint; z = x + 0 * undefined has empty fp (sentinel).
+    // Expect: results[0] is the real-fp form, results.back() is the sentinel.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "z = x\n"
+            "z = x + 0 * undefined\n");
+        auto results = sys.derive_all("z", {}, {{"x", "x"}});
+        ASSERT(results.size() == 2,
+               "M1-a4: both real-fp and sentinel emitted (got " +
+               std::to_string(results.size()) + ")");
+        if (results.size() == 2) {
+            ASSERT(results.front() == "x",
+                   "M1-a4: real-fp form 'x' appears first (got: " + results.front() + ")");
+            ASSERT(results.back().find("undefined") != std::string::npos,
+                   "M1-a4: sentinel 'undefined' form appears last (got: " + results.back() + ")");
+        }
+    }
+
+    // M1-a5 (NEW, SHIP-BLOCKING): Defect A fix — binary-integration alias query.
+    // area = width * height with aliases width=w, height=h. Under the old code
+    // free_vars contained KEYS (width, height), so probe evaluation against
+    // aliased expression (using w, h) returned empty → sentinel bucket. Fix:
+    // push VALUES so free_vars = [w, h], fingerprint succeeds → real-fp path.
+    {
+        write_fw("/tmp/tdbi_m1a5.fw", "area = width * height\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdbi_m1a5.fw");
+        auto results = sys.derive_all("area", {}, {{"width", "w"}, {"height", "h"}});
+        ASSERT(results.size() == 1,
+               "M1-a5: exactly one result for area = width * height with aliases "
+               "(got " + std::to_string(results.size()) + ")");
+        // results.size() == 1 is an ASSERT above — no need for a defensive guard
+        // on results[0]. (cppcheck flagged `if (!results.empty())` here as a
+        // knownConditionTrueFalse; removed.)
+        bool has_wh = results[0].find("w * h") != std::string::npos ||
+                      results[0].find("h * w") != std::string::npos;
+        ASSERT(has_wh, "M1-a5: result contains 'w * h' (got: " + results[0] + ")");
+    }
+}
+
+// Revised M2: --derive N CLI cap.
+void test_derive_cli_cap_m2() {
+    SECTION("Derive CLI cap — --derive N");
+
+    // Baseline count: unbounded derive for triangle A.
+    int full_count = 0;
+    {
+        FILE* f = popen("./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -l",
+                        "r");
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) { full_count = atoi(buf); } pclose(f); }
+    }
+    ASSERT(full_count > 2, "M2: baseline unbounded derive emits more than 2 results (got " +
+                           std::to_string(full_count) + ")");
+
+    // M2-1: --derive 2 caps at 2 results.
+    {
+        FILE* f = popen("./bin/fwiz --derive 2 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -l",
+                        "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) { n = atoi(buf); } pclose(f); }
+        ASSERT(n == 2, "M2-1: --derive 2 caps output at 2 lines (got " + std::to_string(n) + ")");
+    }
+
+    // M2-2: --derive 0 == unbounded.
+    {
+        FILE* f = popen("./bin/fwiz --derive 0 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -l",
+                        "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) { n = atoi(buf); } pclose(f); }
+        ASSERT(n == full_count, "M2-2: --derive 0 matches unbounded (got " +
+               std::to_string(n) + " vs " + std::to_string(full_count) + ")");
+    }
+
+    // M2-3: --derive -5 treated as unbounded (no error, no validation branch).
+    {
+        FILE* f = popen("./bin/fwiz --derive -5 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -l",
+                        "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) { n = atoi(buf); } pclose(f); }
+        ASSERT(n == full_count, "M2-3: --derive -5 == unbounded (got " +
+               std::to_string(n) + " vs " + std::to_string(full_count) + ")");
+    }
+
+    // M2-bare: bare --derive without N remains unbounded.
+    {
+        FILE* f = popen("./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -l",
+                        "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) { n = atoi(buf); } pclose(f); }
+        ASSERT(n == full_count, "M2-bare: bare --derive == unbounded (got " +
+               std::to_string(n) + " vs " + std::to_string(full_count) + ")");
     }
 }
 
@@ -10779,6 +10918,7 @@ int main() {
     test_semantic_dedup_m1();
     test_semantic_dedup_m2();
     test_semantic_dedup_m3();
+    test_derive_cli_cap_m2();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

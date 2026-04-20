@@ -47,6 +47,7 @@ int main(int argc, const char* argv[]) {
         bool explore = false;
         bool explore_full = false;
         bool derive_mode = false;
+        int derive_cap = 0;  // 0 or negative → unbounded; >= 1 → cap at N
         bool fit_mode = false;
         int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
@@ -62,7 +63,17 @@ int main(int argc, const char* argv[]) {
             else if (arg == "--calc")         level = TraceLevel::CALC;
             else if (arg == "--explore")      explore = true;
             else if (arg == "--explore-full") { explore = true; explore_full = true; }
-            else if (arg == "--derive")       derive_mode = true;
+            else if (arg == "--derive") {
+                derive_mode = true;
+                // Optional cap argument: --derive N (non-numeric next arg → flag-only)
+                if (i + 1 < argc) {
+                    try { derive_cap = std::stoi(argv[i + 1]); i++; }
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — not a number; leave for query string
+                    catch (const std::invalid_argument&) {}
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — value out of range; leave for query string
+                    catch (const std::out_of_range&) {}
+                }
+            }
             else if (arg == "--fit") {
                 fit_mode = true;
                 // Optional depth argument: --fit 3 (non-numeric next arg → treat --fit as flag-only)
@@ -139,6 +150,8 @@ int main(int argc, const char* argv[]) {
             for (const auto& q : query.queries) {
                 try {
                     auto results = sys.derive_all(q.variable, query.bindings, query.symbolic);
+                    if (derive_cap >= 1 && results.size() > static_cast<size_t>(derive_cap))
+                        results.resize(static_cast<size_t>(derive_cap));
                     for (auto& r : results) {
                         derived_eqs[q.variable].insert(r);
                         std::cout << q.alias << " = " << r << '\n';
