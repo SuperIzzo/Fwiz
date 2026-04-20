@@ -36,6 +36,7 @@ For each implementation step:
 - **Test**: {what test proves this works — be specific about input/expected output}
 - **Dependencies**: {which steps must come first}
 - **Complexity**: trivial / moderate / hard
+- **LOC estimate**: include comment/docstring lines at Fwiz's density: **~1.5:1 comment:code for new primitives with rationale blocks** (fingerprint_expr, Checked<T>, new solver strategy), **~0.5:1 for delta edits** to existing functions, **~0.3:1 for mechanical refactors** (const-widening, rename). A "~50 LOC" estimate with no comment-density call will be read as "50 total lines" and will systematically under-report actual sheet length by 2-3×. Canonical miss: derive-dedup cycle estimated ~63 LOC, shipped ~169 substantive (2.7×) — mostly because the design didn't call out comment-density.
 - **Details**: {what specifically changes — function signatures, logic, data structures}
 ```
 
