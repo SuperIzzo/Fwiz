@@ -60,6 +60,7 @@ When user approves research, spawn three agents **sequentially** (each reads pre
 4. **You synthesize** all three into "## Final Design": accepted items unchanged, simplified items with critic's alternatives, visionary adjustments. If planner and critic fundamentally disagree, present BOTH options with trade-offs to the user — do NOT proceed with unresolved disagreements.
    - **Cascade forecast** for type-qualifier migrations: if the design widens a pointer/reference qualifier on a shared overload (`ExprPtr` → `const Expr*`, `T&` → `const T&`, etc.), simulate on a throwaway copy + run cppcheck before approving. If > 10 new caller-site warnings, split into two milestones (widening + cascade cleanup); if ≤ 10, note the cascade-count in the implementer brief. (See `aaf1bbb` / `ffe173e`.)
    - **Stop-and-Ship Criteria**: tag each test/behavior [BLOCKING], [DESIRABLE], or [NICE] in a block at the end of Final Design. BLOCKING failing blocks cycle close; DESIRABLE failing logs a Future.md reopen-trigger (see visionary.md) and ships. Prevents "stuck 90% done" cycles. (Canonical: triangle-hang shipped UC-fast-fail [DESIRABLE] → micro-cycle — see `da3ee21`, `58d6e1e`.)
+   - **BLOCKING must be invariant-derived, not hypothesis-derived.** A criterion is invariant-derived when its target value is structurally necessary for correctness (no `sqrt(...)^2` substring — the rule either fires or it doesn't; tests pass; sanitize clean; analyze clean). It is hypothesis-derived when its target value comes from a prediction about a cascade, propagation, or downstream effect ("line count < 100 because the simplification will fingerprint-collide with canonical siblings"). Hypothesis-derived numbers belong in [DESIRABLE], not [BLOCKING]. Litmus test when tagging: **can I state the criterion without naming a cascade, a prediction, or a "because X will cause Y"?** If not, it's a prediction — downgrade to DESIRABLE, log the prediction failure as a negative result. If the planner proposes a count threshold, a ratio, or a "drops to ~N" clause as [BLOCKING], challenge it during synthesis — ask whether the number is structurally forced or merely predicted. Canonical miss: P1-tautology cycle `3bcccbd` — `triangle line count < 100` shipped as [BLOCKING] even though the critic's own review articulated "count caps are numerology"; the cascade prediction was empirically wrong (159 → 159), BLOCKING failed, cycle shipped via invariant-based criteria. The lapse cost a mid-REVIEW decision round that should have been a design-time catch.
 
 ### Autonomous DESIGN (skipping planner/critic/visionary)
 
@@ -125,6 +126,29 @@ Canonical: derive-ordering cycle 2026-04-20T00:50 — user asked "check if there
 ### Follow-up micro-cycles
 
 When a cycle ships with a compromise on SHIP-DESIRABLE behavior (see Phase 2 synthesis), the follow-up is a named **micro-cycle**: tiny research artifact (often <1 page) answering a specific question from the ship commit; no planner/critic/visionary round unless the fix is architectural; single implementer spawn with the narrow target; commit separately, referencing the ship commit.
+
+### Hypothesis-failure decision protocol (implementer returns with predicted-but-not-structural metric failing)
+
+Fires when the implementer reports "shipped the spec correctly, all invariant-based BLOCKING criteria pass, but a metric-based BLOCKING criterion (line count, ratio, `drops to ~N`) did not hit its predicted target." The cycle is not blocked — the rule / change / migration is correct; the *prediction* about its downstream effect was wrong. Decision tree:
+
+1. **Are all invariant-based BLOCKING criteria (tests pass, sanitize clean, analyze clean, structural assertions hold) met?** If NO → standard BLOCKED handling (scope shrink or diagnostic round). If YES → continue.
+2. **Was the failed metric-based criterion hypothesis-derived (per Phase 2 Stop-and-Ship Criteria rule)?** If it names a cascade, propagation, or "because X will cause Y downstream," yes. If NO (genuinely structural but miscounted) → treat as implementation bug, re-spawn implementer. If YES → continue.
+3. **Ship the cycle**: all structural correctness criteria passed; the hypothesis failure is a negative result worth documenting.
+   - Flag the lapse to the meta-reviewer: the criterion should not have been BLOCKING.
+   - Write the negative finding into `next-priorities.md` with the empirical evidence (pre/post numbers, why the cascade didn't materialize).
+   - If the residual surfaces a deeper architectural question the hypothesis was trying to address, open a research-anchor doc in `docs/` (not `.fwiz-workflow/`, see Artifact Placement below) for the next cycle.
+   - Do NOT amend the original design post-hoc to make the failed BLOCKING look like DESIRABLE — leave the artifact as evidence. The meta-reviewer edits the agent profiles to prevent the class of mistake.
+
+Canonical: P1-tautology cycle `3bcccbd` — all invariant criteria passed (sqrt^2 substring absent, tests pass, sanitize clean); metric criterion `line count < 100` was cascade-derived and failed (159 → 159); orchestrator shipped under the invariant set, logged the negative result to `next-priorities.md` and `docs/Category-C-Investigation.md`, flagged the BLOCKING-tagging lapse to the meta-reviewer, and the cascade prediction's failure became the research motivation for the next cycle.
+
+### Artifact placement — gitignored `.fwiz-workflow/` vs committed `docs/`
+
+Where an artifact lives is determined by its lifecycle, not the phase that created it.
+
+- **`.fwiz-workflow/` (gitignored)**: per-cycle working artifacts consumed within the cycle and by the immediate-next cycle's RESEARCH phase — `research-brief.md`, `design-proposal.md`, `implementation-log.md`, `review-notes.md`, `next-priorities.md`, `orchestrator-log.md`, `meta-review*.md`, `workflow-metrics.md`, per-cycle scratch diagnostics. The orchestrator may rotate these (suffix-rename at next-cycle start) but the directory itself is disposable; if cleared, the cycle can still reconstruct from commits.
+- **`docs/` (committed)**: long-lived research anchors referenced from committed sources (other `docs/*.md`, `CLAUDE.md`, inline code comments, commit messages). Criterion: if two or more committed docs reference the artifact, OR if any cycle beyond the immediate-next expects to consume it, OR if a commit message points to it, it belongs in `docs/`. Name-case: `docs/Category-C-Investigation.md` (Title-Case), matching the existing `docs/` convention.
+
+Rule of thumb when authoring an investigation or research-anchor artifact mid-cycle: if you find yourself adding a reference to it from `docs/Future.md`, `docs/Known-Issues.md`, `docs/Developer.md`, or `CLAUDE.md`, place the artifact in `docs/` from the start. Avoids the post-hoc move that the reviewer catches. Canonical miss: P1-tautology cycle — `category-c-investigation.md` was first written to `.fwiz-workflow/`, referenced from `docs/Future.md #32` and `docs/Known-Issues.md #7`; reviewer flagged the discoverability risk; orchestrator moved to `docs/Category-C-Investigation.md` and updated both references. Second occurrence of this class of move in recent cycles — the criterion above is the structural fix.
 
 ## Phase 4: REVIEW
 
