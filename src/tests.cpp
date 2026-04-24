@@ -8251,6 +8251,19 @@ void test_simplify_exp_log() {
     ASSERT_EQ(expr_to_string(simplify(parse("sqrt(x^2)"))), "abs(x)",
         "simplify: sqrt(x^2) → abs(x)");
 
+    // Permissive-on-unknown-sign: sqrt(x)^2 simplifies to x even when x's sign
+    // is undetermined. Documented behavior — real-world sqrt^2 forms arise from
+    // squared-distance polynomials (nonneg by construction). If a user .fw
+    // program relied on sqrt(x)^2 as a positivity assertion, this commit
+    // changes that behavior. Re-examine under Future #31 domain-propagation.
+    ASSERT_EQ(expr_to_string(simplify(parse("sqrt(x)^2"))), "x",
+        "sqrt(x)^2 permissively simplifies to x for unknown-sign symbolic x");
+    // Numeric negative x: rule does NOT fire (condition -4 >= 0 is false).
+    // sqrt(-4)^2 stays as-is and evaluates to empty Checked<double>.
+    // Structural assertion: the sqrt wrapper is preserved for concrete negatives.
+    ASSERT(expr_to_string(simplify(parse("sqrt(-4)^2"))).find("sqrt") != std::string::npos,
+        "sqrt(-4)^2 preserves sqrt wrapper (rule blocked by numeric condition check)");
+
     // (x^2)^3 → x^6
     ASSERT_EQ(expr_to_string(simplify(parse("(x^2)^3"))), "x^6",
         "simplify: (x^2)^3 → x^6");
@@ -8570,7 +8583,7 @@ void test_rewrite_rules() {
     {
         FormulaSystem sys;
         sys.load_string("cos(-x) = cos(x)\nsin(-x) = -sin(x)\n");
-        constexpr size_t builtin_count = 14;  // from BUILTIN_REWRITE_RULES
+        constexpr size_t builtin_count = 21;  // actual count in BUILTIN_REWRITE_RULES (used as >= floor)
         // User rules may duplicate builtins; total should be builtins + user rules
         ASSERT(sys.rewrite_rules.size() >= builtin_count,
             "parse: has builtin rules (got " + std::to_string(sys.rewrite_rules.size()) + ")");
@@ -10460,6 +10473,26 @@ void test_semantic_dedup_m3() {
         }
         ASSERT(dup_count == 0,
                "M3-6: triangle derive: no two output lines share a fingerprint (dups: " + std::to_string(dup_count) + ")");
+
+        // M1 (SHIP-BLOCKING): no result line contains a sqrt(...)^2 substring.
+        // Structural invariant, not count threshold (see earlier comment on numerology).
+        for (const auto& line : results) {
+            auto pos = line.find("sqrt(");
+            while (pos != std::string::npos) {
+                // Walk to matching close paren
+                int depth = 1;
+                size_t p = pos + 5;
+                while (p < line.size() && depth > 0) {
+                    if (line[p] == '(') ++depth;
+                    else if (line[p] == ')') --depth;
+                    ++p;
+                }
+                // p now points just past ')' of sqrt(...). Check for ^2 immediately after.
+                ASSERT(!(p + 1 < line.size() && line[p] == '^' && line[p+1] == '2'),
+                       "M1: no sqrt(...)^2 substring in derive output (line: " + line + ")");
+                pos = line.find("sqrt(", p);
+            }
+        }
     }
 
     // M3-7 (SHIP-BLOCKING): commutative z = x+y vs z = y+x → 1 result.
