@@ -531,6 +531,7 @@ tan(atan(x)) = x
 abs(abs(x)) = abs(x)
 abs(-x) = abs(x)
 sqrt(x^2) = abs(x)
+sqrt(x)^2 = x iff x >= 0
 log(e^x) = x
 e^log(x) = x
 log(x^n) = n * log(x) iff x != 0

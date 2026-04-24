@@ -618,6 +618,34 @@ Drop derive candidates whose `leaf_count > sum(source_equation_rhs_leaf_counts)`
 
 **Reopen trigger:** a `--derive` reproducer beyond triangle shows this leaf-count ratio exceeded on >10% of output lines after a real `.fw` file stress test.
 
+## 31. `abs(x) = x iff x >= 0` builtin rewrite rule
+
+Blocked by permissive-condition behavior breaking existing `abs` tests (`tests.cpp:8289` asserts `simplify(abs(abs(x))) == "abs(x)"` but with the rule becomes `"x"`; `tests.cpp:8291` asserts `simplify(abs(-x)) == "abs(x)"` but becomes `"x"`). The existing rule `abs(-x) = abs(x)` fires first, then `abs(x) = x iff x >= 0` (condition undetermined → permissive) fires on the result. This is a semantic correctness question — dropping sign info from `abs(-x)` is a soundness bug for unknown-sign symbolic `x`. The existing failing tests are specifications: `abs` preserves sign information until we have a principled way to discharge it.
+
+**Reopen trigger:** when global-condition propagation to the simplifier is implemented (specifically when `condition_violated` can query `global_conditions` for domain bounds). The long-term form is `abs(x) = x iff known(x >= 0)` — guarded rather than permissive. When domain-propagation ships, the tests at `tests.cpp:8289/8291` naturally pass (`x` is unknown-sign so the guard blocks) while `abs(x) where x >= 0` simplifies as expected.
+
+## 32. Category C architectural tautology — derivation over-enumeration
+
+**Status after 2026-04-20 P1 cycle**: promoted from conditional to **active investigation**. The `sqrt(x)^2 = x iff x >= 0` rule shipped and correctly eliminates all `sqrt(...)^2` patterns, but the predicted fingerprint-cascade dedup did NOT reduce line count (159 → 159; 16 lines changed form but stayed distinct). Simplified forms have different free-variable signatures than canonical forms, so they fingerprint-distinctly — correct behavior, but doesn't solve the Category C problem.
+
+The originally-proposed `target_identity_fp` approach is non-functional (`Var(target)` evaluates to empty at test points under `subst_for_fingerprint`). The next cycle must NOT re-propose a variant of this without diagnostic evidence.
+
+**Investigation artifact**: `docs/Category-C-Investigation.md` — six speculative approaches (leaf-count gate, `--derive N` default cap, provenance-cycle detection, canonicity soft cull, algebraic closure, strategy filter) each with "why it might be right / wrong" and "cost". Five diagnostic questions (D1–D5) the next cycle should answer BEFORE designing. Explicitly speculative — the investigation prompts exploration, not prescription.
+
+**Reopen trigger:** dedicated next cycle's RESEARCH phase takes `category-c-investigation.md` as its starting point. Answer D1–D5 first, choose an approach, then design.
+
+## 33. Category E symbolic form preservation for CLI bindings
+
+The 21 lines in the triangle reproducer output using pre-evaluated numeric constants (`1.368080573 = a*sin(B*deg)`) arise because CLI-supplied `a=4, B=20` are bound numerically before derivation. Fix requires deferring binding substitution until after fingerprint-dedup — a risky change because it potentially explodes candidate count (symbolic forms of CLI-bound variables multiply through every derive branch before dedup can trim them).
+
+**Reopen trigger:** user requests symbolic intermediate steps in derive output (e.g. `--derive --symbolic` or a stepped-derivation mode), OR scheduled batch-mode feature (see Future #5) requires preserved symbolic form for tabular output.
+
+## 34. `x / (1/y) = x*y iff y != 0` rewrite rule
+
+Considered and deferred in the 2026-04-20 cycle. In the primary triangle reproducer, `1/deg` folds to `Num(57.2957...)` before `apply_rewrite_rules` ever sees the pattern — so the rule has no observable firing site there. Adding it without an exercising reproducer would be speculative infrastructure.
+
+**Reopen trigger:** any `.fw` reproducer's derive or solve output contains a `/(1/SYMBOL)` substring where `SYMBOL` is a non-numeric identifier (i.e. the pattern survives simplification because the denominator is not a pre-foldable constant).
+
 ## Interaction with existing features
 
 - **--verify**: conditions become part of verification — check that inputs satisfy all relevant conditions
