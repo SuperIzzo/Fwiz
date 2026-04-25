@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Breaks problems into concrete implementation steps for the Fwiz codebase
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, Write
 model: sonnet
 color: green
 ---
