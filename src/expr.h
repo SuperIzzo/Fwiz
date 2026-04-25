@@ -1292,7 +1292,10 @@ inline void flatten_multiplicative(ExprPtr e,
     }
 }
 
-// Reconstruct an expression from multiplicative factors (MUL only, no DIV)
+// Reconstruct an expression from multiplicative factors. Splits factors by
+// exponent sign: positive-exp factors form the numerator, negative-exp factors
+// (with sign flipped) form the denominator. Emits `DIV(num, denom)` when any
+// negative-exp factors are present, avoiding `POW(_, Num(-n))` rendering.
 inline ExprPtr rebuild_multiplicative(double coeff,
                                       const std::vector<std::pair<ExprPtr, double>>& factors) {
     auto make_factor = [](const ExprPtr& base, double exp) -> ExprPtr {
@@ -1300,19 +1303,31 @@ inline ExprPtr rebuild_multiplicative(double coeff,
         return Expr::BinOpExpr(BinOp::POW, base, Expr::Num(exp));
     };
 
-    std::vector<ExprPtr> parts;
+    // Split factors by exponent sign: positive → numerator, negative → denominator
+    std::vector<ExprPtr> num_parts, denom_parts;
     for (auto& [base, exp] : factors) {
-        if (std::abs(exp) < EPSILON_ZERO) continue; // base^0 = 1, skip
-        parts.push_back(make_factor(base, exp));
+        if (std::abs(exp) < EPSILON_ZERO) continue;  // base^0 = 1, skip
+        if (exp > 0) num_parts.push_back(make_factor(base, exp));
+        else         denom_parts.push_back(make_factor(base, -exp));
     }
 
     bool neg = coeff < 0;
     double abs_coeff = std::abs(coeff);
-    ExprPtr result = nullptr;
-    if (abs_coeff != 1.0 || parts.empty()) result = Expr::Num(abs_coeff);
-    for (auto& f : parts)
-        result = result ? Expr::BinOpExpr(BinOp::MUL, result, f) : f;
-    if (!result) result = Expr::Num(1);
+
+    // Build numerator: coeff (if not 1) * positive-exp factors
+    ExprPtr num = nullptr;
+    if (abs_coeff != 1.0 || (num_parts.empty() && denom_parts.empty())) num = Expr::Num(abs_coeff);
+    for (auto& f : num_parts) num = num ? Expr::BinOpExpr(BinOp::MUL, num, f) : f;
+    if (!num) num = Expr::Num(1);
+
+    // If any negative-exp factors, wrap in DIV; else just numerator
+    ExprPtr result = num;
+    if (!denom_parts.empty()) {
+        ExprPtr denom = denom_parts.front();
+        for (size_t i = 1; i < denom_parts.size(); i++)
+            denom = Expr::BinOpExpr(BinOp::MUL, denom, denom_parts[i]);
+        result = Expr::BinOpExpr(BinOp::DIV, num, denom);
+    }
 
     return neg ? Expr::Neg(result) : result;
 }

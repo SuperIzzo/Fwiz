@@ -668,6 +668,32 @@ The rewrite `x / ((1/a) * y) = x * a / y iff a != 0` (with `a` extracted from th
 
 **Reopen trigger**: the 29 residual occurrences visible in `./bin/fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)" | grep -c "/ (1 / "` — any time that count is non-zero after this entry lands. Alternatively: when the composite pattern is observed in another reproducer's output.
 
+**Update (2026-04-24, post-rebuild_multiplicative split-by-sign cycle):** The
+rebuild fix cascades modestly with G3: since `MUL(_, POW(_, -1))` factors now
+emit as `DIV(_, _)` directly, some chains that previously appeared as
+`MUL(DIV(1, a), y)` are no longer constructed in the first place — their
+upstream sources (`(1/a) * y` after rebuild on `x * a^(-1) * y`) emit cleaner
+forms. Triangle measurement: `/ (1 / ` count dropped 29 → 26 (-3). The bulk
+of the residual is unrelated to negative exponents (e.g. `1 / deg * acos(...)`
+constructed directly from a deg-multiplication, not from a `^(-1)` factor).
+Entry remains valid; not obsolete.
+
+## 38. `x^(-n)` rendering as `1/x^n` for any integer n — ✅ DONE-BY-SIDE-EFFECT (2026-04-24)
+
+Originally tracked as a residual: `simplify_pow`'s standalone case
+(`expr.h:1759-1765`) handled `x^(-n)` outside any MUL chain, but the moment
+the POW-with-negative-exponent was wrapped in a MUL chain, the
+`rebuild_multiplicative` factor-emit loop would re-emit `POW(base, Num(-n))`
+unconditionally, undoing the cleanup.
+
+**Resolution:** `rebuild_multiplicative` (`src/expr.h`, ~lines 1296-1330) was
+rewritten to split factors by exponent sign: positive exponents → numerator
+product; negative exponents (with sign flipped) → denominator product;
+emit `DIV(num, denom)` when any negative-exp factors exist. Walker assertion
+(`tests.cpp` M3-6 block) pins the invariant: no `^(-` substring in derive
+output for the triangle reproducer. Triangle measurement: 66 `^(-` substrings
+→ 0; 159 lines → 158; 42024 chars → 40983.
+
 ## Interaction with existing features
 
 - **--verify**: conditions become part of verification — check that inputs satisfy all relevant conditions
