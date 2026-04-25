@@ -694,6 +694,57 @@ emit `DIV(num, denom)` when any negative-exp factors exist. Walker assertion
 output for the triangle reproducer. Triangle measurement: 66 `^(-` substrings
 → 0; 159 lines → 158; 42024 chars → 40983.
 
+## 39. Shared CSE helper preamble across `--table` rows
+
+`--cse` (Cycle B) extracts subexpressions per `derive_all` invocation. A
+future `--table` mode that emits multiple parameterized rows (e.g. one row
+per `(a, b, c)` triple) should share a single `# Helpers` preamble across
+all rows when the structural shape repeats. Reusing the existing
+`cse_extract` over the union of row-expressions gives this for free; only
+the print block needs new layout logic.
+
+**Reopen trigger**: when `--table` is designed.
+
+## 40. Chain-rule CSE composition for symbolic differentiation
+
+`cse_extract` and `cse_replace` (Cycle B) are general-purpose structural
+primitives. When `--derive dY/dX` lands, intermediate chain-rule terms
+(e.g. `dY/du * du/dx` where `u` repeats across multiple bindings) are exact
+candidates for the same dedup pipeline.
+
+**Reopen trigger**: `--derive dY/dX` design phase.
+
+## 41. LaTeX helper rendering
+
+LaTeX output (`--latex`) for `--cse` should render the helper preamble as
+`\text{Let } t_1 = \ldots` in a `\begin{align}` block, with main equations
+referencing `t_i`. The structural separation already exists in the
+`--cse` output stream (helpers vs main equations); `--latex` only needs
+a different formatter.
+
+**Reopen trigger**: `--latex` is designed.
+
+## 42. Cross-tier rewrite rule `(a/b)^n * b^n = a^n iff b != 0`
+
+Tier 1.x's `rebuild_multiplicative` renders `(a/b)^2 * b^2` as-is rather
+than collapsing to `a^2`. With `--cse` active, a helper `t1 = (a/b)^2`
+can survive next to a main term `t1 * b^2` — visually noisy. Upstream
+fix is a `.fw` rewrite rule, not a CSE-side fix (per CLAUDE.md
+"simplification over filtration"): adding the rule simultaneously cleans
+non-CSE output and reduces CSE candidate count.
+
+**Reopen trigger**: a user reports the non-collapse, OR the next
+rewrite-rule cycle.
+
+## 43. Per-`.fw` CSE threshold frontmatter
+
+`--cse 3` is the default. A `.fw` file with stable formula shapes might
+benefit from a frontmatter directive (e.g. `# fwiz: cse_default 5`) that
+sets the file's preferred threshold. CLI `--cse N` would still override.
+
+**Reopen trigger**: a second user reports `--cse 3` wrong-default for
+their domain.
+
 ## Interaction with existing features
 
 - **--verify**: conditions become part of verification — check that inputs satisfy all relevant conditions

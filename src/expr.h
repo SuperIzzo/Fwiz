@@ -993,6 +993,78 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
     return e;
 }
 
+// ============================================================================
+//  CSE substitution — replace structural-equal subtrees with named Var nodes
+// ============================================================================
+//
+// Used by --cse derive output: given an expression and an ordered list of
+// (helper_name, helper_subtree) pairs, replace every occurrence of a helper
+// subtree (matched by structural equality) with `Var(helper_name)`.
+//
+// Walk is post-order (children first), preserving SymPy `cse()` let* semantics:
+// a helper's RHS is matched against the ORIGINAL subtree, not the substituted
+// one. The current node is checked AFTER its children so an outer helper still
+// matches its original shape if its inner helper has not yet rewritten it.
+//
+// Pointer-equality short-circuit on the no-match path: fwiz's factory pattern
+// (Expr::BinOpExpr/Neg/Call) ALWAYS reconstructs a fresh node, so without this
+// guard a tree with no helper matches still pays O(|tree|) allocations. The
+// guard returns the original `e` when (a) no child changed by pointer identity
+// AND (b) no helper subtree equals the current node.
+inline ExprPtr cse_replace(ExprPtr e,
+        const std::vector<std::pair<std::string, ExprPtr>>& helpers) {
+    if (!e) return e;
+    // Walk children first (post-order).
+    ExprPtr new_left = nullptr, new_right = nullptr, new_child = nullptr;
+    std::vector<ExprPtr> new_args;
+    bool args_changed = false;
+    switch (e->type) {
+        case ExprType::NUM:
+        case ExprType::VAR:
+            break;  // atomic; no children to walk
+        case ExprType::UNARY_NEG:
+            new_child = cse_replace(e->child, helpers);
+            break;
+        case ExprType::BINOP:
+            new_left  = cse_replace(e->left,  helpers);
+            new_right = cse_replace(e->right, helpers);
+            break;
+        case ExprType::FUNC_CALL:
+            new_args.reserve(e->args.size());
+            for (auto& a : e->args) {
+                auto na = cse_replace(a, helpers);
+                if (na != a) args_changed = true;
+                new_args.push_back(na);
+            }
+            break;
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    // Now check helpers against the current subtree. We use post-order so a
+    // helper always matches the original shape (helpers themselves never
+    // contain Var(t_i) for any helper name).
+    for (auto& [name, sub] : helpers) {
+        if (expr_equal(e, sub)) return Expr::Var(name);
+    }
+    // Pointer-equality short-circuit: nothing changed in children AND no helper
+    // matched at this node → return original (avoids O(|tree|) rebuild).
+    switch (e->type) {
+        case ExprType::NUM:
+        case ExprType::VAR:
+            return e;
+        case ExprType::UNARY_NEG:
+            if (new_child == e->child) return e;
+            return Expr::Neg(new_child);
+        case ExprType::BINOP:
+            if (new_left == e->left && new_right == e->right) return e;
+            return Expr::BinOpExpr(e->op, new_left, new_right);
+        case ExprType::FUNC_CALL:
+            if (!args_changed) return e;
+            return Expr::Call(e->name, new_args);
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    return e;
+}
+
 // Walk an expression tree and replace every Var node whose name is a builtin
 // symbolic constant (pi, e, phi) with its numeric Num value. Used by the
 // --approximate derive path to collapse `2 * pi * r` → `6.28... * r` after
