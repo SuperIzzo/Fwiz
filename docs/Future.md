@@ -640,11 +640,33 @@ The 21 lines in the triangle reproducer output using pre-evaluated numeric const
 
 **Reopen trigger:** user requests symbolic intermediate steps in derive output (e.g. `--derive --symbolic` or a stepped-derivation mode), OR scheduled batch-mode feature (see Future #5) requires preserved symbolic form for tabular output.
 
-## 34. `x / (1/y) = x*y iff y != 0` rewrite rule
+## 34. `x / (1/y) = x*y iff y != 0` rewrite rule — ✅ DONE (2026-04-24, <commit-hash-placeholder>)
 
-Considered and deferred in the 2026-04-20 cycle. In the primary triangle reproducer, `1/deg` folds to `Num(57.2957...)` before `apply_rewrite_rules` ever sees the pattern — so the rule has no observable firing site there. Adding it without an exercising reproducer would be speculative infrastructure.
+Shipped as a builtin rewrite rule alongside the related `k * x / (k * y) = x / y iff k != 0` cancellation rule. Now also handles **numeric** denominators — `a / (1/20) → a * 20` (canonical: `20 * a`) — eliminating all 57 instances of `/ (1 / 20)` in the triangle reproducer's derive output. The original reopen-trigger ("`/(1/SYMBOL)` substring where SYMBOL is a non-numeric identifier") is now ACTIVE as a regression guard.
 
-**Reopen trigger:** any `.fw` reproducer's derive or solve output contains a `/(1/SYMBOL)` substring where `SYMBOL` is a non-numeric identifier (i.e. the pattern survives simplification because the denominator is not a pre-foldable constant).
+**Open residual** (not addressed by this rule): composite-denominator patterns like `x / ((1/k) * Y)` where the unit fraction is one factor inside a MUL. These survive (29 occurrences in the triangle output, all of form `1 / deg * acos(...) * ...` or `1 / 2 * (b+c+4) * ...`). Rewriting these would require a wider rule (`x / (a/b * y) = x * b / (a * y)`) — see Future entry to be added if/when needed.
+
+## 35. Stale CLAUDE.md / `system.h:521` claim about `stdlib/builtin.fw` mirroring
+
+The comment at `src/system.h:521` claims `stdlib/builtin.fw` mirrors `BUILTIN_REWRITE_RULES` for documentation. The file actually contains only builtin-function section definitions (sin, cos, sqrt, log, abs, etc.) — NOT rewrite rules. Fix the stale comment in a future cleanup pass.
+
+**Reopen trigger:** whenever `stdlib/builtin.fw` is edited for rewrite-rule documentation purposes (i.e. whenever someone discovers the comment claims something the file doesn't deliver).
+
+## 36. Composite-denominator unit-fraction rule: `x / ((1/a) * y) = x*a / y`
+
+Surfaced in the 2026-04-24 Tier 1 cycle: after shipping G3 (`x/(1/y) = x*y iff y != 0`), 29 occurrences remained in the triangle reproducer of shape `x / ((1/k) * Y)` where the unit fraction is one factor inside a MUL chain. G3 (correctly) does not match — its pattern is strictly `DIV(x, DIV(Num(1), y))`, not `DIV(x, MUL(DIV(1, y), z, ...))`. Examples from the triangle output:
+
+```
+/ (1 / 2 * (b + c + 4) * (b / 2 + c / 2 - 2))
+/ (1 / deg * acos((b^2 - c^2 + 16) / (8 * b)) * asin(...))
+/ (1 / deg * acos((c^2 - b^2 + 16) / (8 * c)) * asin(...))
+```
+
+The rewrite `x / ((1/a) * y) = x * a / y iff a != 0` (with `a` extracted from the MUL) would flatten these. But this is a structurally different rule than G3 — `a` here must be identified as "one factor inside a MUL chain", which is a harder pattern match than G3's direct reciprocal. Would need a fresh design/critic round.
+
+**Cost estimate**: 1 rule + 3 tests + walker extension. Mechanical once designed; the critical question is whether the existing commutative flattened matcher can express "extract one factor matching `1/a` from a MUL chain" or whether new matcher primitives are needed.
+
+**Reopen trigger**: the 29 residual occurrences visible in `./bin/fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)" | grep -c "/ (1 / "` — any time that count is non-zero after this entry lands. Alternatively: when the composite pattern is observed in another reproducer's output.
 
 ## Interaction with existing features
 

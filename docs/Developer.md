@@ -41,7 +41,7 @@ Current capabilities:
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
 - Inline comments (`# after equations`), semicolons as line separators
-- Data-driven rewrite rules (21 builtin `.fw` patterns for simplification)
+- Data-driven rewrite rules (23 builtin `.fw` patterns for simplification)
 - Commutative pattern matching (N-term additive/multiplicative permutation search)
 - `undefined` keyword for explicit domain boundaries and exhaustiveness checking
 - Context-aware simplification (conditions checked against known numeric bindings)
@@ -159,7 +159,7 @@ The core of the system. Contains:
 - Negation cancellation: `--x → x`, `x - (-y) → x + y`, `-(a - b) → b - a`
 - Negation factoring via `simplify_neg_pair()`: handles `(-a)⊗(-b) → a⊗b`, `(-a)⊗b → -(a⊗b)`, `a⊗(-b) → -(a⊗b)` for both MUL and DIV in a single shared function
 - Structural fractions: `Num(a) / Num(b)` preserved as `DIV(Num(a), Num(b))` when result is non-integer; GCD-normalized, sign in numerator. Rational arithmetic via `to_rational()` and `make_rational()` helpers. `flatten_multiplicative()` treats structural fractions as opaque factors.
-- Data-driven rewrite rules (`BUILTIN_REWRITE_RULES` string, 21 rules): applied after the structural rules above via `apply_rewrite_rules`. Rules with `iff cond` check `condition_violated` against the current numeric bindings; if the result is `-1` (condition undetermined — variable is symbolic, sign unknown), the rule fires permissively. This is intentional: `sqrt(x)^2 = x iff x >= 0` simplifies `sqrt(a)^2` to `a` even when `a` has no known sign, because the alternative — leaving the `sqrt^2` wrapper intact — adds no information and blocks downstream fingerprint dedup. The semantic cost is accepted: the condition annotation documents the domain constraint without enforcing it for symbolic unknowns. Rules that must NOT fire for unknown-sign variables (e.g. `abs(x) = x iff x >= 0`) require a principled domain-propagation mechanism before they can be added; see Future #31.
+- Data-driven rewrite rules (`BUILTIN_REWRITE_RULES` string, 23 rules): applied after the structural rules above via `apply_rewrite_rules`. The two Tier 1 additions (G1: `k * x / (k * y) = x / y iff k != 0` and G3: `x / (1 / y) = x * y iff y != 0`) close numeric-common-factor cancellation and unit-fraction-denominator rewriting respectively. Rules with `iff cond` check `condition_violated` against the current numeric bindings; if the result is `-1` (condition undetermined — variable is symbolic, sign unknown), the rule fires permissively. This is intentional: `sqrt(x)^2 = x iff x >= 0` simplifies `sqrt(a)^2` to `a` even when `a` has no known sign, because the alternative — leaving the `sqrt^2` wrapper intact — adds no information and blocks downstream fingerprint dedup. The semantic cost is accepted: the condition annotation documents the domain constraint without enforcing it for symbolic unknowns. Rules that must NOT fire for unknown-sign variables (e.g. `abs(x) = x iff x >= 0`) require a principled domain-propagation mechanism before they can be added; see Future #31.
 
 **decompose_linear()** — The key insight for solving. Decomposes an expression into `coeff * target + rest` where `coeff` and `rest` are free of the target variable. This works by walking the expression tree:
 - `VAR(target)` → coeff=1, rest=0
@@ -243,7 +243,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-1990+ tests organized into functional tests, edge cases, and robustness groups:
+2036+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -304,7 +304,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 1990+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2036+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

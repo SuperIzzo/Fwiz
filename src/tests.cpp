@@ -8287,6 +8287,51 @@ void test_simplify_exp_log() {
     }
 }
 
+void test_division_reciprocal_rules() {
+    SECTION("Simplify Division/Reciprocal Rules (G1/G3)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Load builtin rewrite rules for simplifier
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // G1: k * x / (k * y) = x / y iff k != 0
+    ASSERT_EQ(expr_to_string(simplify(parse("4 * b / (4 * c)"))), "b / c",
+        "G1: numeric common factor 4 cancels");
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * x / (2 * y)"))), "x / y",
+        "G1: different numeric factor also cancels");
+    // G1 does NOT fire when no common factor — unchanged.
+    ASSERT_EQ(expr_to_string(simplify(parse("2 * x / (3 * y)"))), "2 * x / (3 * y)",
+        "G1: distinct factors not cancelled");
+    // G1 with symbolic k (non-numeric factor) — per critic amendment #2
+    ASSERT_EQ(expr_to_string(simplify(parse("k * x / (k * y)"))), "x / y",
+        "G1: symbolic k cancels (with recorded k != 0 assumption)");
+    // Negative test: iff k != 0 guard pins design decision
+    // (0 * x / (0 * y) must NOT rewrite to x/y) — per critic amendment #2
+    // Exact post-simplify shape depends on whether 0*x folds earlier; key
+    // assertion is that output is NOT "x / y".
+    ASSERT(expr_to_string(simplify(parse("0 * x / (0 * y)"))) != std::string("x / y"),
+        "G1: k=0 blocked by iff k != 0 (does not rewrite undefined→defined)");
+
+    // G3: x / (1 / y) = x * y iff y != 0
+    // Note: simplifier's canonical multiplicative form orders numerics first
+    // (matches existing convention `24 * x`, `5 * x`, etc.).
+    ASSERT_EQ(expr_to_string(simplify(parse("a / (1 / 20)"))), "20 * a",
+        "G3: division by unit-fraction with numeric denom");
+    ASSERT_EQ(expr_to_string(simplify(parse("x / (1 / y)"))), "x * y",
+        "G3: division by unit-fraction with symbolic denom (subsumes Future #34)");
+    // G3 subsumes G2 — 1/(1/x) → 1*x → x (after multiplicative flatten).
+    ASSERT_EQ(expr_to_string(simplify(parse("1 / (1 / c)"))), "c",
+        "G3 with x=1: reciprocal of reciprocal");
+    // Negative test: iff y != 0 guard (a / (1/0) = undefined, NOT a*0 = 0)
+    // — per critic amendment #2
+    ASSERT(expr_to_string(simplify(parse("a / (1 / 0)"))) != std::string("0"),
+        "G3: y=0 blocked by iff y != 0 (LHS is undefined, not 0)");
+}
+
 void test_simplify_trig_abs_pow() {
     SECTION("Simplify Trig/Abs/Pow Rules");
 
@@ -10493,6 +10538,41 @@ void test_semantic_dedup_m3() {
                 pos = line.find("sqrt(", p);
             }
         }
+
+        // Tier 1 G3 (SHIP-BLOCKING): no result line contains `/ (1 / Y)` where
+        // the top level of Y contains no `*` — i.e. Y is a single non-MUL
+        // expression. This matches exactly G3's pattern `DIV(x, DIV(Num(1), Y))`;
+        // composite cases like `/ (1 / deg * acos(...))` are structurally
+        // MUL(DIV(1, deg), acos(...)) — out of G3's scope, tracked in Future #36.
+        // Baseline (pre-rule): 57 pure G3 sites in triangle output.
+        // Post-rule: 0. Invariant-derived per P1 cycle lesson L1 (not a count).
+        for (const auto& line : results) {
+            auto pos = line.find("/ (1 / ");
+            while (pos != std::string::npos) {
+                // Walk to matching close paren of the outer `(`.
+                size_t open = pos + 2;  // position of `(`
+                int depth = 1;
+                size_t p = open + 1;
+                while (p < line.size() && depth > 0) {
+                    if (line[p] == '(') ++depth;
+                    else if (line[p] == ')') --depth;
+                    ++p;
+                }
+                // p now points just past matching `)`. Scan inside for a
+                // top-level `*` — its presence means this is a composite
+                // denominator (G3 not applicable), skip.
+                bool composite = false;
+                int d = 0;
+                for (size_t q = open + 1; q + 1 < p; ++q) {
+                    if (line[q] == '(') ++d;
+                    else if (line[q] == ')') --d;
+                    else if (line[q] == '*' && d == 0) { composite = true; break; }
+                }
+                ASSERT(composite,
+                       "Tier 1 G3: no `/ (1 / Y)` with non-composite Y in derive output (line: " + line + ")");
+                pos = line.find("/ (1 / ", p);
+            }
+        }
     }
 
     // M3-7 (SHIP-BLOCKING): commutative z = x+y vs z = y+x → 1 result.
@@ -10918,6 +10998,7 @@ int main() {
     test_sections();
     test_simplify_assumptions();
     test_simplify_exp_log();
+    test_division_reciprocal_rules();
     test_simplify_trig_abs_pow();
     test_simplify_common_factor();
     test_iff_semantics();
