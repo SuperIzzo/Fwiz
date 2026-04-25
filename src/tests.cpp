@@ -8332,6 +8332,48 @@ void test_division_reciprocal_rules() {
         "G3: y=0 blocked by iff y != 0 (LHS is undefined, not 0)");
 }
 
+void test_negative_exp_rebuild() {
+    SECTION("Negative-Exp Rebuild (rebuild_multiplicative split-by-sign)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Load builtin rewrite rules for simplifier
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // Negative-exponent rebuild: rebuild_multiplicative emits DIV instead of POW(_, -n).
+    // Standalone POW (no MUL wrap) is handled by simplify_pow's existing case.
+    ASSERT_EQ(expr_to_string(simplify(parse("a * b^(-1)"))), "a / b",
+        "rebuild: a * b^(-1) → a / b (factors split, negative-exp → denom)");
+    ASSERT_EQ(expr_to_string(simplify(parse("sin(y) * c^(-1)"))), "sin(y) / c",
+        "rebuild: function * x^(-1) → function / x");
+    ASSERT_EQ(expr_to_string(simplify(parse("a * b^(-1) * c^(-1)"))), "a / (b * c)",
+        "rebuild: multiple negative-exp factors group into denominator");
+    // Cascade pinning: rebuild turns inner `a * b^(-1)` into `a/b` cleanly,
+    // even when the MUL is itself the base of a POW. Full collapse to `a^2`
+    // would additionally require a `(x/y)^n = x^n/y^n` distribution rule
+    // (not present and out of scope of this rebuild fix). The substantive
+    // assertion is that no `^(-` substring remains.
+    ASSERT_EQ(expr_to_string(simplify(parse("(a * b^(-1))^2 * b^2"))), "(a / b)^2 * b^2",
+        "rebuild: inner `a * b^(-1)` → `a/b` even when wrapped in POW base");
+    // Standalone case (already handled by simplify_pow at expr.h:1759-1765, regression guard)
+    ASSERT_EQ(expr_to_string(simplify(parse("b^(-1)"))), "1 / b",
+        "standalone b^(-1) → 1/b (regression guard for simplify_pow special case)");
+    // Numeric guard: 0^(-1) is a standalone POW (no MUL wrap) so rebuild never
+    // sees it. Pre-existing behavior: `simplify_once_impl`'s `is_num(l) && is_num(r)`
+    // branch (expr.h:1741-1742) folds via std::pow → +inf before the negative-exp
+    // special case fires. This regression guard pins that pre-existing behavior:
+    // rebuild must NOT alter the fold.
+    {
+        const auto* e = simplify(parse("0^(-1)"));
+        auto v = evaluate(*e);
+        ASSERT(v.has_value() && std::isinf(v.value()),
+               "0^(-1) folds to +inf (pre-existing simplify_once numeric branch, unchanged by rebuild)");
+    }
+}
+
 void test_simplify_trig_abs_pow() {
     SECTION("Simplify Trig/Abs/Pow Rules");
 
@@ -10573,6 +10615,15 @@ void test_semantic_dedup_m3() {
                 pos = line.find("/ (1 / ", p);
             }
         }
+
+        // Negative-exp rebuild (SHIP-BLOCKING): no result line contains `^(-`
+        // substring (the negative-power form is normalized via DIV by the rebuilder).
+        // Invariant-derived per P1 lesson L1 — structural exhaustiveness, not count.
+        for (const auto& line : results) {
+            auto pos = line.find("^(-");
+            ASSERT(pos == std::string::npos,
+                   "Rebuild: no `^(-` substring in derive output (line: " + line + ")");
+        }
     }
 
     // M3-7 (SHIP-BLOCKING): commutative z = x+y vs z = y+x → 1 result.
@@ -10999,6 +11050,7 @@ int main() {
     test_simplify_assumptions();
     test_simplify_exp_log();
     test_division_reciprocal_rules();
+    test_negative_exp_rebuild();
     test_simplify_trig_abs_pow();
     test_simplify_common_factor();
     test_iff_semantics();
