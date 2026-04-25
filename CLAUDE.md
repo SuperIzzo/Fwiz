@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (1990+)
+make test         # run all tests (2036+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
@@ -35,7 +35,7 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Derive unfolding:** Formula call bodies are inlined into parent expressions when possible, enabling algebraic solving through formula calls. Detects self-referencing calls and falls back to direct sub-system derivation. `FormulaSystem::approximate_mode` (bool, default false) is set by `--approximate`; `format_derived` (system.h) reads it: exact path calls `fmt_exact_double` on collapsed numerics; approximate path runs `substitute_builtin_constants` (expr.h — replaces `pi`/`e`/`phi` Var nodes with their Num values) then re-simplifies so adjacent numerics fold, then stringifies without recognition. `derive_all` dedup: candidates are fingerprinted via `fingerprint_expr` (Schwartz–Zippel numeric evaluation at prime-cycled test points); one canonical form per fingerprint is retained using `canonicity_score` as tiebreaker. Results emitted in ascending `canonicity_score` order — simplest (fewest leaves) first; always-NaN sentinel candidates sort last but are still emitted. `--derive N` (N ≥ 1) caps output at N results after sorting. File-defined constants are injected via `build_alias_table()` so user values like `deg` appear by name in output.
 
-**Rewrite rules:** Data-driven simplification via `.fw` patterns. 21 builtin rules (trig symmetry, inverse pairs, abs, log/exp, power rules, division). Commutative flattened matching handles N-term additive/multiplicative permutations. Rules loaded from `BUILTIN_REWRITE_RULES` string; user `.fw` files can add more.
+**Rewrite rules:** Data-driven simplification via `.fw` patterns. 23 builtin rules (trig symmetry, inverse pairs, abs, log/exp, power rules, division / reciprocal cancellation). Commutative flattened matching handles N-term additive/multiplicative permutations. Rules loaded from `BUILTIN_REWRITE_RULES` string; user `.fw` files can add more.
 
 **Function definitions:** Builtin functions (sin, cos, sqrt, log, abs, etc.) defined as embedded `.fw` sections with `@extern` for C++ evaluation and inverse equations for reverse solving. Custom functions registered via `register_function()` C++ API. Function inversion uses a thread-local callback resolved from `.fw` sub-system definitions.
 

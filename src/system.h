@@ -537,6 +537,8 @@ e^log(x) = x
 log(x^n) = n * log(x) iff x != 0
 x/x = 1 iff x != 0
 x/x = undefined iff x = 0
+k * x / (k * y) = x / y iff k != 0
+x / (1 / y) = x * y iff y != 0
 x^0 = 1
 x^1 = x
 x^(1/2) = sqrt(x)
