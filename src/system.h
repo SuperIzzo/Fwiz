@@ -211,6 +211,122 @@ inline std::string diag_expr_preview(const ExprPtr& e, size_t limit = 60) {
     return s;
 }
 
+// ============================================================================
+//  CSE (common subexpression elimination) for --derive output (Cycle B)
+// ============================================================================
+//
+// `cse_extract(exprs, threshold, occupied)` walks the input expressions and
+// identifies subtrees that appear `>= threshold` times across the input,
+// returning a topologically-ordered list of `(helper_name, subtree)` pairs.
+//
+// Eligibility: a subtree is eligible iff
+//   - it is NOT atomic (Var/Num) — naming a single Var as `t1 = x` is noise
+//   - it contains at least one free Var (purely numeric subtrees collapse to
+//     constants; naming `t1 = sin(3.14)` is useless)
+//   - it occurs `>= threshold` times across all input expressions (counted by
+//     stringification — see `expr_to_string`).
+//
+// Topological order: smaller subtrees come first, so when each helper's RHS
+// is later re-walked through `cse_replace` against earlier helpers, it picks
+// up nested references (e.g. `t2 = sin(t1)` when `t1 = x^2`).
+//
+// `occupied` is a name set the allocator must avoid (existing variables,
+// section args/return_vars, builtins). Helper names are `t1, t2, ...`,
+// skipping any name in `occupied`.
+//
+// Returns a vector in emission order (helpers first by topological depth).
+inline std::vector<std::pair<std::string, ExprPtr>> cse_extract(
+        const std::vector<ExprPtr>& exprs,
+        int threshold,
+        const std::set<std::string>& occupied) {
+    std::vector<std::pair<std::string, ExprPtr>> out;
+    if (threshold < 2) return out;
+
+    // Step 1: count occurrences of every non-atomic subtree by string key.
+    // Keep a representative ExprPtr per key for later emission.
+    std::map<std::string, int> counts;
+    std::map<std::string, ExprPtr> reps;
+
+    std::function<void(ExprPtr)> walk = [&](ExprPtr e) {
+        if (!e) return;
+        switch (e->type) {
+            case ExprType::NUM:
+            case ExprType::VAR:
+                return;  // atomic — never extracted
+            case ExprType::UNARY_NEG:
+                walk(e->child);
+                break;
+            case ExprType::BINOP:
+                walk(e->left);
+                walk(e->right);
+                break;
+            case ExprType::FUNC_CALL:
+                for (auto& a : e->args) walk(a);
+                break;
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); return;
+        }
+        // Eligibility: must contain at least one free Var.
+        std::set<std::string> vars;
+        collect_vars(*e, vars);
+        if (vars.empty()) return;
+        std::string key = expr_to_string(e);
+        auto [it, inserted] = counts.emplace(key, 0);
+        it->second++;
+        if (inserted) reps.emplace(key, e);
+    };
+    for (auto& e : exprs) walk(e);
+
+    // Step 2: collect eligible subtrees (count >= threshold).
+    // Sort by node count ascending — strictly smaller subtrees come first so
+    // that a helper depending on another helper sees the dependency named.
+    // Using a true node count (vs canonicity_score's leaf count) ensures
+    // `sin(x^2)` (4 nodes) sorts strictly after `x^2` (3 nodes) — the D8
+    // topological invariant pinned by CSE-U6.
+    std::function<int(ExprPtr)> node_count = [&](ExprPtr e) -> int {
+        if (!e) return 0;
+        switch (e->type) {
+            case ExprType::NUM:
+            case ExprType::VAR:       return 1;
+            case ExprType::UNARY_NEG: return 1 + node_count(e->child);
+            case ExprType::BINOP:     return 1 + node_count(e->left) + node_count(e->right);
+            case ExprType::FUNC_CALL: {
+                int n = 1;
+                for (auto& a : e->args) n += node_count(a);
+                return n;
+            }
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); return 0;
+        }
+        return 0;
+    };
+    std::vector<std::pair<std::string, ExprPtr>> eligible;
+    for (auto& [key, count] : counts) {
+        if (count < threshold) continue;
+        auto rep = reps[key];
+        eligible.emplace_back(key, rep);
+    }
+    std::sort(eligible.begin(), eligible.end(),
+              [&](const auto& a, const auto& b) {
+                  int na = node_count(a.second);
+                  int nb = node_count(b.second);
+                  if (na != nb) return na < nb;
+                  return a.first < b.first;  // stable tiebreak by string
+              });
+
+    // Step 3: assign helper names t1, t2, ... skipping any occupied name.
+    int next_idx = 1;
+    auto fresh_name = [&]() {
+        for (;;) {
+            std::string name = "t" + std::to_string(next_idx++);
+            if (occupied.count(name) == 0) return name;
+        }
+    };
+    for (auto& [key, expr] : eligible) {
+        (void)key;
+        out.emplace_back(fresh_name(), expr);
+    }
+    return out;
+}
+
 class FormulaSystem {
 public:
     mutable ExprArena arena;
@@ -1012,9 +1128,21 @@ x^(1/2) = sqrt(x)
     }
 
     // Derive ALL results (for multi-valued inversions: abs, quadratic, etc.)
+    //
+    // CSE parameters (Cycle B):
+    //   out_helpers   — if non-null AND cse_threshold >= 2, populated with
+    //                   "tN = expr" preamble lines (in topological order).
+    //   cse_threshold — minimum count for a subtree to be extracted as helper
+    //                   (0 disables CSE; default).
+    //   output_cap    — if > 0, truncate winners to first N (after canonicity
+    //                   sort) BEFORE the CSE pass, so helpers reflect printed
+    //                   equations only (replaces caller-side resize).
     std::vector<std::string> derive_all(const std::string& target,
                        const std::map<std::string, double>& numeric_bindings,
-                       const std::map<std::string, std::string>& symbolic_bindings) const {
+                       const std::map<std::string, std::string>& symbolic_bindings,
+                       std::vector<std::string>* out_helpers = nullptr,
+                       int cse_threshold = 0,
+                       int output_cap = 0) const {
         ExprArena::Scope scope(arena);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1181,22 +1309,88 @@ x^(1/2) = sqrt(x)
             return false; // don't stop — collect all
         });
 
-        // Emit winners phase: format each survivor, then sort ascending by
-        // canonicity_score so the simplest form appears first and always-NaN
-        // sentinels appear last. Ordering within equal canonicity is stable
-        // (std::map is ordered by fingerprint key — sentinels sort after real
-        // fingerprints because their discriminator byte is 1 vs 0).
-        std::vector<std::pair<std::pair<int, int>, std::string>> scored;
-        scored.reserve(winners.size());
+        // Emit winners phase: sort ascending by canonicity_score so the
+        // simplest form appears first and always-NaN sentinels appear last.
+        // Ordering within equal canonicity is stable (std::map is ordered by
+        // fingerprint key — sentinels sort after real fingerprints because
+        // their discriminator byte is 1 vs 0).
+        //
+        // Cycle B (CSE): when cse_threshold >= 2 AND out_helpers != nullptr,
+        // a CSE pass runs over the sorted-and-truncated ExprPtrs BEFORE
+        // formatting. Per amendment Q1, each winner is pre-canonicalized via
+        // simplify(distribute_over_sum(e)) — the same transformation
+        // format_derived applies internally — so structurally-equivalent
+        // expressions key identically in the CSE counter. Per amendment Q3,
+        // the output_cap is applied here (NOT post-format in main.cpp), so
+        // helpers reflect only the printed equations.
+        std::vector<std::pair<std::pair<int, int>, ExprPtr>> sorted_exprs;
+        sorted_exprs.reserve(winners.size());
         for (auto& [key, sc_expr] : winners) {
             (void)key;
-            scored.push_back({sc_expr.first, format_derived(sc_expr.second, aliases)});
+            sorted_exprs.push_back({sc_expr.first, sc_expr.second});
         }
-        std::sort(scored.begin(), scored.end(),
+        std::sort(sorted_exprs.begin(), sorted_exprs.end(),
                   [](const auto& a, const auto& b) { return a.first < b.first; });
+
+        // Amendment Q3: truncate to output_cap BEFORE CSE so helpers reflect
+        // only the printed equations. output_cap == 0 means unbounded.
+        if (output_cap > 0 && static_cast<int>(sorted_exprs.size()) > output_cap)
+            sorted_exprs.resize(static_cast<size_t>(output_cap));
+
+        // Amendment Q1: pre-canonicalize each winner via the same path that
+        // format_derived runs internally. Without this, two semantically
+        // identical winners (e.g. (b+c)/2 vs b/2 + c/2) would key differently
+        // for CSE counting and the duplication would be missed.
+        std::vector<ExprPtr> canonical;
+        canonical.reserve(sorted_exprs.size());
+        for (auto& [score, expr] : sorted_exprs) {
+            (void)score;
+            canonical.push_back(simplify(distribute_over_sum(expr)));
+        }
+
+        // CSE pass — only if requested.
+        if (cse_threshold >= 2 && out_helpers != nullptr) {
+            // Amendment A1: occupied set must include all variables, section
+            // args, section return_vars, target, the symbolic_bindings keys
+            // and values, the numeric_bindings keys, and the builtin
+            // constants pi/e/phi.
+            std::set<std::string> occupied = all_variables();
+            for (const auto& sec : sections_) {
+                for (const auto& a : sec.positional_args) occupied.insert(a);
+                if (!sec.return_var.empty()) occupied.insert(sec.return_var);
+            }
+            occupied.insert(target);
+            for (auto& [k, v] : symbolic_bindings) {
+                occupied.insert(k);
+                occupied.insert(v);
+            }
+            for (auto& [k, v] : numeric_bindings) { (void)v; occupied.insert(k); }
+            occupied.insert("pi");
+            occupied.insert("e");
+            occupied.insert("phi");
+
+            auto helpers = cse_extract(canonical, cse_threshold, occupied);
+
+            // Format each helper RHS — CSE-replace using earlier helpers so
+            // nested helpers compose (D8 invariant: t2 = sin(t1), not
+            // t2 = sin(x^2)).
+            for (size_t i = 0; i < helpers.size(); i++) {
+                std::vector<std::pair<std::string, ExprPtr>> earlier(
+                    helpers.begin(), helpers.begin() + static_cast<long>(i));
+                auto rhs = cse_replace(helpers[i].second, earlier);
+                out_helpers->push_back(
+                    helpers[i].first + " = " + format_derived(rhs, aliases));
+            }
+            // Substitute helpers into each main equation.
+            for (auto& expr : canonical) expr = cse_replace(expr, helpers);
+        }
+
+        // Now format the (possibly substituted) ExprPtrs.
         std::vector<std::string> results;
-        results.reserve(scored.size());
-        for (auto& [sc, s] : scored) { (void)sc; results.push_back(std::move(s)); }
+        results.reserve(canonical.size());
+        for (auto& expr : canonical) {
+            results.push_back(format_derived(expr, aliases));
+        }
 
         // If no equation-based results, check iff conditions for constraint inversion.
         // For piecewise functions: "result = 1 iff x > 0" → "x > 0 if result = 1"

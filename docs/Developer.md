@@ -221,6 +221,12 @@ Candidates with empty fingerprints (all test points domain-excluded) fall back t
 
 The `derive_all` emit loop sorts all winners ascending by `canonicity_score` before output, so the simplest formula is always first. `--derive N` (N ≥ 1) caps the final result list at N entries after sorting. The `free_vars` list used for fingerprinting is populated from the values (not keys) of `symbolic_bindings`, aligning with the variable names that actually appear in derived expressions after alias substitution.
 
+**CSE pass (`--cse [N]`)** — opt-in extension to `derive_all`. Two free primitives:
+- `cse_extract(exprs, threshold, occupied)` (system.h, before the class) walks each expression, counts non-atomic subtrees by stringification, filters to those with ≥ threshold occurrences AND at least one free Var, then sorts by node-count ascending and assigns names `t1, t2, ...` skipping any `occupied` name. Topological order (smaller subtrees first) ensures dependencies are emitted before parents.
+- `cse_replace(e, helpers)` (expr.h) walks `e` post-order, replacing structural-equal subtrees with `Var(helper_name)`. Pointer-equality short-circuit on the no-match path returns the original `e` when no child changed and no helper matched, avoiding the O(|tree|) rebuild that would otherwise come from fwiz's factory pattern.
+
+Inside `derive_all`: the cap is applied BEFORE the CSE pass (so helpers reflect printed equations only); each winner is pre-canonicalized via `simplify(distribute_over_sum(e))` (mirroring what `format_derived` does internally) BEFORE counting; the occupied set unions `all_variables()`, every section's positional args + return_var, the target, the symbolic_bindings keys + values, the numeric_bindings keys, and `pi/e/phi`. Helpers themselves are formatted with each helper's RHS `cse_replace`'d against earlier helpers, producing nested forms like `t2 = sin(t1)` (D8 invariant).
+
 Results validated — NaN and infinity rejected, causing fallback to next equation.
 
 Error messages are specific: "No equation found for 'x'", "no value for 'y'", "all equations produced invalid results".
@@ -244,7 +250,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2197+ tests organized into functional tests, edge cases, and robustness groups:
+2220+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -305,7 +311,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2197+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2220+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

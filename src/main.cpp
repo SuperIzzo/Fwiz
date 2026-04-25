@@ -28,6 +28,8 @@ int main(int argc, const char* argv[]) {
                   << "  --verify all   verify all known variables against all equations\n"
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
+                  << "  --cse [N]      extract subexpressions appearing >= N times (default 3)\n"
+                  << "                 as named helpers t1, t2, ... in a # Helpers preamble\n"
                   << "  --no-numeric   disable numeric solving (algebraic only)\n"
                   << "  --approximate  collapse exact output (fractions, pi, etc.) to floating-point\n"
                   << "  --exact        force exact output — default; useful to override --approximate\n"
@@ -48,6 +50,7 @@ int main(int argc, const char* argv[]) {
         bool explore_full = false;
         bool derive_mode = false;
         int derive_cap = 0;  // 0 or negative → unbounded; >= 1 → cap at N
+        int cse_threshold = 0;  // 0 → CSE disabled (default); >= 2 → extract subtrees with >= N occurrences
         bool fit_mode = false;
         int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
@@ -68,6 +71,17 @@ int main(int argc, const char* argv[]) {
                 // Optional cap argument: --derive N (non-numeric next arg → flag-only)
                 if (i + 1 < argc) {
                     try { derive_cap = std::stoi(argv[i + 1]); i++; }
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — not a number; leave for query string
+                    catch (const std::invalid_argument&) {}
+                    // NOLINTNEXTLINE(bugprone-empty-catch) — value out of range; leave for query string
+                    catch (const std::out_of_range&) {}
+                }
+            }
+            else if (arg == "--cse") {
+                cse_threshold = 3;  // default when bare
+                // Optional threshold: --cse N (non-numeric next arg → flag-only)
+                if (i + 1 < argc) {
+                    try { cse_threshold = std::stoi(argv[i + 1]); i++; }
                     // NOLINTNEXTLINE(bugprone-empty-catch) — not a number; leave for query string
                     catch (const std::invalid_argument&) {}
                     // NOLINTNEXTLINE(bugprone-empty-catch) — value out of range; leave for query string
@@ -149,9 +163,18 @@ int main(int argc, const char* argv[]) {
             std::map<std::string, std::set<std::string>> derived_eqs;
             for (const auto& q : query.queries) {
                 try {
-                    auto results = sys.derive_all(q.variable, query.bindings, query.symbolic);
-                    if (derive_cap >= 1 && results.size() > static_cast<size_t>(derive_cap))
-                        results.resize(static_cast<size_t>(derive_cap));
+                    std::vector<std::string> helpers;
+                    bool cse_active = cse_threshold >= 2;
+                    auto results = sys.derive_all(
+                        q.variable, query.bindings, query.symbolic,
+                        cse_active ? &helpers : nullptr,
+                        cse_active ? cse_threshold : 0,
+                        derive_cap);
+                    if (cse_active && !helpers.empty()) {
+                        std::cout << "# Helpers\n";
+                        for (const auto& h : helpers) std::cout << h << '\n';
+                        std::cout << '\n';
+                    }
                     for (auto& r : results) {
                         derived_eqs[q.variable].insert(r);
                         std::cout << q.alias << " = " << r << '\n';

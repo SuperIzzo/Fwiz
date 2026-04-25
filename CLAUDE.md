@@ -10,14 +10,14 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2197+)
+make test         # run all tests (2220+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
 
 Run: `./bin/fwiz [flags] <file>(<var>=?, <var>=?!, <var>=<value>, <var>=<expr>, ...)`
 
-Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive [N]`, `--approximate`, `--exact`, `--fit [N]`, `--output FILE`, `--no-numeric`, `--precision N`
+Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--verify A,B`, `--derive [N]`, `--cse [N]`, `--approximate`, `--exact`, `--fit [N]`, `--output FILE`, `--no-numeric`, `--precision N`
 
 ## Architecture
 
@@ -34,6 +34,8 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 **Cross-equation elimination:** Strategy 7 — for target T in equation E1 with unknown U, finds equation E2 that can express U, substitutes into E1, solves the reduced single-variable expression. Two-level elimination handles 3-variable chains. `expand_for_var()` in `expr.h` distributes MUL over ADD/SUB to enable quadratic decomposition of substituted expressions. `flatten_multiplicative()` handles non-numeric denominators (`a / expr`).
 
 **Derive unfolding:** Formula call bodies are inlined into parent expressions when possible, enabling algebraic solving through formula calls. Detects self-referencing calls and falls back to direct sub-system derivation. `FormulaSystem::approximate_mode` (bool, default false) is set by `--approximate`; `format_derived` (system.h) reads it: exact path calls `fmt_exact_double` on collapsed numerics; approximate path runs `substitute_builtin_constants` (expr.h — replaces `pi`/`e`/`phi` Var nodes with their Num values) then re-simplifies so adjacent numerics fold, then stringifies without recognition. `derive_all` dedup: candidates are fingerprinted via `fingerprint_expr` (Schwartz–Zippel numeric evaluation at prime-cycled test points); one canonical form per fingerprint is retained using `canonicity_score` as tiebreaker. Results emitted in ascending `canonicity_score` order — simplest (fewest leaves) first; always-NaN sentinel candidates sort last but are still emitted. `--derive N` (N ≥ 1) caps output at N results after sorting. File-defined constants are injected via `build_alias_table()` so user values like `deg` appear by name in output.
+
+**Derive CSE:** `--cse [N]` (default N=3) extracts subtrees appearing `>= N` times across the (canonicalized, capped) winner set as named helpers `t1, t2, ...` in a `# Helpers` preamble. Two primitives: `cse_extract(exprs, threshold, occupied)` (system.h, before the class) does count + topological naming; `cse_replace(e, helpers)` (expr.h) rewrites a tree post-order with a pointer-equality short-circuit so the no-match path costs zero allocations. Pass runs inside `derive_all` BEFORE `format_derived` calls. Pre-canonicalization via `simplify(distribute_over_sum(e))` mirrors the canonicalizer `format_derived` runs internally so structurally-equivalent winners count under the same key. `output_cap` (= `--derive N`) is applied INSIDE `derive_all` BEFORE the CSE pass so helpers reflect only printed equations. Output round-trips: piping `--cse` output back into fwiz parses and solves correctly (helpers become regular variables in the loaded system). Known characteristic: default threshold 3 is aggressive on dense formula sets — the triangle reproducer yields 165 helpers at `--cse 3` vs 46 at `--cse 20`. Users who want fewer helpers should raise the threshold; a follow-up cycle will reframe semantics as "top-N helpers by value" (Future #43).
 
 **Rewrite rules:** Data-driven simplification via `.fw` patterns. 23 builtin rules (trig symmetry, inverse pairs, abs, log/exp, power rules, division / reciprocal cancellation). Commutative flattened matching handles N-term additive/multiplicative permutations. Rules loaded from `BUILTIN_REWRITE_RULES` string; user `.fw` files can add more.
 

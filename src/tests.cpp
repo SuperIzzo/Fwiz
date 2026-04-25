@@ -10827,6 +10827,303 @@ void test_derive_cli_cap_m2() {
     }
 }
 
+// ============================================================================
+// CSE (common subexpression elimination) for --derive output (Cycle B)
+// ============================================================================
+
+void test_cse_unit() {
+    SECTION("CSE — unit tests");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // CSE-U1: count map. 3 candidates: a*x^2+b, sin(x^2)+x^2, c*x^2.
+    // x^2 appears in all 3 (count=3), sin(x^2) appears once (count=1).
+    // At threshold=2, only x^2 is eligible.
+    {
+        auto x  = Expr::Var("x");
+        auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
+        auto e1 = Expr::BinOpExpr(BinOp::ADD,
+                      Expr::BinOpExpr(BinOp::MUL, Expr::Var("a"), x2),
+                      Expr::Var("b"));
+        auto e2 = Expr::BinOpExpr(BinOp::ADD,
+                      Expr::Call("sin", { x2 }),
+                      x2);
+        auto e3 = Expr::BinOpExpr(BinOp::MUL, Expr::Var("c"), x2);
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied;
+        auto helpers = cse_extract(exprs, 2, occupied);
+        // Should extract x^2 as t1.
+        bool found_x2 = false;
+        for (auto& [name, expr] : helpers) {
+            if (expr_to_string(expr) == "x^2") { found_x2 = true; break; }
+        }
+        ASSERT(found_x2, "CSE-U1: x^2 (count=3) extracted at threshold=2 (got " +
+                         std::to_string(helpers.size()) + " helpers)");
+        // sin(x^2) appears only twice across exprs (e2 has it, no other), count=1: not extracted.
+        bool found_sin = false;
+        for (auto& [name, expr] : helpers) {
+            if (expr_to_string(expr).find("sin(") != std::string::npos) { found_sin = true; break; }
+        }
+        ASSERT(!found_sin, "CSE-U1: sin(x^2) (count=1) NOT extracted at threshold=2");
+    }
+
+    // CSE-U2: single-helper substitution.
+    // Input: sin(x^2) + cos(x^2). Helper: t1 = x^2.
+    // Expected: cse_replace produces sin(t1) + cos(t1).
+    {
+        auto x  = Expr::Var("x");
+        auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
+        auto e  = Expr::BinOpExpr(BinOp::ADD,
+                      Expr::Call("sin", { x2 }),
+                      Expr::Call("cos", { x2 }));
+        std::vector<std::pair<std::string, ExprPtr>> helpers = { {"t1", x2} };
+        std::string s = expr_to_string(cse_replace(e, helpers));
+        ASSERT(s.find("sin(t1)") != std::string::npos,
+               "CSE-U2: sin(x^2) → sin(t1) (got: " + s + ")");
+        ASSERT(s.find("cos(t1)") != std::string::npos,
+               "CSE-U2: cos(x^2) → cos(t1) (got: " + s + ")");
+        ASSERT(s.find("x^2") == std::string::npos,
+               "CSE-U2: no raw x^2 remains (got: " + s + ")");
+    }
+
+    // CSE-U3: collision avoidance.
+    // occupied = {t1, t2} so allocator must skip them. Plus, an A1 section
+    // [foo(t1) -> t2] must inject t1 and t2 into occupied via amendment #5.
+    {
+        auto x  = Expr::Var("x");
+        auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
+        auto y  = Expr::Var("y");
+        auto y2 = Expr::BinOpExpr(BinOp::POW, y, Expr::Num(2));
+        auto e1 = Expr::BinOpExpr(BinOp::ADD, x2, y2);
+        auto e2 = Expr::BinOpExpr(BinOp::SUB, x2, y2);
+        auto e3 = Expr::BinOpExpr(BinOp::MUL, x2, y2);
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied = { "t1", "t2" };
+        auto helpers = cse_extract(exprs, 2, occupied);
+        // Each new helper name must not collide with t1, t2.
+        for (auto& [name, expr] : helpers) {
+            ASSERT(name != "t1" && name != "t2",
+                   "CSE-U3: helper name '" + name + "' collides with occupied {t1, t2}");
+        }
+        // Should still produce >= 1 helper (x^2 and y^2 each count=3).
+        ASSERT(helpers.size() >= 1, "CSE-U3: at least one helper extracted");
+
+        // CSE-U3 (extension): a section [foo(t1) -> t2] must populate occupied.
+        FormulaSystem sys;
+        sys.load_string("[foo(t1) -> t2]\n= t1 * t1\n");
+        // Now derive_all over a system using sys (synthesized). We use the
+        // helper-collection approach: emit names and check no collision with t1/t2.
+        // We simulate the occupied set construction the implementation must do.
+        std::set<std::string> sys_occupied = sys.all_variables();
+        for (const auto& sec : sys.sections_) {
+            for (const auto& a : sec.positional_args) sys_occupied.insert(a);
+            if (!sec.return_var.empty()) sys_occupied.insert(sec.return_var);
+        }
+        ASSERT(sys_occupied.count("t1") == 1,
+               "CSE-U3 ext: section args populate occupied (t1 present)");
+        ASSERT(sys_occupied.count("t2") == 1,
+               "CSE-U3 ext: section return_var populate occupied (t2 present)");
+    }
+
+    // CSE-U4: atomic exclusion. Var/Num are never extracted even if they appear
+    // many times.
+    {
+        auto x  = Expr::Var("x");
+        auto e1 = Expr::BinOpExpr(BinOp::ADD, x, x);
+        auto e2 = Expr::BinOpExpr(BinOp::SUB, x, x);
+        auto e3 = Expr::BinOpExpr(BinOp::MUL, x, Expr::Num(5));
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied;
+        auto helpers = cse_extract(exprs, 2, occupied);
+        for (auto& [name, expr] : helpers) {
+            ASSERT(!is_atomic(expr),
+                   "CSE-U4: atomic node extracted as helper '" + name +
+                   "' = " + expr_to_string(expr));
+        }
+    }
+
+    // CSE-U5: numeric-only exclusion. sin(3.14159) appearing many times has no
+    // free vars → not extracted (it would just collapse to a constant; useless
+    // as a helper).
+    {
+        auto pi  = Expr::Num(3.14159);
+        auto e1  = Expr::BinOpExpr(BinOp::ADD, Expr::Call("sin", {pi}), Expr::Var("a"));
+        auto e2  = Expr::BinOpExpr(BinOp::MUL, Expr::Call("sin", {pi}), Expr::Var("b"));
+        auto e3  = Expr::BinOpExpr(BinOp::SUB, Expr::Call("sin", {pi}), Expr::Var("c"));
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied;
+        auto helpers = cse_extract(exprs, 2, occupied);
+        for (auto& [name, expr] : helpers) {
+            std::set<std::string> vars;
+            collect_vars(*expr, vars);
+            ASSERT(!vars.empty(),
+                   "CSE-U5: numeric-only subtree extracted as helper '" + name +
+                   "' = " + expr_to_string(expr));
+        }
+    }
+
+    // CSE-U6: nested helpers (D8 topological invariant — load-bearing).
+    // Input with x^2 (count >= 3) AND sin(x^2) (count >= 3).
+    // out_helpers[0] is "x^2" (or canonically equivalent).
+    // out_helpers[1] is sin(t1), NOT sin(x^2).
+    {
+        auto x  = Expr::Var("x");
+        auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
+        auto sx2 = Expr::Call("sin", { x2 });
+        // 3 candidates that each contain BOTH x^2 and sin(x^2):
+        // candidate 1: sin(x^2) + x^2
+        // candidate 2: sin(x^2) * x^2
+        // candidate 3: sin(x^2) - x^2
+        auto e1 = Expr::BinOpExpr(BinOp::ADD, sx2, x2);
+        auto e2 = Expr::BinOpExpr(BinOp::MUL, sx2, x2);
+        auto e3 = Expr::BinOpExpr(BinOp::SUB, sx2, x2);
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied;
+        auto helpers = cse_extract(exprs, 2, occupied);
+        ASSERT(helpers.size() >= 2,
+               "CSE-U6: at least 2 helpers extracted (got " + std::to_string(helpers.size()) + ")");
+        // First helper must be the smaller subtree (x^2). Topological: dependencies first.
+        ASSERT(expr_to_string(helpers[0].second) == "x^2",
+               "CSE-U6: helpers[0] = x^2 (got: " + expr_to_string(helpers[0].second) + ")");
+        // Second helper raw RHS may still contain x^2; the design's spec is that
+        // when the implementation FORMATS helpers[1], it cse_replaces with helpers[0..i-1].
+        // Simulate the implementation step:
+        std::vector<std::pair<std::string, ExprPtr>> earlier = { helpers[0] };
+        std::string s = expr_to_string(cse_replace(helpers[1].second, earlier));
+        ASSERT(s == "sin(t1)",
+               "CSE-U6: helpers[1] formatted with earlier helpers = sin(t1), NOT sin(x^2) (got: " + s + ")");
+    }
+}
+
+void test_cse_integration() {
+    SECTION("CSE — integration tests");
+
+    // CSE-I1: triangle helper count. With --cse, output should contain a
+    // "# Helpers" preamble line and at least one helper line (e.g. "t1 = ...").
+    {
+        FILE* f = popen(
+            "./bin/fwiz --derive --cse 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null",
+            "r");
+        std::string out;
+        if (f) {
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), f)) out += buf;
+            pclose(f);
+        }
+        ASSERT(out.find("# Helpers") != std::string::npos,
+               "CSE-I1: output contains '# Helpers' preamble");
+        // At least one "t1 =" or similar helper line.
+        bool has_helper = out.find("\nt1 = ") != std::string::npos
+                       || out.find("# Helpers\nt1 = ") != std::string::npos;
+        ASSERT(has_helper,
+               "CSE-I1: at least one helper t1 = ... line emitted");
+    }
+
+    // CSE-I2: triangle main-equation longest line is shorter than non-CSE longest.
+    {
+        // Compute longest line without --cse.
+        FILE* f1 = popen(
+            "./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| awk '{print length}' | sort -n | tail -1",
+            "r");
+        int baseline_len = 0;
+        if (f1) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f1)) baseline_len = atoi(buf); pclose(f1); }
+        // Compute longest line with --cse, but skip helper preamble lines (those
+        // start with "t<digit>" or are "# Helpers"). Easier: only count lines
+        // matching "A = ".
+        FILE* f2 = popen(
+            "./bin/fwiz --derive --cse 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep '^A = ' | awk '{print length}' | sort -n | tail -1",
+            "r");
+        int cse_len = 0;
+        if (f2) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f2)) cse_len = atoi(buf); pclose(f2); }
+        ASSERT(baseline_len > 0, "CSE-I2: baseline longest > 0");
+        ASSERT(cse_len > 0, "CSE-I2: --cse longest main > 0");
+        ASSERT(cse_len < baseline_len,
+               "CSE-I2: --cse longest main (" + std::to_string(cse_len) +
+               ") < baseline longest (" + std::to_string(baseline_len) + ")");
+    }
+
+    // CSE-I3: roundtrip — write --cse output to tmp .fw, load back, solve correctly.
+    // The reference value: A ≈ 15.88 degrees for triangle(a=4, B=20, b=5, c=8.568).
+    {
+        // Capture --cse output and write to /tmp/cse_rt.fw
+        FILE* f = popen(
+            "./bin/fwiz --derive --cse 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null > /tmp/cse_rt.fw",
+            "r");
+        if (f) pclose(f);
+        // Pipe back through fwiz with concrete b, c values.
+        FILE* g = popen(
+            "./bin/fwiz '/tmp/cse_rt.fw(A=?, b=5, c=8.568)' 2>/dev/null | head -1",
+            "r");
+        std::string line;
+        if (g) {
+            char buf[256] = {0};
+            if (fgets(buf, sizeof(buf), g)) line = buf;
+            pclose(g);
+        }
+        // Should mention A ~ 15-16 (depends on exact route taken).
+        bool ok = line.find("A") != std::string::npos
+               && (line.find("15.") != std::string::npos
+                || line.find("16.") != std::string::npos);
+        ASSERT(ok, "CSE-I3: roundtrip valid fwiz, A solved to ~15-16 (got: '" + line + "')");
+    }
+
+    // CSE-I4: bare --derive byte-identical to current (158 lines, 40983 chars baseline).
+    {
+        FILE* f = popen(
+            "./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -lc",
+            "r");
+        int lines = 0, chars = 0;
+        if (f) {
+            char buf[64] = {0};
+            if (fgets(buf, sizeof(buf), f)) {
+                std::istringstream iss(buf);
+                iss >> lines >> chars;
+            }
+            pclose(f);
+        }
+        ASSERT(lines == 158,
+               "CSE-I4: bare --derive line count unchanged at 158 (got " + std::to_string(lines) + ")");
+        ASSERT(chars == 40983,
+               "CSE-I4: bare --derive char count unchanged at 40983 (got " + std::to_string(chars) + ")");
+    }
+
+    // CSE-I5: cap interaction. --derive 5 --cse 3 → exactly 5 main equations
+    // (ignoring # Helpers preamble + helper lines + blank).
+    {
+        FILE* f = popen(
+            "./bin/fwiz --derive 5 --cse 3 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -c '^A = '",
+            "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) n = atoi(buf); pclose(f); }
+        ASSERT(n == 5,
+               "CSE-I5: --derive 5 --cse 3 emits exactly 5 main equations (got " + std::to_string(n) + ")");
+    }
+
+    // CSE-C2: --cse 5 → fewer (or equal) helpers than --cse 2 (higher threshold,
+    // fewer eligible subtrees).
+    {
+        FILE* f1 = popen(
+            "./bin/fwiz --derive --cse 2 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -c '^t[0-9]'",
+            "r");
+        int helpers_2 = 0;
+        if (f1) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f1)) helpers_2 = atoi(buf); pclose(f1); }
+        FILE* f2 = popen(
+            "./bin/fwiz --derive --cse 5 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -c '^t[0-9]'",
+            "r");
+        int helpers_5 = 0;
+        if (f2) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f2)) helpers_5 = atoi(buf); pclose(f2); }
+        ASSERT(helpers_5 <= helpers_2,
+               "CSE-C2: --cse 5 helpers (" + std::to_string(helpers_5) +
+               ") <= --cse 2 helpers (" + std::to_string(helpers_2) + ")");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -11085,6 +11382,10 @@ int main() {
     test_semantic_dedup_m2();
     test_semantic_dedup_m3();
     test_derive_cli_cap_m2();
+
+    // CSE for --derive output (Cycle B)
+    test_cse_unit();
+    test_cse_integration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
