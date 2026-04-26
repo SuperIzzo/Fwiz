@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2225+)
+make test         # run all tests (2229+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
