@@ -245,9 +245,13 @@ With `--approximate` on `--derive`, free symbols are preserved — only builtin 
 
 `--exact` forces the default and is useful only to override an earlier `--approximate` in a command chain. If both appear, last wins.
 
-### 9.3 Unaffected paths
+### 9.3 Trace output (`--steps`, `--calc`)
 
-`--steps` and `--calc` traces render decimals directly — they're diagnostic, not the answer. `--verify` and `--fit` output stay as they were: verify prints numeric equalities, fit prints the closed-form equation it discovered.
+`--steps` and `--calc` traces now use the same exact-form renderer as final output. Intermediate values like `981 / 10` or `1 / 6 * pi` appear in the trace exactly as they appear in the answer — trace and final cannot disagree. The symbolic ExprPtr is stored at the binding-commit point and read at each trace site via `fmt_trace`, so no heuristic reconstruction from `double` is needed.
+
+`--approximate` bypasses the symbolic carrier throughout: all trace values and final values collapse to floating-point.
+
+`--verify` and `--fit` output are unaffected: verify prints numeric equalities, fit prints the closed-form equation it discovered.
 
 ### 9.4 Constant recognition table
 

@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2229+)
+make test         # run all tests (2237+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
@@ -42,6 +42,8 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 **Function definitions:** Builtin functions (sin, cos, sqrt, log, abs, etc.) defined as embedded `.fw` sections with `@extern` for C++ evaluation and inverse equations for reverse solving. Custom functions registered via `register_function()` C++ API. Function inversion uses a thread-local callback resolved from `.fw` sub-system definitions.
 
 **Simplifier:** Additive and multiplicative flattening. `rebuild_multiplicative` splits factors by exponent sign: positive exponents → numerator product, negative exponents (sign-flipped) → denominator product, emitting `DIV(num, denom)` when any negative-exp factors exist. Effect: `MUL(a, POW(b, Num(-1)))` renders as `a / b`; `^(-n)` forms never appear in derive output (walker-tested). Structural fractions: `DIV(Num(a), Num(b))` preserved when non-integer, with GCD normalization and exact rational arithmetic (`to_rational()`, `make_rational()`). Most pattern-match rules migrated to `.fw` rewrite rules. Extend flattening logic for structural simplification; add new patterns as `.fw` rules. Structural fractions flow into solve output via `fmt_solve_result` in `main.cpp`. Default (exact) mode: `fmt_exact_double(v)` (fit.h) attempts constant recognition (`pi`, `e`, `phi`, `sqrt(2/3/5)`, `log(2/3/10)`, rational multiples) before falling back to `fmt_num`. `--approximate` mode: always `fmt_num`. The former `is_power_of_10` heuristic has been deleted — `--approximate` is the principled replacement. See Known-Issues #6 for remaining provenance scope (`--steps`/`--calc` traces).
+
+**Symbolic provenance carrier:** `solved_symbolic_` (`mutable map<string, ExprPtr>`) and `aliases_` (`mutable map<string, double>`) on `FormulaSystem` carry symbolic forms and the alias-resolution table alongside the numeric `bindings` map, so `--steps`/`--calc` trace sites render from the same ExprPtr as final output — trace and final cannot disagree. `fmt_trace(double, ExprPtr=nullptr, key="")` is the single unified render helper.
 
 **Two evaluators:** `Checked<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns empty via NaN sentinel — not a separate bool. `Checked<T>` (expr.h:30-89) is a NaN-sentinel optional: `sizeof(Checked<double>) == sizeof(double)` (8 bytes vs 16 for `std::optional<double>`); `has_value()` / `operator bool` to test; `.value()` to unwrap (asserts on empty in debug); `.value_or_nan()` is the deliberate boundary escape for handing off to the pure-double numerical root-finder layer — its use is grep-worthy and should stay rare. `ExprPtr evaluate_symbolic(const Expr&)` — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued.
 

@@ -237,6 +237,33 @@ Curve fitting: `sample_function`, `fit_base`, `fit_all`, template functions, `re
 
 **`fmt_exact_double(double v, aliases={})`** — the single formatter for exact numeric output. Wraps `expr_recognize_constants(Expr::Num(v))` and stringifies the result; falls back to `fmt_num` when nothing matches. Accepts an optional `aliases` map (name → value) so callers can inject file-specific constants (e.g. `deg=pi/180`) that render as their names rather than raw decimals. Used from `fmt_solve_result` (main.cpp) and `format_derived` (system.h). `RECOGNIZE_FRACTION_MAX_DEN` (fit.h, currently 360) governs the denominator ceiling for rational recognition.
 
+### Symbolic provenance carrier (`solved_symbolic_`, `aliases_`)
+
+`FormulaSystem` carries two parallel maps alongside the main numeric `bindings` (`map<string, double>`) to support exact-form trace output:
+
+- **`mutable std::map<std::string, ExprPtr> solved_symbolic_`** — stores the recognized symbolic ExprPtr for each bound variable. Written at T10 (`try_resolve`, `src/system.h`) when a result is committed: `expr_recognize_constants(simplified, aliases_)` is applied once to the solver's `simplified` ExprPtr and the result is stored here. Also populated from the sub-system bridge at T7 (cross-formula results). Cleared at the top of `resolve()` and `resolve_all()` to reset per-query, matching the per-query lifecycle of the numeric `bindings` parameter.
+
+- **`mutable std::map<std::string, double> aliases_`** — the universal alias-resolution table, populated as a side effect of `build_alias_table()`. Read by `fmt_trace` and `fmt_exact_double` to resolve user-defined constants (e.g. `deg`) by name. Named `aliases_` rather than `display_aliases_` to signal its role as a general primitive, not a display-only concern.
+
+**Invariant:** for any successfully solved variable `k`, `bindings[k]` (the numeric result) and `solved_symbolic_[k]` (the symbolic form) are written together at T10. Both are cleared together at the start of each `resolve()` call.
+
+**Single render helper:**
+
+```cpp
+// system.h, private on FormulaSystem
+std::string fmt_trace(double v, const Expr* sym = nullptr,
+                      const std::string& key = "") const;
+```
+
+- `--approximate` → `fmt_num(v)` always
+- sym provided → `expr_to_string(sym)` (already-recognized form stored at write)
+- key provided → `solved_symbolic_.find(key)`, then `expr_to_string` on hit
+- fallback → `fmt_exact_double(v, aliases_)`
+
+Every `--steps`/`--calc` trace site calls `fmt_trace`, so trace and final output share the same symbolic form by construction. The recognizer (`expr_recognize_constants`) runs once per binding at write time, not once per trace line — cost is O(1) per query, not O(trace_lines).
+
+**Sub-system bridge (T7):** after `sub_sys.resolve()`, the parent looks up `sub_sys.solved_symbolic_[resolve_var]` and adopts the ExprPtr into its own `solved_symbolic_[target]`. Sub-system arenas are held via `shared_ptr` for the parent's lifetime, so the pointer remains valid. When Future #20 (typed FORMULA_CALL nodes) ships, this bridge can be deleted and replaced by typed-node evaluation.
+
 ### trace.h
 
 Three levels:
@@ -250,7 +277,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2229+ tests organized into functional tests, edge cases, and robustness groups:
+2237+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -311,7 +338,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2229+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2237+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

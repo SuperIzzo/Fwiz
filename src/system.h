@@ -473,6 +473,18 @@ public:
     mutable std::unordered_map<std::string, double> numeric_memo_;
     mutable std::map<std::string, bool> numeric_results_; // var → true if exact (verified)
 
+    // Provenance: parallel symbolic carrier. Populated at the binding-commit
+    // point (try_resolve T10, try_formula T7) with the post-recognizer
+    // simplified ExprPtr. Trace sites read from here so trace and final
+    // output share the same data — they cannot disagree by construction.
+    // Cleared at top of resolve() / resolve_all() (per-query lifetime,
+    // mirrors `bindings`).
+    mutable std::map<std::string, ExprPtr> solved_symbolic_;
+    // Cached alias table built during build_alias_table(). Universal
+    // alias-resolution table — used by fmt_trace's fallback path
+    // (defaults / givens / @extern) where no symbolic source exists.
+    mutable std::map<std::string, double> aliases_;
+
     std::set<std::string> all_variables() const {
         std::set<std::string> vars;
         for (auto& eq : equations) {
@@ -1120,6 +1132,9 @@ x^(1/2) = sqrt(x)
                     out[qname] = e.value;
             }
         }
+        // Cache as a side effect so fmt_trace's alias-table fallback can read
+        // without rebuilding (called from every resolve/resolve_all entry).
+        aliases_ = out;
         return out;
     }
 
@@ -1648,6 +1663,8 @@ x^(1/2) = sqrt(x)
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
+        solved_symbolic_.clear(); // provenance carrier: per-query lifetime
+        build_alias_table();      // populates aliases_ for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1660,6 +1677,8 @@ x^(1/2) = sqrt(x)
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
+        solved_symbolic_.clear(); // provenance carrier: per-query lifetime
+        build_alias_table();      // populates aliases_ for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1775,19 +1794,39 @@ x^(1/2) = sqrt(x)
     }
 
 private:
+    // Unified trace-render helper. Trace sites call this with a double `v`
+    // (the numeric value being shown) and EITHER a direct symbolic source
+    // (`sym`) OR a key into `solved_symbolic_`. Resolution order:
+    //   1. --approximate mode → fmt_num(v) (user opted out of recognition).
+    //   2. `sym` provided → expr_to_string(sym) (already-recognized form
+    //      stored at write-time by T10 / T7).
+    //   3. `key` provided → look up solved_symbolic_[key], render if found.
+    //   4. fall back to fmt_exact_double(v, aliases_) — covers defaults /
+    //      givens / @extern returns where no symbolic source exists.
+    std::string fmt_trace(double v, const Expr* sym = nullptr,
+                          const std::string& key = "") const {
+        if (approximate_mode) return fmt_num(v);
+        if (!sym && !key.empty()) {
+            auto it = solved_symbolic_.find(key);
+            if (it != solved_symbolic_.end()) sym = it->second;
+        }
+        if (sym) return expr_to_string(sym);
+        return fmt_exact_double(v, aliases_);
+    }
+
     std::map<std::string, double> prepare_bindings(const std::string& target,
                                                     std::map<std::string, double>& bindings) const {
         trace.step("\nsolving for: " + target);
         for (auto& [k, v] : defaults) {
             if (k != target && !bindings.count(k)) {
                 bindings[k] = v;
-                trace.step("  using default: " + k + " = " + fmt_num(v));
+                trace.step("  using default: " + k + " = " + fmt_trace(v));
             }
         }
         if (trace.show_steps() && !bindings.empty()) {
             trace.step("  given:");
             for (auto& [k, v] : bindings)
-                trace.step("    " + k + " = " + fmt_num(v));
+                trace.step("    " + k + " = " + fmt_trace(v));
         }
         return bindings;
     }
@@ -3212,7 +3251,7 @@ private:
             std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
         }
         if (auto it = bindings.find(target); it != bindings.end()) {
-            trace.calc("known: " + target + " = " + fmt_num(it->second), depth + 1);
+            trace.calc("known: " + target + " = " + fmt_trace(it->second, nullptr, target), depth + 1);
             if (fwiz_trace_solver())
                 std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
                           << " exit=bound result=" << it->second << "]\n";
@@ -3258,7 +3297,7 @@ private:
                 auto& sub_sys = load_sub_system(call.file_stem);
                 sub_sys.max_formula_depth = max_formula_depth;
                 for (auto& [sv, val] : sub_binds)
-                    trace.calc("  binding: " + sv + " = " + fmt_num(val), depth + 2);
+                    trace.calc("  binding: " + sv + " = " + fmt_trace(val), depth + 2);
 
                 // @extern fast path: if sub-system has extern_func and we're
                 // resolving the return var with all inputs known, call C++ directly
@@ -3272,9 +3311,11 @@ private:
                             auto ait = sub_binds.find(sec.positional_args[0]);
                             if (ait != sub_binds.end()) {
                                 result = fit->second(ait->second);
+                                // T6: @extern arg may be a known parent var (look up by name);
+                                // result is C++-computed — alias-table fallback only.
                                 trace.step("  @extern " + sec.extern_func
-                                    + "(" + fmt_num(ait->second) + ") = "
-                                    + fmt_num(result), depth + 2);
+                                    + "(" + fmt_trace(ait->second, nullptr, ait->first) + ") = "
+                                    + fmt_trace(result), depth + 2);
                                 used_extern = true;
                                 break;
                             }
@@ -3284,7 +3325,21 @@ private:
                 if (!used_extern)
                     result = sub_sys.resolve(resolve_var, sub_binds);
                 if (std::isnan(result) || std::isinf(result)) { had_nan_inf = true; return false; }
-                trace.step("  result: " + target + " = " + fmt_num(result), depth + 1);
+                // T7 sub-system bridge: borrow the sub-system's recognized
+                // symbolic form (populated at its T10) so the parent's trace
+                // and final share the same ExprPtr. Sub-systems are kept
+                // alive by `sub_systems` for the parent's lifetime — the
+                // ExprPtr is arena-allocated in the sub-system's arena;
+                // safe to read here. Replace with typed FORMULA_CALL nodes
+                // when Future #20 lands (then this 5-line bridge deletes).
+                ExprPtr sub_sym = nullptr;
+                if (!used_extern) {
+                    if (auto sit = sub_sys.solved_symbolic_.find(resolve_var);
+                            sit != sub_sys.solved_symbolic_.end())
+                        sub_sym = sit->second;
+                    if (sub_sym) solved_symbolic_[target] = sub_sym;
+                }
+                trace.step("  result: " + target + " = " + fmt_trace(result, sub_sym), depth + 1);
                 bindings[target] = result;
                 return true;
             } catch (const std::runtime_error& e) {
@@ -3419,7 +3474,7 @@ private:
         for (auto& v : vars) {
             if (v == target) return false;
             if (auto it = bindings.find(v); it != bindings.end()) {
-                trace.calc("substitute " + v + " = " + fmt_num(it->second), depth + 2);
+                trace.calc("substitute " + v + " = " + fmt_trace(it->second, nullptr, v), depth + 2);
                 resolved = substitute(resolved, v, Expr::Num(it->second));
             } else {
                 // Part A: pre-filter — skip this candidate without descending
@@ -3432,7 +3487,7 @@ private:
                 trace.step("need: " + v, depth + 2);
                 try {
                     double val = solve_recursive(v, bindings, visited, depth + 1, dead_ends);
-                    trace.calc("substitute " + v + " = " + fmt_num(val), depth + 2);
+                    trace.calc("substitute " + v + " = " + fmt_trace(val, nullptr, v), depth + 2);
                     resolved = substitute(resolved, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
                 catch (const std::runtime_error& e) {
@@ -3472,7 +3527,14 @@ private:
             had_nan_inf = true;
             return false;
         }
-        trace.step("result: " + target + " = " + fmt_num(result), depth + 1);
+        // T10: write the recognized symbolic form to the provenance carrier
+        // BEFORE rendering — trace and final share this exact ExprPtr.
+        // simplify() returns const Expr*; expr_recognize_constants takes
+        // ExprPtr (mutable) but never mutates the input — const_cast is the
+        // documented bridge between simplifier output and the recognizer.
+        ExprPtr recognized = expr_recognize_constants(const_cast<ExprPtr>(simplified), aliases_);
+        solved_symbolic_[target] = recognized;
+        trace.step("result: " + target + " = " + fmt_trace(result, recognized), depth + 1);
         bindings[target] = result;
         if (fwiz_trace_solver())
             std::cerr << "[depth=" << depth << " fn=try_resolve target=" << target

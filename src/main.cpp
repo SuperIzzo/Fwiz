@@ -256,9 +256,11 @@ int main(int argc, const char* argv[]) {
         // recognition); require an active Scope around the output section.
         ExprArena::Scope solve_fmt_scope(sys.arena);
 
-        // User-defined aliases surface in exact-mode solve output — compute
-        // once per top-level solve and thread into every fmt_solve_result call.
-        auto solve_aliases = sys.build_alias_table();
+        // User-defined aliases surface in exact-mode solve output. Populated
+        // by `build_alias_table()` (called from resolve()/resolve_all()
+        // entry points and explicitly here for the explore-fast-path branch
+        // where a queried var is already in `solved` and skips resolve()).
+        sys.build_alias_table();
 
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;
@@ -275,11 +277,11 @@ int main(int argc, const char* argv[]) {
 
             for (auto& [var, alias] : vars) {
                 if (solved.count(var)) {
-                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode, solve_aliases) << '\n';
+                    std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode, sys.aliases_) << '\n';
                 } else {
                     try {
                         double result = sys.resolve(var, query.bindings);
-                        std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode, solve_aliases) << '\n';
+                        std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode, sys.aliases_) << '\n';
                         solved[var] = result;
                     } catch (const std::runtime_error&) {
                         std::cout << alias << " = ?\n";
@@ -300,7 +302,7 @@ int main(int argc, const char* argv[]) {
                         double result = sys.resolve_one(q.variable, query.bindings);
                         bool exact = is_exact_result(q.variable);
                         std::cout << q.alias << (exact ? " = " : " ~ ")
-                                  << fmt_solve_result(result, exact && !approximate_mode, solve_aliases) << '\n';
+                                  << fmt_solve_result(result, exact && !approximate_mode, sys.aliases_) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
@@ -308,7 +310,7 @@ int main(int argc, const char* argv[]) {
                             bool exact = is_exact_result(q.variable);
                             for (auto r : result.discrete())
                                 std::cout << q.alias << (exact ? " = " : " ~ ")
-                                          << fmt_solve_result(r, exact && !approximate_mode, solve_aliases) << '\n';
+                                          << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
                         } else {
