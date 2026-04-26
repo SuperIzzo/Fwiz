@@ -43,16 +43,17 @@ $ fwiz --derive '(x=?, y=y) y = x^3'
 x = y^(1 / 3)
 ```
 
-## 6. Provenance loss in solve pipeline — PARTIALLY ADDRESSED
+## 6. Provenance loss in solve pipeline — RESOLVED
 
 `resolve()` returns `double`; `fmt_solve_result` in `main.cpp` reconstructs exact-form display (fractions, `pi`, `sqrt(2)`, etc.) heuristically via `fmt_exact_double` → `recognize_fraction`/`recognize_constant`. The former `is_power_of_10` stopgap (which rendered `981 / 10` as `98.1`) has been removed in favour of the explicit `--approximate` flag — see [Solver.md §9](Solver.md#9-output-formatting). Default mode is now consistently exact (`weight = 1000.5` renders as `2001 / 2`); users who want the decimal form pass `--approximate`.
 
-The underlying provenance issue — that the solver collapses symbolic values to `double` in `map<string, double>` — remains open, but its user-visible impact is now limited to two areas:
+**Path B structural fix (2026-04-26):** `FormulaSystem` now carries a parallel `mutable std::map<std::string, ExprPtr> solved_symbolic_` alongside the numeric `bindings` map. At the binding-commit point (T10, `try_resolve`), `expr_recognize_constants` is applied once to the solver's `simplified` ExprPtr and the result is stored in `solved_symbolic_[target]`. Trace sites (T4/T7/T8/T9) read from this map via the unified `fmt_trace(double, ExprPtr=nullptr, key="")` helper. By construction, trace and final output cannot disagree — both render from the same stored ExprPtr.
 
-1. **`--steps` / `--calc` traces**: render intermediate values via `fmt_num` only; a fractional intermediate like `981 / 10` shows up in the trace as `98.1` even though the final answer comes out as the fraction.
-2. **Recognisability limits**: values that don't match the fraction (max denominator 360, `RECOGNIZE_FRACTION_MAX_DEN`) or constant table fall through to decimal output even in exact mode. File-defined constants are now recognized via `build_alias_table()` and injected into `fmt_exact_double` as `extra_constants`, so user-defined values like `deg=pi/180` render by name rather than as raw decimals.
+The fix extends to cross-formula traces via a 5-line sub-system bridge at T7: after `sub_sys.resolve()`, the parent looks up `sub_sys.solved_symbolic_[resolve_var]` and adopts the ExprPtr, so formula-call results render symbolically in the parent trace. Confirmed working on 4 tests, including an adversarial case (`x = y / 401` with `y = 803`) where `RECOGNIZE_FRACTION_MAX_DEN = 360` would have blocked heuristic recovery — the structural carrier gave `803 / 401` directly.
 
-The long-term structural fix is to plumb `ExprPtr` through solve result types (parallel `map<string, ExprPtr>` track) so the original symbolic value reaches the formatter without reconstruction. That would make trace output match final output, remove the table-limit issue, and mirror how mainstream CAS (Mathematica, SymPy, Maxima) track exactness via the type system.
+**Remaining caveat:** T1 (`trace_loaded`) — the line emitted when file defaults are loaded — was intentionally left at `fmt_num`. At that point `aliases_` is not yet populated (it is built on first `build_alias_table()` call). If `--steps` shows a decimal default value at the loading line for a user-named constant, address via Future entry R6. The `@extern` result path (T6) also falls back to `fmt_exact_double` since C++-computed return values have no symbolic source.
+
+**Research anchor:** `docs/research/provenance-plumbing.md` — full call-site audit (10 trace sites, 9 carrier-flow sites, 11 must-stay-double sites), CAS prior art (SymPy / Mathematica / Maxima / Maple all use parallel-symbolic; PSLQ argument rules out float-then-recover), and Path A (~30 LOC heuristic-only) vs Path B structural decision context.
 
 ## 5. Constant recognition in derive output — RESOLVED
 
@@ -67,7 +68,7 @@ x = log(y) / log(2)
 
 `fwiz --derive` previously produced hundreds of semantically-equivalent output lines (294 for the triangle reproducer) in arbitrary order. Resolved in two cycles: (1) semantic fingerprint dedup in `derive_all` — `fingerprint_expr` evaluates each candidate at prime-cycled test points; candidates sharing a fingerprint are merged, retaining the most canonical form via `canonicity_score`; (2) results now emitted in ascending `canonicity_score` order (`{leaf_count, non_integer_num_count}`) so the simplest formula appears first and always-NaN sentinel forms appear last. `--derive N` caps output at N results after sorting. The `sqrt(x)^2 = x iff x >= 0` rewrite rule (2026-04-20) eliminates all `sqrt(...)^2` tautologies from the output.
 
-The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `rebuild_multiplicative` split-by-sign cycle eliminated one redundant line). The remaining output comes from two sources: (a) genuinely-distinct algebraic forms (different branch-cut coverage at obtuse-angle test points — correct behavior, not duplication), and (b) ~143 Category C "self-substitution" lines where the derivation strategy over-enumerates via cross-equation substitution, producing forms that are semantically equivalent to shorter canonical ones but fingerprint-distinctly at the chosen test points. Category C is an active investigation; see Future #32 and `docs/Category-C-Investigation.md`.
+The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `rebuild_multiplicative` split-by-sign cycle eliminated one redundant line). The remaining output comes from two sources: (a) genuinely-distinct algebraic forms (different branch-cut coverage at obtuse-angle test points — correct behavior, not duplication), and (b) ~143 Category C "self-substitution" lines where the derivation strategy over-enumerates via cross-equation substitution, producing forms that are semantically equivalent to shorter canonical ones but fingerprint-distinctly at the chosen test points. Category C is an active investigation; see Future #32 and `docs/research/category-c-investigation.md`.
 
 ## 8. `--cse 3` default is over-aggressive on dense formula sets — RESOLVED
 

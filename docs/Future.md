@@ -90,6 +90,10 @@ The expression tree already supports all needed operations. The derivative is it
 
 Newton's method currently uses finite differences for `f'(x)`. Symbolic differentiation would provide exact derivatives — faster convergence and more accurate results. This is a drop-in improvement to the existing numeric solver.
 
+### Extension point pre-positioned
+
+`solved_symbolic_` (the parallel ExprPtr carrier added in the provenance-plumbing cycle) is the natural commit target for `diff(...)` results. When a derivative is computed, the binding commit writes the derivative ExprPtr into `solved_symbolic_[target]` exactly as algebraic results do today — no API change needed.
+
 ## 7. Units and Dimensional Analysis
 
 ### Problem
@@ -218,6 +222,8 @@ Each is a future minimalism target — remove duplicated logic, single source of
 
 When `evaluate()` gains a `bindings` parameter (symbolic substitution during evaluation), extend `evaluate_symbolic` with the same signature. Keep them twin APIs — every numeric projection has an exact sibling.
 
+For the solver binding track specifically: `solved_symbolic_` (`src/system.h`) is already the parallel ExprPtr map that the provenance-plumbing cycle shipped for trace output. The trace use case has landed; matrix bindings simply need to add their leaf type to `expr_to_string` dispatch — the carrier itself requires no structural change.
+
 ## 11. Curve Fitting — ✅ DONE
 
 Implemented as `--fit [N]` flag. Templates: polynomial, power law, exponential (including Gaussian/quadratic exponent), logarithmic, sinusoidal, reciprocal. Recursive composition (depth N, default 5) discovers nested forms like `sin(sin(x))`, `e^(x*log(x))` = `x^x`. Product inners (`x*log(x)`, `x*sin(x)`) enable complex decompositions. Constant recognition (pi, e, phi, sqrt(2), sqrt(3)) in fitted coefficients.
@@ -315,6 +321,7 @@ speculative infrastructure.
    existing padding after `op`, zero new bytes), then migrate FORMULA_CALL
    as the first consumer. Correct sequencing: general primitive precedes
    specialization.
+4. **Sub-system bridge deletion**: when typed FORMULA_CALL nodes ship, delete the 5-line direct member access at the T7 sub-system bridge in `system.h` (the `sub_sys.solved_symbolic_.find(resolve_var)` lookup) and route through the typed node's evaluation instead.
 
 **Do NOT use `reinterpret_cast` overlay** when eventually revisited. The
 `aux_index` handle in existing padding is strictly more general and
@@ -630,9 +637,9 @@ Blocked by permissive-condition behavior breaking existing `abs` tests (`tests.c
 
 The originally-proposed `target_identity_fp` approach is non-functional (`Var(target)` evaluates to empty at test points under `subst_for_fingerprint`). The next cycle must NOT re-propose a variant of this without diagnostic evidence.
 
-**Investigation artifact**: `docs/Category-C-Investigation.md` — six speculative approaches (leaf-count gate, `--derive N` default cap, provenance-cycle detection, canonicity soft cull, algebraic closure, strategy filter) each with "why it might be right / wrong" and "cost". Five diagnostic questions (D1–D5) the next cycle should answer BEFORE designing. Explicitly speculative — the investigation prompts exploration, not prescription.
+**Investigation artifact**: `docs/research/category-c-investigation.md` — six speculative approaches (leaf-count gate, `--derive N` default cap, provenance-cycle detection, canonicity soft cull, algebraic closure, strategy filter) each with "why it might be right / wrong" and "cost". Five diagnostic questions (D1–D5) the next cycle should answer BEFORE designing. Explicitly speculative — the investigation prompts exploration, not prescription.
 
-**Reopen trigger:** dedicated next cycle's RESEARCH phase takes `category-c-investigation.md` as its starting point. Answer D1–D5 first, choose an approach, then design.
+**Reopen trigger:** dedicated next cycle's RESEARCH phase takes `docs/research/category-c-investigation.md` as its starting point. Answer D1–D5 first, choose an approach, then design.
 
 ## 33. Category E symbolic form preservation for CLI bindings
 
@@ -735,6 +742,24 @@ non-CSE output and reduces CSE candidate count.
 
 **Reopen trigger**: a user reports the non-collapse, OR the next
 rewrite-rule cycle.
+
+## 44. Raw-provenance inspection mode (`--symbolic`)
+
+`solved_symbolic_` (provenance-plumbing cycle, 2026-04-26) stores the post-recognition ExprPtr — i.e. the recognized symbolic form, not the raw pre-recognition solver tree. For normal trace output this is the right policy (consistent with final output). If a future `--symbolic` or LLM-debug mode needs access to the pre-recognition solver tree, a separate `solved_symbolic_raw_` member would be needed alongside the existing `solved_symbolic_`.
+
+**Reopen trigger (R3):** a user requests `--symbolic` mode or an LLM debug-inspection surface that needs the raw solver ExprPtr before constant recognition. Do NOT add `solved_symbolic_raw_` preemptively.
+
+## 45. `aliases_` second consumer
+
+`FormulaSystem::aliases_` (provenance-plumbing cycle, 2026-04-26) is the universal alias-resolution table — a `mutable std::map<std::string, double>` cached by `build_alias_table()` and read by `fmt_trace`/`fmt_exact_double`. When LaTeX export (#9) or units (#7) ships, confirm the member generalizes to that renderer and rename if it has grown a more descriptive role.
+
+**Reopen trigger (R4):** LaTeX (#9) or units (#7) enters a planning cycle. Check whether `aliases_` serves both use cases; rename or split at that point, not before.
+
+## 46. T1 (`trace_loaded`) provenance
+
+T1 — the `trace_loaded()` call that emits file defaults at load time — was intentionally left at `fmt_num` in the provenance-plumbing cycle. At that call site, `aliases_` is not yet populated (it is built on first `build_alias_table()` call, which happens inside `resolve()`). Fix options: defer `trace_loaded` output until after the first `build_alias_table()` call, or call `build_alias_table()` eagerly during load.
+
+**Reopen trigger (R6):** a user reports that `--steps` shows a decimal for a user-named constant at the "loading" line (e.g. `deg = 0.01745329252` rather than `pi / 180`).
 
 ## 43. Per-`.fw` CSE cap frontmatter
 

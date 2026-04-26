@@ -11237,6 +11237,122 @@ void test_cse_integration() {
     }
 }
 
+// ============================================================================
+//  Provenance plumbing — trace/final consistency (Known-Issues #6 cycle)
+// ============================================================================
+//
+// Closes the "trace renders decimal, final renders symbolic" disagreement.
+// The solver now carries a parallel symbolic map (`solved_symbolic_`) populated
+// at the binding-commit point. Trace sites read from it and render via
+// `fmt_trace`, which respects --approximate and falls back to the alias-aware
+// `fmt_exact_double` for values that never had a symbolic ExprPtr (defaults,
+// givens, @extern returns).
+//
+// All four assertions are SHIP-BLOCKING — without them, Path B can be
+// shipped under Path A's labels (see design-proposal §"Stop-and-Ship Criteria").
+
+static std::string capture_cmd(const std::string& cmd) {
+    FILE* p = popen(cmd.c_str(), "r");
+    std::string out;
+    if (p) {
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), p)) out += buf;
+        pclose(p);
+    }
+    return out;
+}
+
+void test_provenance_plumbing() {
+    SECTION("Provenance plumbing — trace/final consistency");
+
+    // --- Test A: Reproducer 1 — integer division surfaces structural form ---
+    // height = weight / 10 with weight=981 → trace must show "981 / 10"
+    // (or equivalent), NOT "98.1".
+    {
+        write_fw("/tmp/prov1.fw", "height = weight / 10\n");
+        std::string out = capture_cmd(
+            "./bin/fwiz --steps '/tmp/prov1.fw(height=?, weight=981)' 2>&1");
+        ASSERT(out.find("981 / 10") != std::string::npos,
+               "PROV-A: trace contains '981 / 10' (got: " + out + ")");
+        ASSERT(out.find("= 98.1") == std::string::npos,
+               "PROV-A: trace does NOT contain decimal '= 98.1' (got: " + out + ")");
+    }
+
+    // --- Test B: Reproducer 2 — pi-multiple recognizes symbolic form ---
+    // deg = pi/180; angle = deg * 30 → trace must show pi-form (e.g.
+    // "1 / 6 * pi" or "pi / 6"), NOT "0.5235987756".
+    {
+        write_fw("/tmp/prov2.fw", "deg = pi / 180\nangle = deg * 30\n");
+        std::string out = capture_cmd(
+            "./bin/fwiz --steps '/tmp/prov2.fw(angle=?)' 2>&1");
+        bool has_pi_form = out.find("pi") != std::string::npos
+                        && out.find("result: angle =") != std::string::npos;
+        // The line "result: angle = ..." must mention pi rather than the decimal.
+        // Find the substring after "result: angle = " on its own line.
+        auto needle = std::string("result: angle = ");
+        auto pos = out.find(needle);
+        std::string after;
+        if (pos != std::string::npos) {
+            auto eol = out.find('\n', pos);
+            after = out.substr(pos + needle.size(),
+                               (eol == std::string::npos) ? std::string::npos : eol - pos - needle.size());
+        }
+        ASSERT(has_pi_form && after.find("pi") != std::string::npos,
+               "PROV-B: 'result: angle = ...' line contains 'pi' (got after marker: '" + after + "')");
+        ASSERT(after.find("0.5235") == std::string::npos,
+               "PROV-B: 'result: angle = ...' line does NOT contain '0.5235' (got: '" + after + "')");
+    }
+
+    // --- Test C: Adversarial — denominator beyond the recognizer's horizon ---
+    // x = y / 401 with y=803 → trace must show "803 / 401" (the simplified
+    // ExprPtr preserves the structural fraction). RECOGNIZE_FRACTION_MAX_DEN
+    // = 360 < 401, so Path A's heuristic recognizer cannot recover this from
+    // the double 2.002493... — Path B's structural carrier is required.
+    {
+        write_fw("/tmp/prov3.fw", "x = y / 401\n");
+        std::string out = capture_cmd(
+            "./bin/fwiz --steps '/tmp/prov3.fw(x=?, y=803)' 2>&1");
+        auto needle = std::string("result: x = ");
+        auto pos = out.find(needle);
+        std::string after;
+        if (pos != std::string::npos) {
+            auto eol = out.find('\n', pos);
+            after = out.substr(pos + needle.size(),
+                               (eol == std::string::npos) ? std::string::npos : eol - pos - needle.size());
+        }
+        ASSERT(after.find("803 / 401") != std::string::npos,
+               "PROV-C (adversarial): 'result: x = ...' contains '803 / 401' (got: '" + after + "')");
+        ASSERT(after.find("2.002493") == std::string::npos,
+               "PROV-C (adversarial): 'result: x = ...' does NOT contain decimal (got: '" + after + "')");
+    }
+
+    // --- Test D: Cross-formula bridge — sub-system symbolic form propagates ---
+    // halfpi.fw defines [halfpi(x) -> result] = pi/2; prov4.fw calls it.
+    // Trace at T7 (the parent's "result: phase = ..." line) must show pi-form,
+    // NOT "1.5707...". Validates the §6 sub-system bridge — sub_sys's
+    // solved_symbolic_[result] must propagate to parent's render path.
+    {
+        write_fw("/tmp/halfpi.fw", "[halfpi(x) -> result] = pi / 2\n");
+        write_fw("/tmp/prov4.fw", "phase = halfpi(0)\n");
+        std::string out = capture_cmd(
+            "./bin/fwiz --steps '/tmp/prov4.fw(phase=?)' 2>&1");
+        // The parent's T7 emits "  result: phase = <render>" (with leading spaces).
+        // Use "result: phase = " — present uniquely on that line.
+        auto needle = std::string("result: phase = ");
+        auto pos = out.find(needle);
+        std::string after;
+        if (pos != std::string::npos) {
+            auto eol = out.find('\n', pos);
+            after = out.substr(pos + needle.size(),
+                               (eol == std::string::npos) ? std::string::npos : eol - pos - needle.size());
+        }
+        ASSERT(after.find("pi") != std::string::npos,
+               "PROV-D: 'result: phase = ...' (cross-formula) contains 'pi' (got: '" + after + "')");
+        ASSERT(after.find("1.5707") == std::string::npos,
+               "PROV-D: 'result: phase = ...' does NOT contain decimal (got: '" + after + "')");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -11499,6 +11615,9 @@ int main() {
     // CSE for --derive output (Cycle B)
     test_cse_unit();
     test_cse_integration();
+
+    // Provenance plumbing — trace/final consistency (Known-Issues #6 cycle)
+    test_provenance_plumbing();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
