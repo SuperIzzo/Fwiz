@@ -28,7 +28,7 @@ int main(int argc, const char* argv[]) {
                   << "  --verify all   verify all known variables against all equations\n"
                   << "  --verify A,B   verify specific variables\n"
                   << "  --derive       output symbolic equation instead of numeric result\n"
-                  << "  --cse [N]      extract subexpressions appearing >= N times (default 3)\n"
+                  << "  --cse [N]      extract at most N helpers, ranked by value (default N=3)\n"
                   << "                 as named helpers t1, t2, ... in a # Helpers preamble\n"
                   << "  --no-numeric   disable numeric solving (algebraic only)\n"
                   << "  --approximate  collapse exact output (fractions, pi, etc.) to floating-point\n"
@@ -50,7 +50,7 @@ int main(int argc, const char* argv[]) {
         bool explore_full = false;
         bool derive_mode = false;
         int derive_cap = 0;  // 0 or negative → unbounded; >= 1 → cap at N
-        int cse_threshold = 0;  // 0 → CSE disabled (default); >= 2 → extract subtrees with >= N occurrences
+        int cse_threshold = 0;  // 0 → CSE disabled (default); >= 1 → extract at most N helpers (Option C top-N by value)
         bool fit_mode = false;
         int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
@@ -164,7 +164,7 @@ int main(int argc, const char* argv[]) {
             for (const auto& q : query.queries) {
                 try {
                     std::vector<std::string> helpers;
-                    bool cse_active = cse_threshold >= 2;
+                    bool cse_active = cse_threshold >= 1;
                     auto results = sys.derive_all(
                         q.variable, query.bindings, query.symbolic,
                         cse_active ? &helpers : nullptr,

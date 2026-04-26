@@ -10839,7 +10839,7 @@ void test_cse_unit() {
 
     // CSE-U1: count map. 3 candidates: a*x^2+b, sin(x^2)+x^2, c*x^2.
     // x^2 appears in all 3 (count=3), sin(x^2) appears once (count=1).
-    // At threshold=2, only x^2 is eligible.
+    // With cap=2, x^2 is selected (occ=3 ≥ 2 candidate filter; sin(x^2) has occ=1, filtered out).
     {
         auto x  = Expr::Var("x");
         auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
@@ -10994,6 +10994,51 @@ void test_cse_unit() {
         ASSERT(s == "sin(t1)",
                "CSE-U6: helpers[1] formatted with earlier helpers = sin(t1), NOT sin(x^2) (got: " + s + ")");
     }
+
+    // CSE-V1 (Option C): value-ranking — high-value subtree wins over high-frequency atom.
+    //   high_value = acos((x^2 + y^2 - 16) / (2*x*y))   leaves=9, occ=3 → value=(3-1)*(9-1)=16
+    //   low_value  = 2*x                                 leaves=2, occ=8 → value=(8-1)*(2-1)=7
+    // With cap=1, the high-value subtree must be the sole helper.
+    {
+        auto x  = Expr::Var("x");
+        auto y  = Expr::Var("y");
+        auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
+        auto y2 = Expr::BinOpExpr(BinOp::POW, y, Expr::Num(2));
+        auto sum_sq_minus_16 = Expr::BinOpExpr(BinOp::SUB,
+                                   Expr::BinOpExpr(BinOp::ADD, x2, y2),
+                                   Expr::Num(16));
+        auto two_xy = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2),
+                          Expr::BinOpExpr(BinOp::MUL, x, y));
+        auto big = Expr::Call("acos",
+                       { Expr::BinOpExpr(BinOp::DIV, sum_sq_minus_16, two_xy) });
+        auto two_x = Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), x);
+        // 3 expressions that each contain `big` once (occ=3) and `2*x` 8 times across all.
+        // Use cumulative ADD to embed multiple copies of two_x without nesting big.
+        auto e1 = Expr::BinOpExpr(BinOp::ADD,
+                      big,
+                      Expr::BinOpExpr(BinOp::ADD, two_x,
+                          Expr::BinOpExpr(BinOp::ADD, two_x, two_x)));
+        auto e2 = Expr::BinOpExpr(BinOp::ADD,
+                      big,
+                      Expr::BinOpExpr(BinOp::ADD, two_x,
+                          Expr::BinOpExpr(BinOp::ADD, two_x, two_x)));
+        auto e3 = Expr::BinOpExpr(BinOp::ADD,
+                      big,
+                      Expr::BinOpExpr(BinOp::ADD, two_x, two_x));
+        std::vector<ExprPtr> exprs = { e1, e2, e3 };
+        std::set<std::string> occupied;
+        // cap=1: only one helper allowed; value-rank picks the high-value one.
+        auto helpers = cse_extract(exprs, 1, occupied);
+        ASSERT(helpers.size() == 1,
+               "CSE-V1: cap=1 produces exactly 1 helper (got " +
+               std::to_string(helpers.size()) + ")");
+        if (helpers.size() == 1) {
+            std::string rhs = expr_to_string(helpers[0].second);
+            ASSERT(rhs.find("acos(") != std::string::npos,
+                   "CSE-V1: top-1 helper is the high-value acos compound, not the 2*x atom (got: " +
+                   rhs + ")");
+        }
+    }
 }
 
 void test_cse_integration() {
@@ -11103,8 +11148,8 @@ void test_cse_integration() {
                "CSE-I5: --derive 5 --cse 3 emits exactly 5 main equations (got " + std::to_string(n) + ")");
     }
 
-    // CSE-C2: --cse 5 → fewer (or equal) helpers than --cse 2 (higher threshold,
-    // fewer eligible subtrees).
+    // CSE-C2 (Option C): --cse N caps helper count at N.
+    //   --cse 2 → at most 2 helpers; --cse 5 → at most 5 helpers.
     {
         FILE* f1 = popen(
             "./bin/fwiz --derive --cse 2 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
@@ -11118,9 +11163,36 @@ void test_cse_integration() {
             "r");
         int helpers_5 = 0;
         if (f2) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f2)) helpers_5 = atoi(buf); pclose(f2); }
-        ASSERT(helpers_5 <= helpers_2,
+        ASSERT(helpers_2 <= 2,
+               "CSE-C2: --cse 2 helpers (" + std::to_string(helpers_2) +
+               ") <= 2 (top-N cap)");
+        ASSERT(helpers_5 <= 5,
                "CSE-C2: --cse 5 helpers (" + std::to_string(helpers_5) +
-               ") <= --cse 2 helpers (" + std::to_string(helpers_2) + ")");
+               ") <= 5 (top-N cap)");
+    }
+
+    // CSE-B1 (Option C boundary): --cse 1 → at most 1 helper.
+    {
+        FILE* f = popen(
+            "./bin/fwiz --derive --cse 1 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -c '^t[0-9]'",
+            "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) n = atoi(buf); pclose(f); }
+        ASSERT(n <= 1,
+               "CSE-B1: --cse 1 helper count (" + std::to_string(n) + ") <= 1");
+    }
+
+    // CSE-B2 (Option C boundary): --cse 0 → 0 helpers (silently disabled).
+    {
+        FILE* f = popen(
+            "./bin/fwiz --derive --cse 0 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null "
+            "| grep -c '^t[0-9]'",
+            "r");
+        int n = 0;
+        if (f) { char buf[32]={0}; if (fgets(buf, sizeof(buf), f)) n = atoi(buf); pclose(f); }
+        ASSERT(n == 0,
+               "CSE-B2: --cse 0 emits 0 helpers (got " + std::to_string(n) + ")");
     }
 }
 

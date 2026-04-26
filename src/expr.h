@@ -1001,10 +1001,9 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 // (helper_name, helper_subtree) pairs, replace every occurrence of a helper
 // subtree (matched by structural equality) with `Var(helper_name)`.
 //
-// Walk is post-order (children first), preserving SymPy `cse()` let* semantics:
-// a helper's RHS is matched against the ORIGINAL subtree, not the substituted
-// one. The current node is checked AFTER its children so an outer helper still
-// matches its original shape if its inner helper has not yet rewritten it.
+// Walk is post-order (children first). After children are rewritten, the
+// helper check is performed on `e` directly (not a reconstructed node), so an
+// outer helper still matches even after its children have been rewritten.
 //
 // Pointer-equality short-circuit on the no-match path: fwiz's factory pattern
 // (Expr::BinOpExpr/Neg/Call) ALWAYS reconstructs a fresh node, so without this
