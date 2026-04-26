@@ -736,14 +736,18 @@ non-CSE output and reduces CSE candidate count.
 **Reopen trigger**: a user reports the non-collapse, OR the next
 rewrite-rule cycle.
 
-## 43. Per-`.fw` CSE threshold frontmatter
+## 43. Per-`.fw` CSE cap frontmatter
 
-`--cse 3` is the default. A `.fw` file with stable formula shapes might
+`--cse 3` is the default. Option C's value-rank semantics reduce the need
+for per-`.fw` tuning — the cap-N model ranks by `(occurrences - 1) * (leaves - 1)` and takes
+the top N, so the same default works across most domains. A `.fw` file with unusual structure (very flat, very deep, or
+highly repetitive non-semantic atoms after canonicalization) might still
 benefit from a frontmatter directive (e.g. `# fwiz: cse_default 5`) that
-sets the file's preferred threshold. CLI `--cse N` would still override.
+sets the file's preferred cap. CLI `--cse N` would still override.
 
-**Reopen trigger**: a second user reports `--cse 3` wrong-default for
-their domain.
+**Reopen trigger**: a user reports the default cap of 3 is wrong for their
+domain AND a different `value` formula would not fix it (i.e. the cap
+itself is the issue, not the ranking).
 
 ## Interaction with existing features
 

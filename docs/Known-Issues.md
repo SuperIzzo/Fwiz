@@ -69,7 +69,13 @@ x = log(y) / log(2)
 
 The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `rebuild_multiplicative` split-by-sign cycle eliminated one redundant line). The remaining output comes from two sources: (a) genuinely-distinct algebraic forms (different branch-cut coverage at obtuse-angle test points — correct behavior, not duplication), and (b) ~143 Category C "self-substitution" lines where the derivation strategy over-enumerates via cross-equation substitution, producing forms that are semantically equivalent to shorter canonical ones but fingerprint-distinctly at the chosen test points. Category C is an active investigation; see Future #32 and `docs/Category-C-Investigation.md`.
 
-## 8. `--cse 3` default is over-aggressive on dense formula sets
+## 8. `--cse 3` default is over-aggressive on dense formula sets — RESOLVED
 
-`--cse [N]` with default N=3 extracts every subtree appearing 3 or more times, which on dense outputs (e.g. the triangle reproducer's 158-candidate set) produces 165 helpers — far more than a human reader can absorb. The character reduction is real (-78.9%), but the helper count overshoots. Users who want fewer helpers should raise the threshold: `--cse 20` yields 46 helpers on the triangle case. The long-term resolution (reframing semantics as "top-N helpers by value" rather than "all subtrees above frequency threshold") is planned for a follow-up cycle; see Future #43.
+Resolved by Option C refactor (commit `<hash-placeholder>`). `--cse N` semantics
+reframed: instead of "extract every subtree with `>= N` occurrences" (frequency
+threshold), `--cse N` now caps the helper count at `N` and ranks candidates by
+`value = (occurrences - 1) * (leaves - 1)` — the approximate character savings.
+Single-leaf atoms have value 0 and are never extracted. The triangle reproducer
+at default `--cse 3` now produces exactly 3 high-value helpers (the `acos`
+compound and its two derived forms) instead of 165 atom-heavy helpers.
 
