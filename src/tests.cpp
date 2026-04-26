@@ -11039,6 +11039,47 @@ void test_cse_unit() {
                    rhs + ")");
         }
     }
+
+    // CSE-V2 (D8 invariant under value-rank truncation):
+    // Construct candidates where value-ranking would place outer FIRST by raw
+    // value, but topological re-sort must place inner first because inner is
+    // a subtree of outer (outer's helper definition references inner). This
+    // exercises the Step 4 topo re-sort that runs AFTER value-rank top-N
+    // selection — a regression there would not be caught by CSE-U6 (which
+    // tests an input where value-rank already happens to be topological).
+    {
+        auto x = Expr::Var("x"), y = Expr::Var("y");
+        auto inner = Expr::BinOpExpr(BinOp::ADD, x, y);                  // x + y
+        auto outer = Expr::Call("sin", { Expr::Call("cos", { inner }) });// sin(cos(x + y))
+        // Three top-level expressions with DIFFERENT operators between outer
+        // and inner so no shared parent structure buckets as a candidate.
+        // Each contributes one outer (count=3) and two copies of inner (one
+        // inside outer, one standalone — count=6 across all).
+        auto e1 = Expr::BinOpExpr(BinOp::ADD, outer, inner);  // outer + inner
+        auto e2 = Expr::BinOpExpr(BinOp::MUL, outer, inner);  // outer * inner
+        auto e3 = Expr::BinOpExpr(BinOp::SUB, outer, inner);  // outer - inner
+        std::vector<ExprPtr> exprs = {e1, e2, e3};
+        std::set<std::string> occupied;
+        auto helpers = cse_extract(exprs, 2, occupied);
+        // Values: inner (occ=6 across all, leaves=2) → 5*1=5; outer (occ=3,
+        // leaves=4) → 2*3=6. Value-rank order: [outer (6), inner (5)].
+        // Topo re-sort by node count: outer=5 nodes, inner=3 → [inner, outer].
+        ASSERT(helpers.size() == 2,
+               "CSE-V2: cap=2 produces 2 helpers (got " +
+               std::to_string(helpers.size()) + ")");
+        ASSERT_EQ(expr_to_string(helpers[0].second), "x + y",
+                  "CSE-V2: helpers[0] is inner (x+y) — topo re-sort overrides value order");
+        ASSERT(expr_to_string(helpers[1].second).find("sin(cos") != std::string::npos,
+               "CSE-V2: helpers[1] is outer sin(cos(...)) (got: " +
+               expr_to_string(helpers[1].second) + ")");
+        // helpers[1] substituted with [helpers[0]] must reference helpers[0]'s
+        // assigned name (t1) — proves the subtree relationship survives re-sort.
+        std::string outer_substituted = expr_to_string(
+            cse_replace(helpers[1].second, {helpers[0]}));
+        ASSERT(outer_substituted.find("t1") != std::string::npos,
+               "CSE-V2: helpers[1] references t1 after cse_replace (got: " +
+               outer_substituted + ")");
+    }
 }
 
 void test_cse_integration() {

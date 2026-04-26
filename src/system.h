@@ -281,57 +281,55 @@ inline std::vector<std::pair<std::string, ExprPtr>> cse_extract(
     };
     for (auto& e : exprs) walk(e);
 
-    // Pre-compute node counts (full tree size) and leaf counts (atom count)
-    // for every candidate subtree in a single recursive sweep with memoization.
-    // This is N4: O(N×depth) once, vs O(N²×depth) in the original lambda-in-
-    // comparator pattern. Both metrics share the same recursion shape.
-    std::map<ExprPtr, int> node_count_cache;
-    std::map<ExprPtr, int> leaf_count_cache;
-    std::function<int(ExprPtr)> node_count = [&](ExprPtr e) -> int {
-        if (!e) return 0;
-        auto it = node_count_cache.find(e);
-        if (it != node_count_cache.end()) return it->second;
-        int n = 0;
-        switch (e->type) {
-            case ExprType::NUM:
-            case ExprType::VAR:       n = 1; break;
-            case ExprType::UNARY_NEG: n = 1 + node_count(e->child); break;
-            case ExprType::BINOP:     n = 1 + node_count(e->left) + node_count(e->right); break;
-            case ExprType::FUNC_CALL: {
-                n = 1;
-                for (auto& a : e->args) n += node_count(a);
-                break;
-            }
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); return 0;
-        }
-        node_count_cache[e] = n;
-        return n;
-    };
-    // Count atomic tokens: Var, Num, and FUNC_CALL function names. A function
+    // Pre-compute node counts (full tree size) and leaf counts (token count)
+    // for every candidate subtree in a single recursive sweep with shared
+    // memoization. Both metrics share the same recursion shape, so they're
+    // computed and cached together — one map lookup per node, two metrics
+    // returned. O(N×depth) once, vs O(N²×depth) in the original lambda-in-
+    // comparator pattern.
+    //
+    // leaves (tokens): Var, Num, and FUNC_CALL function names. A function
     // name is itself a token in the printed form ("acos" + "(" + args + ")"),
-    // so naming the call shaves the name plus the inside. UNARY_NEG is a
-    // non-token sigil ("-") and contributes 0 directly. This matches the
-    // value formula's "approximate character savings" intent.
-    std::function<int(ExprPtr)> leaf_count = [&](ExprPtr e) -> int {
-        if (!e) return 0;
-        auto it = leaf_count_cache.find(e);
-        if (it != leaf_count_cache.end()) return it->second;
-        int n = 0;
+    // so naming the call shaves the name plus the inside. UNARY_NEG sigil
+    // ("-") contributes 0 leaves directly. This matches the value formula's
+    // "approximate character savings" intent.
+    struct TreeCounts { int nodes; int leaves; };
+    std::map<ExprPtr, TreeCounts> count_cache;
+    std::function<TreeCounts(ExprPtr)> tree_counts = [&](ExprPtr e) -> TreeCounts {
+        if (!e) return {0, 0};
+        auto it = count_cache.find(e);
+        if (it != count_cache.end()) return it->second;
+        TreeCounts c{0, 0};
         switch (e->type) {
             case ExprType::NUM:
-            case ExprType::VAR:       n = 1; break;
-            case ExprType::UNARY_NEG: n = leaf_count(e->child); break;
-            case ExprType::BINOP:     n = leaf_count(e->left) + leaf_count(e->right); break;
-            case ExprType::FUNC_CALL: {
-                n = 1;  // the function name itself is a token
-                for (auto& a : e->args) n += leaf_count(a);
+            case ExprType::VAR:       c = {1, 1}; break;
+            case ExprType::UNARY_NEG: {
+                auto cc = tree_counts(e->child);
+                c = {1 + cc.nodes, cc.leaves};
                 break;
             }
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); return 0;
+            case ExprType::BINOP: {
+                auto lc = tree_counts(e->left);
+                auto rc = tree_counts(e->right);
+                c = {1 + lc.nodes + rc.nodes, lc.leaves + rc.leaves};
+                break;
+            }
+            case ExprType::FUNC_CALL: {
+                c = {1, 1};  // own node + function name token
+                for (auto& a : e->args) {
+                    auto ac = tree_counts(a);
+                    c.nodes += ac.nodes;
+                    c.leaves += ac.leaves;
+                }
+                break;
+            }
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); return {0, 0};
         }
-        leaf_count_cache[e] = n;
-        return n;
+        count_cache[e] = c;
+        return c;
     };
+    auto node_count = [&](ExprPtr e) { return tree_counts(e).nodes; };
+    auto leaf_count = [&](ExprPtr e) { return tree_counts(e).leaves; };
 
     // Step 2: build candidates with (count >= 2). Compute value per candidate.
     struct Cand {
