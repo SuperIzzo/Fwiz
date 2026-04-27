@@ -484,6 +484,11 @@ public:
     // alias-resolution table — used by fmt_trace's fallback path
     // (defaults / givens / @extern) where no symbolic source exists.
     mutable std::map<std::string, double> aliases_;
+    // Dirty-flag for resolve_diff_in_equations: tracks how far we've already
+    // walked. Equations only ever grow, so on a second load_string the pass
+    // skips already-rewritten equations. Eliminates redundant double-walk on
+    // the CLI diff path (perf-auditor WARN, polish-pass Item 5).
+    size_t diff_resolved_up_to_ = 0;
 
     std::set<std::string> all_variables() const {
         std::set<std::string> vars;
@@ -966,8 +971,9 @@ abs(x) / x = undefined iff x = 0
     // ------------------------------------------------------------------------
     void resolve_diff_in_equations() {
         ExprArena::Scope scope(arena);
-        for (auto& eq : equations)
-            eq.rhs = resolve_diff_calls(eq.rhs);
+        for (size_t i = diff_resolved_up_to_; i < equations.size(); ++i)
+            equations[i].rhs = resolve_diff_calls(equations[i].rhs);
+        diff_resolved_up_to_ = equations.size();
     }
 
     // Walks `e` post-order; replaces any `diff(target, var)` FUNC_CALL with the
@@ -1049,6 +1055,12 @@ abs(x) / x = undefined iff x = 0
     // equation RHS that produces `call.query_var`. Mirrors the FORMULA_FWD
     // unfold path in `derive_recursive` (system.h ~line 2860). Returns the
     // unfolded ExprPtr or nullptr if no matching sub-system equation exists.
+    //
+    // LIMITATION: when a sub-system has multiple equations defining the
+    // output (piecewise/conditional formulas like `abs` defined via two
+    // `iff` branches), only the FIRST matching equation is used. This
+    // silently uses one branch's derivative. See Future #51 for the
+    // multi-branch follow-up.
     ExprPtr unfold_formula_call_for_diff(const FormulaCall& call) const {
         try {
             auto& sub_sys = load_sub_system(call.file_stem);

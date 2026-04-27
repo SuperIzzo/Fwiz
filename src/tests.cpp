@@ -11351,6 +11351,46 @@ void test_provenance_plumbing() {
         ASSERT(after.find("1.5707") == std::string::npos,
                "PROV-D: 'result: phase = ...' does NOT contain decimal (got: '" + after + "')");
     }
+
+    // --- Test E: T7 sub-system bridge does NOT read stale solved_symbolic_
+    // on @extern fast path (Cycle 5 SHIP-DESIRABLE carry-forward).
+    // Setup: parent uses sin() (an @extern builtin). After loading, the
+    // sub_systems["@def:sin"] entry exists. We poison its solved_symbolic_
+    // ["result"] with a recognizable sentinel Var. On resolve, the @extern
+    // fast path must fire (used_extern == true) and the parent must NOT
+    // adopt the poisoned ExprPtr — the bridge gates on `!used_extern`.
+    {
+        // Construct an @extern sub-system via .fw file (mysin → C++ sin).
+        // Cross-file formula call mysin(...) takes the formula-call path,
+        // and the section's @extern fires the fast path inside try_formula.
+        write_fw("/tmp/prov_e_mysin.fw",
+            "[mysin(x) -> result] @extern sin; x = asin(result)\n");
+        write_fw("/tmp/prov_e_caller.fw",
+            "y1 = mysin(z1)\ny2 = mysin(z2)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/prov_e_caller.fw");
+        sys.resolve_all("y1", {{"z1", 0.3}});  // populates sub_systems
+        std::map<std::string, std::shared_ptr<FormulaSystem>>::iterator sub_it
+            = sys.sub_systems.end();
+        for (auto it = sys.sub_systems.begin(); it != sys.sub_systems.end(); ++it) {
+            if (it->first.find("mysin") != std::string::npos) { sub_it = it; break; }
+        }
+        ASSERT(sub_it != sys.sub_systems.end(),
+               "PROV-E: sub_systems entry for mysin populated after first resolve");
+        if (sub_it != sys.sub_systems.end()) {
+            ExprArena::Scope scope(sub_it->second->arena);
+            ExprPtr poison = Expr::Var("__POISON__");
+            sub_it->second->solved_symbolic_["result"] = poison;
+            // Resolve y2 — @extern fast path must fire and skip the bridge,
+            // so poison must NOT propagate into parent.solved_symbolic_.
+            sys.resolve_all("y2", {{"z2", 0.5}});
+            auto pit = sys.solved_symbolic_.find("y2");
+            bool clean = (pit == sys.solved_symbolic_.end())
+                       || (pit->second != poison);
+            ASSERT(clean,
+                "PROV-E: parent.solved_symbolic_['y2'] does NOT adopt poison from @extern sub-system");
+        }
+    }
 }
 
 // ---- Symbolic differentiation (Future #6) ----
@@ -11393,6 +11433,11 @@ void test_symbolic_diff_per_builtin() {
     // Simplifier reorders 1 - x^2 → -(x^2) + 1 in the canonical additive form
     ASSERT_EQ(diff_str("asin(x)", "x"), "1 / sqrt(-(x^2) + 1)",
         "diff(asin(x), x) = 1/sqrt(1 - x^2)");
+    ASSERT_EQ(diff_str("tan(x)", "x"), "tan(x)^2 + 1", "diff(tan(x), x) = 1 + tan(x)^2");
+    ASSERT_EQ(diff_str("acos(x)", "x"), "(-1) / sqrt(-(x^2) + 1)",
+        "diff(acos(x), x) = -1/sqrt(1 - x^2)");
+    ASSERT_EQ(diff_str("atan(x)", "x"), "1 / (x^2 + 1)",
+        "diff(atan(x), x) = 1/(1 + x^2)");
 }
 
 void test_symbolic_diff_chain_rule() {
@@ -11407,6 +11452,7 @@ void test_symbolic_diff_chain_rule() {
 void test_symbolic_diff_higher_order() {
     SECTION("symbolic_diff: higher-order via composition");
 
+    // No RewriteRulesGuard needed — simplify()'s numeric constant-folding collapses x^3 * (3/x) → 3*x^2 directly.
     // BLOCKING #7: higher-order via composition (no diff(f, x, n) sugar)
     const auto* e = parse("x^3");
     const auto* d1 = symbolic_diff_simplified(*e, "x");
@@ -11607,6 +11653,14 @@ void test_symbolic_diff_provenance() {
         "PROV-DIFF: --steps trace shows 'sensitivity = velocity' (post-load diff rewrite)");
     ASSERT(out.find("diff(") == std::string::npos,
         "PROV-DIFF: --steps trace does NOT contain raw 'diff(' (the rewrite happened)");
+
+    // Visionary Q8 #2 invariant (direct): solved_symbolic_ holds the symbolic
+    // form post-query, so trace and final output cannot disagree by
+    // construction. The trace assertion above checks this transitively; this
+    // checks it directly.
+    auto it = sys.solved_symbolic_.find("sensitivity");
+    ASSERT(it != sys.solved_symbolic_.end() && it->second != nullptr,
+        "PROV-DIFF: solved_symbolic_['sensitivity'] populated after resolve_all");
 }
 
 void test_checked_type() {
