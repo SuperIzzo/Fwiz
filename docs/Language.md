@@ -513,6 +513,9 @@ x ^ 0 = 1
 x ^ 1 = x
 x ^ (1/2) = sqrt(x)
 (x^a)^b = x^(a*b)
+x^a / x^b = x^(a-b)  iff x != 0
+abs(x) / x = sign(x)  iff x != 0
+abs(x) / x = undefined iff x = 0
 ```
 
 ### 10.3 Exhaustiveness
@@ -557,6 +560,18 @@ Defined via the built-in section mechanism (§6.4). All accept real arguments an
 | `acos(x)` | Inverse cosine (radians) | `-1 <= x <= 1` |
 | `atan(x)` | Inverse tangent (radians) | all real |
 | `log(x)` | Natural logarithm | `x > 0` |
+| `sign(x)` | Sign: −1, 0, or +1 | all real |
+| `diff(f, x)` | Symbolic derivative of `f` with respect to `x` | `x` must be a bare variable name |
+
+`diff(f, x)` is a parser-level builtin: when it appears in a `.fw` equation body, the derivative is computed symbolically at load time and the result (a simplified expression tree) is inlined in place of the call. `f` may be any expression or the name of another variable defined in the same system (the post-load pass substitutes its equation's RHS before differentiating).
+
+```
+# sensitivity.fw
+force = mass * acceleration
+sensitivity = diff(force, mass)    # inlined as: sensitivity = acceleration
+```
+
+`diff(f, x)` is also accepted as a CLI query target — see [CLI.md §1](CLI.md#1-syntax).
 
 Out-of-domain inputs produce NaN at evaluation time.
 

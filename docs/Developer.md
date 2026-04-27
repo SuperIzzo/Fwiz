@@ -37,6 +37,7 @@ Current capabilities:
 - Multiple returns (`?` = all solutions, `?!` = strict one)
 - ValueSet returns (ranges when exact values unavailable)
 - Symbolic derivation (`--derive`) with formula call unfolding
+- Symbolic differentiation (`diff(f, x)` builtin + `diff(...)=?` CLI query)
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
@@ -57,7 +58,6 @@ Current capabilities:
 - Output formatting: `--approximate` (collapse to float) / `--exact` (default, human-readable fractions and constants); `fmt_exact_double` shared helper closes solve/derive asymmetry
 
 Planned (see Future.md):
-- **Symbolic differentiation** — sensitivity analysis
 - **Batch/table mode** — parameter sweeps with range syntax
 - **Units** — dimensional analysis and automatic conversion
 - **Fraction representation** — exact arithmetic
@@ -178,6 +178,23 @@ The core of the system. Contains:
 
 Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevents floating point artifacts like `0.1 + 0.2 - 0.3 ≈ 5.5e-17` from producing wildly wrong answers.
 
+**symbolic_diff(const Expr&, const std::string& var) → ExprPtr** — Free function in `expr.h`. Differentiates an expression tree with respect to `var`. Two-level dispatch:
+
+- Per-AST-class switch: `NUM` → 0; `VAR` → 1 if name matches, 0 otherwise (builtin constants are treated as 0); `UNARY_NEG` → chain rule negation; `BINOP` inner switch covers ADD/SUB (sum rule), MUL (product rule), DIV (quotient rule), POW (general `f^g` formula collapsing via `simplify` to the `x^n` / `c^x` / `f^g` sub-cases).
+- FUNC_CALL inline if-chain (9 builtins): sin → `cos(u) * u'`, cos → `-sin(u) * u'`, tan → `u' / cos(u)^2`, asin → `u' / sqrt(1-u^2)`, acos → `-u' / sqrt(1-u^2)`, atan → `u' / (u^2+1)`, log → `u' / u`, sqrt → `u' / (2 * sqrt(u))`, abs → `abs(u)/u * u'` (requiring `sign` builtin + two rewrite rules).
+- Returns `nullptr` for unknown or multi-arg FUNC_CALL nodes — the post-load pass treats `nullptr` as a "leave-symbolic" signal.
+
+**symbolic_diff_simplified(const Expr&, const std::string& var) → ExprPtr** — Thin wrapper that calls `symbolic_diff` then `simplify()`. Use this at call sites that want a canonical result; use `symbolic_diff` directly when the caller will do its own simplification pass.
+
+**sign(x)** — New builtin registered in `builtin_functions()` (expr.h). `sign_eval` numeric evaluator returns −1, 0, or +1 per IEEE-754 sign comparison; NaN propagates. Symbolic-only intent: appears in derivative of `abs(x)` as `abs(x)/x = sign(x) iff x != 0`.
+
+**resolve_diff_in_equations** (system.h) — Post-load pass hooked into `load_with_sections()` after `compute_rewrite_groups()`. Recursively rewrites `diff(target, var)` FUNC_CALL nodes in every equation's RHS. Three target shapes handled:
+1. `diff(named_var, x)` — substitutes the named variable's equation RHS and differentiates.
+2. `diff(formula_call_placeholder, x)` — `unfold_formula_call_for_diff()` inlines the FormulaCall body, then differentiates the inlined tree.
+3. Literal expression — differentiates directly.
+
+Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per design. Running after rewrite rules load ensures `simplify()` inside `symbolic_diff_simplified` can apply all rules (including the three new `x^a/x^b`, `abs(x)/x`, and `sign` rules) to the differentiated result.
+
 ### system.h
 
 **FormulaSystem** — Holds equations, defaults, formula calls, global conditions, and the solving logic.
@@ -277,7 +294,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2237+ tests organized into functional tests, edge cases, and robustness groups:
+2272+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -338,7 +355,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2237+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2272+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

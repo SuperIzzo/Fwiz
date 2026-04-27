@@ -26,6 +26,18 @@ The `.fw` extension is added automatically if omitted. The argument list is pars
 
 Input values can be expressions: `width=2^3, height=sqrt(9)`.
 
+A `diff(target, var)=?[alias]` query computes the symbolic derivative of `target` with respect to `var` and prints it in `lhs = rhs` form:
+
+```bash
+fwiz kinematic.fw 'diff(distance, time)=?'
+# velocity = ...symbolic expression...
+
+fwiz kinematic.fw 'diff(distance, time)=?velocity, time=10'
+# velocity = ... (numerically evaluated if all free variables are bound)
+```
+
+`target` may be a named variable in the loaded system (the corresponding equation's RHS is differentiated) or any expression. `var` must be a bare variable name. The output uses fwiz's standard `lhs = rhs` format; no new `d(...)/d(...)` notation is introduced.
+
 ---
 
 ## 2. Flags

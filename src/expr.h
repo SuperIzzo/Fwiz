@@ -535,11 +535,22 @@ inline const BinOpInfo& binop_info(BinOp op) {
 //  Builtin function registry
 // ============================================================================
 
+// sign(x) — symbolic builtin for derivative of abs (x != 0). Numeric
+// evaluator returns 0/1/-1 by IEEE-754 sign comparison; the simplifier
+// rewrite rule `abs(x)/x = sign(x) iff x != 0` (in BUILTIN_REWRITE_RULES)
+// canonicalizes `diff(abs(x), x)`. At x=0 the companion rule
+// `abs(x)/x = undefined iff x = 0` keeps the boundary explicit.
+inline double sign_eval(double x) {
+    if (std::isnan(x)) return std::numeric_limits<double>::quiet_NaN();
+    return (x > 0) - (x < 0);
+}
+
 inline const std::map<std::string, double(*)(double)>& builtin_functions() {
     static const std::map<std::string, double(*)(double)> registry = {
         {"sqrt", std::sqrt}, {"abs", std::fabs}, {"sin",  std::sin},
         {"cos",  std::cos},  {"tan", std::tan},  {"log",  std::log},
-        {"asin", std::asin}, {"acos",std::acos}, {"atan", std::atan}
+        {"asin", std::asin}, {"acos",std::acos}, {"atan", std::atan},
+        {"sign", sign_eval}
     };
     return registry;
 }
@@ -2012,6 +2023,116 @@ inline ExprPtr simplify(const ExprPtr& e) {
         cur = next;
     }
     return cur;
+}
+
+// ============================================================================
+//  Symbolic differentiation (Future #6)
+// ============================================================================
+//
+// `symbolic_diff(e, var)` produces d(e)/d(var) as a fresh ExprPtr in the
+// active arena. Per-AST-class switch + per-builtin if-chain for FUNC_CALL.
+//
+// Design choices (see .fwiz-workflow/design-proposal.md "Final Design"):
+//   - Plain factories (no smart-builders): `simplify` already folds 0+x, 0*x,
+//     1*x, x/1, etc. — pre-folding here is dead weight on a non-hot path.
+//   - Inline if-chain over `static map<string, ExprPtr>` table — only one
+//     consumer, eliminates lazy-init / thread-safety / cross-arena issues.
+//   - Returns `nullptr` for unrecognized forms (multi-arg builtins, unknown
+//     function names). Callers (`symbolic_diff_simplified`, the post-load
+//     resolution pass in system.h) treat null as a domain failure.
+//
+// `abs(x)` differentiates to `abs(x)/x`, which the simplifier rewrites to
+// `sign(x)` via the `BUILTIN_REWRITE_RULES` (`abs(x)/x = sign(x) iff x != 0`
+// and `abs(x)/x = undefined iff x = 0`). Empirical preflight confirmed the
+// existing `x/x` matcher does NOT fire structurally on `abs(x)/x`.
+inline ExprPtr symbolic_diff(const Expr& e, const std::string& var) {
+    using E = Expr;
+    switch (e.type) {
+        case ExprType::NUM:
+            return E::Num(0);
+
+        case ExprType::VAR:
+            return E::Num(e.name == var ? 1 : 0);
+
+        case ExprType::UNARY_NEG: {
+            auto dc = symbolic_diff(*e.child, var);
+            return dc ? E::Neg(dc) : nullptr;
+        }
+
+        case ExprType::BINOP: {
+            auto l = e.left, r = e.right;
+            auto dl = symbolic_diff(*l, var);
+            auto dr = symbolic_diff(*r, var);
+            if (!dl || !dr) return nullptr;
+            switch (e.op) {
+                case BinOp::ADD:
+                case BinOp::SUB:
+                    return E::BinOpExpr(e.op, dl, dr);
+                case BinOp::MUL:
+                    // (l*r)' = l'*r + l*r'
+                    return E::BinOpExpr(BinOp::ADD,
+                        E::BinOpExpr(BinOp::MUL, dl, r),
+                        E::BinOpExpr(BinOp::MUL, l, dr));
+                case BinOp::DIV:
+                    // (l/r)' = (l'*r - l*r') / r^2
+                    return E::BinOpExpr(BinOp::DIV,
+                        E::BinOpExpr(BinOp::SUB,
+                            E::BinOpExpr(BinOp::MUL, dl, r),
+                            E::BinOpExpr(BinOp::MUL, l, dr)),
+                        E::BinOpExpr(BinOp::POW, r, E::Num(2)));
+                case BinOp::POW: {
+                    // (l^r)' = l^r * (r' * log(l) + r * l' / l)
+                    auto pow_expr = E::BinOpExpr(BinOp::POW, l, r);
+                    auto log_l    = E::Call("log", {l});
+                    auto term1    = E::BinOpExpr(BinOp::MUL, dr, log_l);
+                    auto term2    = E::BinOpExpr(BinOp::DIV,
+                        E::BinOpExpr(BinOp::MUL, r, dl), l);
+                    return E::BinOpExpr(BinOp::MUL, pow_expr,
+                        E::BinOpExpr(BinOp::ADD, term1, term2));
+                }
+                case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
+            }
+            return nullptr;
+        }
+
+        case ExprType::FUNC_CALL: {
+            // Only single-arg builtins are differentiable in v1.
+            if (e.args.size() != 1) return nullptr;
+            auto u  = e.args[0];
+            auto du = symbolic_diff(*u, var);
+            if (!du) return nullptr;
+            ExprPtr fp = nullptr;
+            if      (e.name == "sin")  fp = E::Call("cos", {u});
+            else if (e.name == "cos")  fp = E::Neg(E::Call("sin", {u}));
+            else if (e.name == "tan")  fp = E::BinOpExpr(BinOp::ADD, E::Num(1),
+                                            E::BinOpExpr(BinOp::POW, E::Call("tan", {u}), E::Num(2)));
+            else if (e.name == "asin") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
+                                            E::Call("sqrt", {E::BinOpExpr(BinOp::SUB, E::Num(1),
+                                              E::BinOpExpr(BinOp::POW, u, E::Num(2)))}));
+            else if (e.name == "acos") fp = E::Neg(E::BinOpExpr(BinOp::DIV, E::Num(1),
+                                            E::Call("sqrt", {E::BinOpExpr(BinOp::SUB, E::Num(1),
+                                              E::BinOpExpr(BinOp::POW, u, E::Num(2)))})));
+            else if (e.name == "atan") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
+                                            E::BinOpExpr(BinOp::ADD, E::Num(1),
+                                              E::BinOpExpr(BinOp::POW, u, E::Num(2))));
+            else if (e.name == "log")  fp = E::BinOpExpr(BinOp::DIV, E::Num(1), u);
+            else if (e.name == "sqrt") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
+                                            E::BinOpExpr(BinOp::MUL, E::Num(2), E::Call("sqrt", {u})));
+            else if (e.name == "abs")  fp = E::BinOpExpr(BinOp::DIV, E::Call("abs", {u}), u);
+            else                       return nullptr; // unknown function
+            return E::BinOpExpr(BinOp::MUL, fp, du);
+        }
+
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    return nullptr;
+}
+
+// Convenience wrapper: differentiate then simplify. Returns nullptr if the
+// underlying `symbolic_diff` returns nullptr (signal for callers).
+inline ExprPtr symbolic_diff_simplified(const Expr& e, const std::string& var) {
+    auto raw = symbolic_diff(e, var);
+    return raw ? simplify(raw) : nullptr;
 }
 
 // ============================================================================

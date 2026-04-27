@@ -11353,6 +11353,262 @@ void test_provenance_plumbing() {
     }
 }
 
+// ---- Symbolic differentiation (Future #6) ----
+
+// Helper: parse, differentiate w.r.t. var, simplify, stringify.
+static std::string diff_str(const std::string& src, const std::string& var) {
+    const auto* e = parse(src);
+    const auto* d = symbolic_diff_simplified(*e, var);
+    return d ? expr_to_string(d) : "<null>";
+}
+
+void test_symbolic_diff_per_class() {
+    SECTION("symbolic_diff: per-AST-class derivatives");
+
+    // BLOCKING #4: per-AST-class derivatives
+    ASSERT_EQ(diff_str("x^2", "x"), "2 * x", "diff(x^2, x) = 2*x");
+    ASSERT_EQ(diff_str("a*x + b", "x"), "a", "diff(a*x + b, x) = a");
+    ASSERT_EQ(diff_str("x*sin(x)", "x"), "sin(x) + x * cos(x)",
+        "diff(x*sin(x), x) = sin(x) + x*cos(x)");
+    ASSERT_EQ(diff_str("(x+1)/(x-1)", "x"), "(-2) / (x - 1)^2",
+        "diff((x+1)/(x-1), x) = -2/(x-1)^2 (negative literal printed as (-2))");
+
+    // Constants and independent variables
+    ASSERT_EQ(diff_str("5", "x"), "0", "diff(5, x) = 0");
+    ASSERT_EQ(diff_str("y", "x"), "0", "diff(y, x) = 0  (y independent)");
+    ASSERT_EQ(diff_str("x", "x"), "1", "diff(x, x) = 1");
+    ASSERT_EQ(diff_str("-x", "x"), "(-1)", "diff(-x, x) = -1 (negative literals print parenthesized)");
+}
+
+void test_symbolic_diff_per_builtin() {
+    SECTION("symbolic_diff: per-builtin derivatives");
+
+    // BLOCKING #5: per-builtin derivatives
+    ASSERT_EQ(diff_str("sin(x)", "x"), "cos(x)", "diff(sin(x), x) = cos(x)");
+    ASSERT_EQ(diff_str("cos(x)", "x"), "-(sin(x))", "diff(cos(x), x) = -sin(x)");
+    ASSERT_EQ(diff_str("log(x)", "x"), "1 / x", "diff(log(x), x) = 1/x");
+    // Simplifier folds 1/2 → 0.5
+    ASSERT_EQ(diff_str("sqrt(x)", "x"), "0.5 / sqrt(x)",
+        "diff(sqrt(x), x) = 1/(2*sqrt(x)) = 0.5/sqrt(x) after simplify");
+    // Simplifier reorders 1 - x^2 → -(x^2) + 1 in the canonical additive form
+    ASSERT_EQ(diff_str("asin(x)", "x"), "1 / sqrt(-(x^2) + 1)",
+        "diff(asin(x), x) = 1/sqrt(1 - x^2)");
+}
+
+void test_symbolic_diff_chain_rule() {
+    SECTION("symbolic_diff: chain rule via FUNC_CALL");
+
+    // BLOCKING #6: chain rule
+    // Simplifier puts function calls before plain Vars in multiplicative ordering
+    ASSERT_EQ(diff_str("sin(x^2)", "x"), "2 * cos(x^2) * x",
+        "diff(sin(x^2), x) = 2*x*cos(x^2)");
+}
+
+void test_symbolic_diff_higher_order() {
+    SECTION("symbolic_diff: higher-order via composition");
+
+    // BLOCKING #7: higher-order via composition (no diff(f, x, n) sugar)
+    const auto* e = parse("x^3");
+    const auto* d1 = symbolic_diff_simplified(*e, "x");
+    ASSERT(d1 != nullptr, "first derivative non-null");
+    if (!d1) return;  // guard before deref; ASSERT does not abort
+    const auto* d2 = symbolic_diff_simplified(*d1, "x");
+    ASSERT(d2 != nullptr, "second derivative non-null");
+    if (!d2) return;
+    ASSERT_EQ(expr_to_string(d2), "6 * x", "diff(diff(x^3, x), x) = 6*x");
+}
+
+void test_symbolic_diff_xpow_rule() {
+    SECTION("symbolic_diff: x^a/x^b rewrite rule");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // BLOCKING #12: diff(x^3, x) = 3*x^2 (NOT 3*x^3/x)
+    ASSERT_EQ(diff_str("x^3", "x"), "3 * x^2",
+        "diff(x^3, x) simplifies to 3*x^2 via x^a/x^b rule");
+}
+
+void test_symbolic_diff_abs() {
+    SECTION("symbolic_diff: abs derivative + sign builtin");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // BLOCKING #11: abs derivative correctness — simplifies to sign(x)
+    ASSERT_EQ(diff_str("abs(x)", "x"), "sign(x)",
+        "diff(abs(x), x) → sign(x) via abs(x)/x rule");
+
+    // sign(0) is well-defined (returns 0), sign(±x) is ±1
+    auto e_sign = parse("sign(x)");
+    auto sub_zero = substitute(e_sign, "x", Expr::Num(0.0));
+    auto v_zero = evaluate(*simplify(sub_zero));
+    ASSERT(v_zero.has_value(), "evaluate sign(0) is well-defined");
+    ASSERT_NUM(v_zero.value(), 0.0, "sign(0) = 0");
+    auto v_pos = evaluate(*simplify(substitute(e_sign, "x", Expr::Num(3.0))));
+    ASSERT_NUM(v_pos.value(), 1.0, "sign(3) = 1");
+    auto v_neg = evaluate(*simplify(substitute(e_sign, "x", Expr::Num(-2.0))));
+    ASSERT_NUM(v_neg.value(), -1.0, "sign(-2) = -1");
+}
+
+void test_symbolic_diff_desirable_nice() {
+    SECTION("symbolic_diff: DESIRABLE/NICE expectations");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // DESIRABLE #14: diff(sin(sin(x)), x) = cos(sin(x)) * cos(x)
+    ASSERT_EQ(diff_str("sin(sin(x))", "x"), "cos(sin(x)) * cos(x)",
+        "diff(sin(sin(x)), x) = cos(sin(x)) * cos(x)");
+
+    // NICE #16: diff(c^x, x) — constant base, variable exponent — gives c^x * log(c)
+    // (general formula: l^r * (r' * log(l) + r * l'/l) reduces to r' * log(l) * l^r when l' = 0)
+    ASSERT_EQ(diff_str("2^x", "x"), "0.6931471806 * 2^x",
+        "diff(2^x, x) = log(2) * 2^x");
+}
+
+void test_symbolic_diff_surface1_inline() {
+    SECTION("symbolic_diff: Surface 1 — diff() inline in .fw");
+
+    // BLOCKING #8: Surface 1 — distance = velocity*time; sensitivity = diff(distance, time)
+    {
+        write_fw("/tmp/tdiff_s1.fw",
+            "distance = velocity * time\n"
+            "sensitivity = diff(distance, time)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tdiff_s1.fw");
+        auto result = sys.derive("sensitivity", {}, {{"velocity", "velocity"}, {"time", "time"}});
+        ASSERT_EQ(result, "velocity",
+            "Surface 1: sensitivity resolves to velocity");
+    }
+
+    // Inline diff (no named-var indirection): diff(x^2 + 1, x)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = diff(x^2 + 1, x)\n");
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT_EQ(result, "2 * x",
+            "Surface 1: y = diff(x^2 + 1, x) → 2*x");
+    }
+}
+
+void test_symbolic_diff_surface2_cli() {
+    SECTION("symbolic_diff: Surface 2 — diff(...)=? CLI query");
+
+    // BLOCKING #9: CLI query target
+    write_fw("/tmp/tdiff_s2.fw", "distance = velocity * time\n");
+
+    // Use parse_cli_query to verify the syntax is recognized.
+    // The actual main.cpp dispatch is exercised separately via end-to-end runs.
+    auto q = parse_cli_query("/tmp/tdiff_s2.fw(diff(distance, time)=?, velocity=5)");
+    ASSERT(q.diff_queries.size() == 1, "parse_cli_query: 1 diff query");
+    if (q.diff_queries.size() == 1) {
+        ASSERT_EQ(q.diff_queries[0].var, "time", "diff target var = time");
+    }
+}
+
+void test_symbolic_diff_surface2_e2e() {
+    SECTION("symbolic_diff: Surface 2 — end-to-end binary roundtrip");
+
+    // BLOCKING #9 end-to-end: shell out to the CLI to confirm the entire
+    // pipeline (parse_cli_query → load → post-load diff rewrite → resolve)
+    // produces the user-visible answer.
+    write_fw("/tmp/tdiff_e2e.fw", "distance = velocity * time\n");
+
+    auto run_cli = [](const std::string& argv) {
+        std::string cmd = "./bin/fwiz '" + argv + "' 2>/dev/null";
+        FILE* p = popen(cmd.c_str(), "r");
+        if (!p) return std::string("<popen-failed>");
+        std::string out; char buf[256];
+        while (fgets(buf, sizeof(buf), p)) out += buf;
+        pclose(p);
+        // strip trailing whitespace
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+            out.pop_back();
+        return out;
+    };
+
+    // Numeric: bindings provided
+    ASSERT_EQ(run_cli("/tmp/tdiff_e2e.fw(diff(distance, time)=?, velocity=5)"),
+              "diff_time = 5",
+              "Surface 2 numeric: diff(distance, time)=? with velocity=5 → 5");
+
+    // Symbolic: no bindings, alias provided
+    ASSERT_EQ(run_cli("/tmp/tdiff_e2e.fw(diff(distance, time)=?slope)"),
+              "slope = velocity",
+              "Surface 2 symbolic: diff(distance, time)=?slope → velocity");
+
+    // DESIRABLE #15 (round-trip): output line, copy-pasted as a new
+    // equation, parses without error.
+    {
+        FormulaSystem sys;
+        sys.load_string("distance = velocity * time\nslope = velocity\n");
+        ASSERT(sys.equations.size() == 2,
+            "Surface 2 round-trip: 'slope = velocity' parses as a normal equation");
+    }
+}
+
+void test_symbolic_diff_unfold_formula_call() {
+    SECTION("symbolic_diff: Surface 1 — diff(formula_call, var) post-load unfold");
+
+    // BLOCKING #10: unfold-then-diff for formula call
+    write_fw("/tmp/tdiff_kine.fw",
+        "distance = velocity * time + 0.5 * a * time^2\n");
+    write_fw("/tmp/tdiff_caller.fw",
+        "tdiff_kine(distance=?d, velocity=velocity, time=time, a=a)\n"
+        "slope = diff(d, time)\n");
+    FormulaSystem sys;
+    sys.load_file("/tmp/tdiff_caller.fw");
+    auto result = sys.derive("slope", {},
+        {{"velocity", "velocity"}, {"time", "time"}, {"a", "a"}});
+    ASSERT_EQ(result, "velocity + a * time",
+        "Surface 1: slope unfolds via formula call, diff'd by time");
+}
+
+void test_symbolic_diff_provenance() {
+    SECTION("symbolic_diff: results commit through solved_symbolic_");
+
+    // BLOCKING #13: --steps trace shows symbolic form
+    // Using the Trace infrastructure: trace.show_steps() → outputs the chain.
+    write_fw("/tmp/tdiff_prov.fw",
+        "distance = velocity * time\n"
+        "sensitivity = diff(distance, time)\n");
+
+    // Trace prints to std::cerr — capture both streams BEFORE load_file
+    // (the post-load pass and trace_loaded both emit during load).
+    std::ostringstream captured;
+    auto* old_cerr = std::cerr.rdbuf(captured.rdbuf());
+    auto* old_cout = std::cout.rdbuf(captured.rdbuf());
+    FormulaSystem sys;
+    sys.trace.level = TraceLevel::STEPS;  // --steps equivalent
+    sys.load_file("/tmp/tdiff_prov.fw");
+    try {
+        sys.resolve_all("sensitivity", {{"velocity", 5.0}, {"time", 3.0}});
+    // NOLINTNEXTLINE(bugprone-empty-catch) — diff resolves to symbolic; numeric resolve may emit failure trace, that is fine
+    } catch (const std::runtime_error&) {}
+    std::cerr.rdbuf(old_cerr);
+    std::cout.rdbuf(old_cout);
+
+    std::string out = captured.str();
+    // Visionary invariant: --steps trace must reveal the symbolic form
+    // (`equation: sensitivity = velocity`) — i.e. diff() rewrote the RHS at
+    // load time, so the equation appears in the post-load trace dump in its
+    // simplified symbolic form, not as a literal `diff(...)` placeholder.
+    ASSERT(out.find("sensitivity = velocity") != std::string::npos,
+        "PROV-DIFF: --steps trace shows 'sensitivity = velocity' (post-load diff rewrite)");
+    ASSERT(out.find("diff(") == std::string::npos,
+        "PROV-DIFF: --steps trace does NOT contain raw 'diff(' (the rewrite happened)");
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -11618,6 +11874,20 @@ int main() {
 
     // Provenance plumbing — trace/final consistency (Known-Issues #6 cycle)
     test_provenance_plumbing();
+
+    // Symbolic differentiation (Future #6 cycle)
+    test_symbolic_diff_per_class();
+    test_symbolic_diff_per_builtin();
+    test_symbolic_diff_chain_rule();
+    test_symbolic_diff_higher_order();
+    test_symbolic_diff_xpow_rule();
+    test_symbolic_diff_abs();
+    test_symbolic_diff_desirable_nice();
+    test_symbolic_diff_surface1_inline();
+    test_symbolic_diff_surface2_cli();
+    test_symbolic_diff_surface2_e2e();
+    test_symbolic_diff_unfold_formula_call();
+    test_symbolic_diff_provenance();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

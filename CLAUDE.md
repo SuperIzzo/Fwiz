@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2237+)
+make test         # run all tests (2272+)
 make sanitize     # ASan + UBSan
 make analyze      # clang-tidy (zero warnings expected)
 ```
@@ -46,6 +46,8 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 **Symbolic provenance carrier:** `solved_symbolic_` (`mutable map<string, ExprPtr>`) and `aliases_` (`mutable map<string, double>`) on `FormulaSystem` carry symbolic forms and the alias-resolution table alongside the numeric `bindings` map, so `--steps`/`--calc` trace sites render from the same ExprPtr as final output — trace and final cannot disagree. `fmt_trace(double, ExprPtr=nullptr, key="")` is the single unified render helper.
 
 **Two evaluators:** `Checked<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns empty via NaN sentinel — not a separate bool. `Checked<T>` (expr.h:30-89) is a NaN-sentinel optional: `sizeof(Checked<double>) == sizeof(double)` (8 bytes vs 16 for `std::optional<double>`); `has_value()` / `operator bool` to test; `.value()` to unwrap (asserts on empty in debug); `.value_or_nan()` is the deliberate boundary escape for handing off to the pure-double numerical root-finder layer — its use is grep-worthy and should stay rare. `ExprPtr evaluate_symbolic(const Expr&)` — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued.
+
+**Symbolic differentiation:** `symbolic_diff(const Expr&, const std::string& var) → ExprPtr` (expr.h) — two-level dispatch: per-AST-class switch for ADD/SUB/MUL/DIV/POW/NEG, inline if-chain for FUNC_CALL covering 9 builtins (sin, cos, tan, asin, acos, atan, log, sqrt, abs). Returns `nullptr` for unrecognized FUNC_CALLs (signal to the post-load pass). `symbolic_diff_simplified` wrapper calls `simplify()` on the result. Post-load pass `resolve_diff_in_equations` (system.h) rewrites `diff(named_var, x)` and `diff(formula_call, x)` nodes after all equations parse and rewrite rules load. Two API surfaces: (1) `sensitivity = diff(force, mass)` as an in-file builtin; (2) `diff(target, var)=?[alias]` as a CLI query target dispatched in `main.cpp`. `--derive` is unchanged — `diff(f, x)` is the symbolic-differentiation surface; no new `--diff` flag was added. `sign(x)` registered as a builtin with `sign_eval` numeric evaluator. Three new rules in `BUILTIN_REWRITE_RULES`: `x^a/x^b = x^(a-b) iff x != 0`, `abs(x)/x = sign(x) iff x != 0`, `abs(x)/x = undefined iff x = 0`.
 
 **Pattern matcher:** `match_pattern()` with commutative flattened matching. Variables in patterns are wildcards; builtin constants match literally. Supports N-term additive permutation search and multiplicative coefficient extraction.
 
