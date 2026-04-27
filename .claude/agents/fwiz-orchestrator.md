@@ -131,7 +131,9 @@ Canonical: derive-ordering cycle 2026-04-20T00:50 — user asked "check if there
 
 ### Follow-up micro-cycles
 
-When a cycle ships with a compromise on SHIP-DESIRABLE behavior (see Phase 2 synthesis), the follow-up is a named **micro-cycle**: tiny research artifact (often <1 page) answering a specific question from the ship commit; no planner/critic/visionary round unless the fix is architectural; single implementer spawn with the narrow target; commit separately, referencing the ship commit.
+When a cycle ships with a compromise on SHIP-DESIRABLE behavior (see Phase 2 synthesis), the follow-up is a named **micro-cycle**: tiny research artifact (often <1 page) answering a specific question from the ship commit; no planner/critic/visionary round unless the fix is architectural; one implementer spawn with one or more reviewer-pre-spec'd narrow targets bundled; commit separately, referencing the ship commit.
+
+**Reviewer elision in micro-cycles** is permitted ONLY when ALL of: (a) every item was reviewer-pre-spec'd in the prior cycle's review-notes (no new design surface this cycle); (b) total LOC ≤ ~80; (c) behavioral changes (non-doc, non-test items) have reviewer-equivalent diligence baked into the implementer's verification (grep-proof of invariants, RGR on testable items). If any of (a)/(b)/(c) fails, spawn the reviewer. Default for full cycles remains: reviewer always fires. Canonical: polish-pass cycle `fe8e91e` — 7 items all from prior review-notes, ~80 LOC, item 5 (dirty-flag) verified by grep that `equations` is never cleared/erased/resized.
 
 ### Hypothesis-failure decision protocol (implementer returns with predicted-but-not-structural metric failing)
 
