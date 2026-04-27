@@ -25,6 +25,8 @@ Append every significant action to `.fwiz-workflow/orchestrator-log.md` — the 
 
 Log every: agent spawn (prompt summary + context in/out), bash command (with why + fg/bg), phase transition (trigger), synthesis decision (what you kept/changed/discarded), user decision, duplicate-operation avoided. Be honest — log errors and misjudgments.
 
+**Auto-mode logging discipline.** Under auto-mode (continuous execution, fewer user round-trips), action density rises and the gap between actions shrinks; the temptation to skip the log entry "until the next pause" is strong. Resist it. The cycle's orchestrator-log is the meta-reviewer's PRIMARY evidence stream — silent post-IMPLEMENT phases mean the meta-review depends on assistant text in `next-priorities.md` instead of timestamped action records, and second-hand summaries can't be cross-verified. Concrete rule: every agent spawn AND every agent return gets a log entry, regardless of mode. If you find yourself entering Phase 4 (REVIEW) without a closing IMPLEMENT entry on disk, append one before spawning the review trio. Canonical miss: Symbolic Differentiation cycle 2026-04-27 — orchestrator-log stopped at the IMPLEMENT-spawn entry; the IMPLEMENT-complete, doc-updater + perf-auditor returns, analyze launch, reviewer return, and orchestrator self-fix were all undocumented in the log; meta-review reconstructed them from `next-priorities.md` summary instead of contemporaneous evidence.
+
 ## Phase Flow
 
 `USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → repeat`. User drives transitions; after each phase, present findings and wait for approval before advancing.
@@ -169,7 +171,7 @@ Merge all three into `.fwiz-workflow/review-notes.md`. Present to user.
 
 ## Phase 5: PLAN-NEXT
 
-When review completes or user asks "what's next": (1) read `.fwiz-workflow/review-notes.md`, docs/Future.md, docs/Known-Issues.md; (2) write `.fwiz-workflow/next-priorities.md` with Completed, Issues from review, Top 3 priorities (ranked by impact), Recommended next (single item + research question); (3) ask "Should I research {recommended item}?"
+When review completes or user asks "what's next": (1) read `.fwiz-workflow/review-notes.md`, docs/Future.md, docs/Known-Issues.md; (2) **carry forward unresolved SHIP-DESIRABLE items**: read the PRIOR cycle's `next-priorities.md` (in `archive/<prior-cycle>/` if rotated) under "reviewer-flagged follow-up items" or equivalent — for each item not picked up this cycle, restate it in this cycle's next-priorities under a "Carried over from {prior-cycle}" section, refreshed with whatever context the new cycle provides. SHIP-DESIRABLE items shipped without follow-up degrade silently otherwise: `next-priorities.md` is rotated per cycle, so an item that doesn't get picked up in cycle N+1 is invisible to cycle N+2 unless the orchestrator re-surfaces it. Canonical miss: PROV-E (provenance cycle 2026-04-26) deferred to SHIP-DESIRABLE; Symbolic Differentiation cycle 2026-04-27 did not pick it up; meta-review flagged the gap, no orchestrator-side mechanism existed to catch it; (3) write `.fwiz-workflow/next-priorities.md` with Completed, Issues from review, **Carried over from prior cycle** (if any), Top 3 priorities (ranked by impact), Recommended next (single item + research question); (4) ask "Should I research {recommended item}?"
 
 ## Phase 6: META-REVIEW (End of Cycle)
 
