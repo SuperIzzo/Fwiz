@@ -327,6 +327,53 @@ int main(int argc, const char* argv[]) {
             }
         }
 
+        // --- Pass 1.5: diff(...)=? CLI queries (Future #6) ---
+        // Each `diff(target, var)=?[alias]` is rewritten as a synthetic
+        // equation `<alias> = diff(target, var)` injected via load_string
+        // (idempotent — a fresh load on the same system appends, doesn't
+        // reset). The post-load pass simplifies it; subsequent resolve()
+        // produces either a symbolic form (if bindings are missing) or a
+        // numeric value (if all free vars are bound).
+        if (!query.diff_queries.empty()) {
+            std::string injected;
+            for (const auto& dq : query.diff_queries) {
+                injected += dq.alias + " = diff(" + dq.target_text + ", " + dq.var + ")\n";
+            }
+            sys.load_string(injected, "<cli-diff>");
+            for (const auto& dq : query.diff_queries) {
+                try {
+                    auto result = sys.resolve_all(dq.alias, query.bindings);
+                    if (result.is_discrete()) {
+                        auto it = sys.numeric_results_.find(dq.alias);
+                        bool exact = (it == sys.numeric_results_.end()) || it->second;
+                        for (auto r : result.discrete())
+                            std::cout << dq.alias << (exact ? " = " : " ~ ")
+                                      << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
+                        if (!result.discrete().empty())
+                            solved[dq.alias] = result.discrete()[0];
+                    } else {
+                        std::cout << dq.alias << " : " << result.to_string() << '\n';
+                    }
+                } catch (const std::runtime_error&) {
+                    // Fall back to symbolic form: print the (already-resolved)
+                    // RHS of the injected equation. The post-load pass turned
+                    // diff(...) into a derivative tree; if it can't reduce to
+                    // a number (free variables remain), we emit the symbolic
+                    // tree directly so users still get an answer.
+                    bool emitted = false;
+                    for (const auto& eq : sys.equations) {
+                        if (eq.lhs_var == dq.alias) {
+                            std::cout << dq.alias << " = "
+                                      << expr_to_string(eq.rhs) << '\n';
+                            emitted = true;
+                            break;
+                        }
+                    }
+                    if (!emitted) std::cout << dq.alias << " = ?\n";
+                }
+            }
+        }
+
         // --- Pass 2: verify ---
         if (has_verify) {
             // Determine which variables to verify

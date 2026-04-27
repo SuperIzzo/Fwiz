@@ -731,6 +731,9 @@ x^0 = 1
 x^1 = x
 x^(1/2) = sqrt(x)
 (x^a)^b = x^(a*b)
+x^a / x^b = x^(a - b) iff x != 0
+abs(x) / x = sign(x) iff x != 0
+abs(x) / x = undefined iff x = 0
 )";
 
     // Built-in function definitions — loaded as sub-systems when called.
@@ -934,7 +937,136 @@ x^(1/2) = sqrt(x)
             load_section(section);
         resolve_positional_calls();
         compute_rewrite_groups();  // regroup after user rules loaded
+        resolve_diff_in_equations();  // Future #6: rewrite diff(...) calls
         trace_loaded();
+    }
+
+    // ------------------------------------------------------------------------
+    // Post-load symbolic differentiation (Future #6)
+    //
+    // Rewrites every `diff(target, var)` call in equation RHS expressions to
+    // its derivative tree. Three cases (in order of preference):
+    //
+    //   1. `target` is a Var that is the LHS of a system equation
+    //      → substitute the equation's RHS and call `symbolic_diff_simplified`.
+    //
+    //   2. `target` is a Var that is the `output_var` of a FormulaCall
+    //      → inline the sub-system equation body via the same logic
+    //        `derive_recursive` uses (substitute call.bindings into the body).
+    //
+    //   3. Otherwise: treat `target` as a literal expression (the inline form,
+    //      e.g. `diff(x^2 + 1, x)`).
+    //
+    // Throws on `diff(<non-var second arg>, ...)` since the design forbids
+    // `d/d(<expression>)` semantics — clearer parse-time error than silent
+    // failure. Unknown function forms inside the target propagate `nullptr`
+    // from `symbolic_diff_simplified`; that is converted into a `0` sentinel
+    // so the equation remains parseable (matches the historical "treat
+    // unknown as constant" behavior, surfaced via trace).
+    // ------------------------------------------------------------------------
+    void resolve_diff_in_equations() {
+        ExprArena::Scope scope(arena);
+        for (auto& eq : equations)
+            eq.rhs = resolve_diff_calls(eq.rhs);
+    }
+
+    // Walks `e` post-order; replaces any `diff(target, var)` FUNC_CALL with the
+    // corresponding derivative tree (simplified). Recurses through children
+    // before checking the current node so nested `diff(diff(x^3, x), x)` works.
+    ExprPtr resolve_diff_calls(ExprPtr e) {
+        if (!e) return e;
+        // Recurse on children first.
+        switch (e->type) {
+            case ExprType::NUM:
+            case ExprType::VAR:
+                return e;
+            case ExprType::UNARY_NEG:
+                e->child = resolve_diff_calls(e->child);
+                return e;
+            case ExprType::BINOP:
+                e->left  = resolve_diff_calls(e->left);
+                e->right = resolve_diff_calls(e->right);
+                return e;
+            case ExprType::FUNC_CALL:
+                for (auto& a : e->args) a = resolve_diff_calls(a);
+                break;
+            case ExprType::COUNT_:
+                assert(false && "invalid ExprType");
+                return e;
+        }
+
+        // Post-children: is this a diff(...) call to rewrite?
+        if (e->name != "diff" || e->args.size() != 2) return e;
+        const Expr* target_expr = e->args[0];
+        const Expr* var_expr    = e->args[1];
+        if (!is_var(var_expr))
+            throw std::runtime_error("diff: second argument must be a variable name");
+        const std::string& var = var_expr->name;
+
+        ExprPtr derived = nullptr;
+
+        // Case 1: target is a Var that names a system equation.
+        if (is_var(target_expr)) {
+            const std::string& tname = target_expr->name;
+            for (const auto& eq : equations) {
+                if (eq.lhs_var == tname) {
+                    derived = symbolic_diff_simplified(*eq.rhs, var);
+                    break;
+                }
+            }
+            // Case 2: target is a Var that names a FormulaCall output.
+            if (!derived) {
+                for (const auto& call : formula_calls) {
+                    if (call.output_var != tname) continue;
+                    const Expr* unfolded = unfold_formula_call_for_diff(call);
+                    if (unfolded) {
+                        derived = symbolic_diff_simplified(*unfolded, var);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Case 3 (or fallback when 1/2 produced nullptr): treat target as
+        // a literal expression.
+        if (!derived) {
+            derived = symbolic_diff_simplified(*target_expr, var);
+        }
+
+        // If everything failed (unknown function inside target, etc.), keep
+        // the original `diff(...)` call so downstream stages can surface a
+        // useful error rather than a silent zero.
+        if (!derived) {
+            trace.step("  diff: cannot differentiate " + expr_to_string(target_expr)
+                       + " w.r.t. " + var + " — keeping symbolic form");
+            return e;
+        }
+        return derived;
+    }
+
+    // Inline a FormulaCall body into the parent scope: substitute the
+    // call.bindings (sub-system var → parent expr) into the sub-system
+    // equation RHS that produces `call.query_var`. Mirrors the FORMULA_FWD
+    // unfold path in `derive_recursive` (system.h ~line 2860). Returns the
+    // unfolded ExprPtr or nullptr if no matching sub-system equation exists.
+    ExprPtr unfold_formula_call_for_diff(const FormulaCall& call) const {
+        try {
+            auto& sub_sys = load_sub_system(call.file_stem);
+            for (auto& eq : sub_sys.equations) {
+                if (eq.lhs_var != call.query_var) continue;
+                ExprPtr unfolded = eq.rhs;
+                for (auto& [sv, pe] : call.bindings)
+                    unfolded = substitute(unfolded, sv, pe);
+                for (auto& [k, v] : sub_sys.defaults) {
+                    if (call.bindings.count(k)) continue;
+                    if (k == call.query_var) continue;
+                    unfolded = substitute(unfolded, k, Expr::Num(v));
+                }
+                return simplify(unfolded);
+            }
+        // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system load failure → leave unfolded null, caller falls through to literal-expression path
+        } catch (const std::runtime_error&) {}
+        return nullptr;
     }
 
     void load_string(const std::string& source, const std::string& label = "<inline>",
@@ -3553,11 +3685,23 @@ struct CLIQueryVar {
     bool strict = false;    // ?! mode — error if multiple results
 };
 
+// Future #6: `diff(target_expr, var)=?[alias]` CLI query target.
+//   target_expr is the unparsed expression text (parsed at dispatch time
+//                against the loaded FormulaSystem's arena).
+//   var        is the differentiation variable.
+//   alias      is the output name (default: "diff_<var>").
+struct CLIDiffQuery {
+    std::string target_text;
+    std::string var;
+    std::string alias;
+};
+
 struct CLIQuery {
     std::string filename;
     std::string section;        // section name (from file.section syntax)
     std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
+    std::vector<CLIDiffQuery> diff_queries;  // Future #6: diff(...)=? targets
     std::map<std::string, double> bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
 };
@@ -3660,6 +3804,32 @@ inline CLIQuery parse_cli_query(const std::string& input,
         if (name.empty())
             throw std::runtime_error("Missing variable name in '" + arg + "'");
 
+        // Future #6: `diff(target_expr, var)=?[alias]` — match the literal
+        // prefix `diff(` and require a trailing `)`. The target/var split
+        // happens at parse-line time using the same comma-at-depth-0 rule.
+        if (val.size() >= 1 && val[0] == '?'
+            && name.size() > 5 && name.compare(0, 5, "diff(") == 0
+            && name.back() == ')') {
+            std::string inner = name.substr(5, name.size() - 6);
+            int pd = 0; size_t comma_pos = std::string::npos;
+            for (size_t i = 0; i < inner.size(); i++) {
+                if (inner[i] == '(') pd++;
+                else if (inner[i] == ')') pd--;
+                else if (inner[i] == ',' && pd == 0) { comma_pos = i; break; }
+            }
+            if (comma_pos == std::string::npos)
+                throw std::runtime_error("diff(): expected target and variable separated by ','");
+            std::string target = trim(inner.substr(0, comma_pos));
+            std::string dvar   = trim(inner.substr(comma_pos + 1));
+            if (target.empty() || dvar.empty())
+                throw std::runtime_error("diff(): missing target or variable");
+            std::string rest = trim(val.substr(1));
+            if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — diff is single-result
+            std::string alias = rest.empty() ? ("diff_" + dvar) : rest;
+            q.diff_queries.push_back({target, dvar, alias});
+            continue;
+        }
+
         if (val.size() >= 1 && val[0] == '?') {
             // Query: "x=?" or "x=?!" or "x=?alias" or "x=?!alias"
             bool strict = false;
@@ -3707,7 +3877,7 @@ inline CLIQuery parse_cli_query(const std::string& input,
         }
     }
 
-    if (q.queries.empty() && !allow_no_queries)
+    if (q.queries.empty() && q.diff_queries.empty() && !allow_no_queries)
         throw std::runtime_error("No query variable (use var=?)");
     return q;
 }

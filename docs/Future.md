@@ -14,7 +14,7 @@ See Developer.md.
 
 **Remaining enhancements:**
 - Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
-- Symbolic differentiation for exact Newton derivatives (currently uses finite differences)
+- Symbolic differentiation for exact Newton derivatives — infrastructure ready (M4 micro-cycle). `symbolic_diff` is now available; wire it into `newton_solve` as an opt-in exact-Jacobian path.
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
 ## 5. Batch/Table Mode
@@ -57,42 +57,21 @@ Multiple range inputs → cartesian product (or zip mode with `--zip`).
 - Plotting data (pipe to gnuplot: `fwiz --table ... | gnuplot`)
 - Sensitivity analysis: how does output change across input range?
 
-## 6. Symbolic Differentiation
+## 6. Symbolic Differentiation — ✅ DONE (2026-04-26)
 
-### Problem
+`symbolic_diff(const Expr&, const std::string& var) → ExprPtr` (expr.h). Two-level dispatch: per-AST-class switch for ADD/SUB/MUL/DIV/POW/NEG, inline if-chain for FUNC_CALL covering 9 builtins (sin, cos, tan, asin, acos, atan, log, sqrt, abs). `symbolic_diff_simplified` wrapper calls `simplify()` on the result. Returns `nullptr` for unknown FUNC_CALLs — used as a "leave-symbolic" signal by the post-load pass.
 
-Sensitivity analysis ("how much does C change per unit change in a?") requires derivatives. Currently impossible without external tools.
+Post-load pass `resolve_diff_in_equations` (system.h): rewrites `diff(named_var, x)` and `diff(formula_call_placeholder, x)` nodes after all equations and rewrite rules are loaded. Handles three target shapes: Var-as-equation RHS, Var-as-formula-call output, and literal expression.
 
-### Proposed syntax
+Two API surfaces:
+1. In-file builtin: `sensitivity = diff(force, mass)` — parser-level recognition replaces the call with the differentiated tree at load time.
+2. CLI query: `fwiz kinematic.fw 'diff(distance, time)=?'` — `CLIDiffQuery` struct in `parse_cli_query`; dispatched in `main.cpp` Pass 1.5 by injecting a synthetic equation then running the post-load pass. Falls back to printing the symbolic expression when free variables remain.
 
-```bash
-fwiz --derive triangle(dC/da=?, a=a, b=b, c=c)
-```
+`solved_symbolic_` carries derivative results (confirmed via `test_symbolic_diff_provenance`), validating the pre-positioned carrier.
 
-Or as a built-in function in .fw files:
-```
-sensitivity = diff(force, mass)    # ∂force/∂mass
-```
+Three new rewrite rules in `BUILTIN_REWRITE_RULES`: `x^a / x^b = x^(a-b) iff x != 0` (pulled forward from Future #5 scope), `abs(x) / x = sign(x) iff x != 0`, `abs(x) / x = undefined iff x = 0`. `sign(x)` registered as a new builtin with `sign_eval` numeric evaluator.
 
-### Implementation
-
-Derivative rules on the expression tree (standard calculus):
-- `d/dx(x) = 1`, `d/dx(c) = 0`
-- `d/dx(f + g) = f' + g'`
-- `d/dx(f * g) = f'*g + f*g'` (product rule)
-- `d/dx(f / g) = (f'*g - f*g') / g^2` (quotient rule)
-- `d/dx(f^n) = n * f^(n-1) * f'` (chain rule + power)
-- `d/dx(sin(f)) = cos(f) * f'`, etc.
-
-The expression tree already supports all needed operations. The derivative is itself an ExprPtr that goes through the simplifier.
-
-### Synergy with numeric solving
-
-Newton's method currently uses finite differences for `f'(x)`. Symbolic differentiation would provide exact derivatives — faster convergence and more accurate results. This is a drop-in improvement to the existing numeric solver.
-
-### Extension point pre-positioned
-
-`solved_symbolic_` (the parallel ExprPtr carrier added in the provenance-plumbing cycle) is the natural commit target for `diff(...)` results. When a derivative is computed, the binding commit writes the derivative ExprPtr into `solved_symbolic_[target]` exactly as algebraic results do today — no API change needed.
+Tests: 2237 → 2272 (+35). Newton-exact-Jacobian drop-in remains a near-term M4 micro-cycle — see #4 remaining enhancements.
 
 ## 7. Units and Dimensional Analysis
 
@@ -222,7 +201,7 @@ Each is a future minimalism target — remove duplicated logic, single source of
 
 When `evaluate()` gains a `bindings` parameter (symbolic substitution during evaluation), extend `evaluate_symbolic` with the same signature. Keep them twin APIs — every numeric projection has an exact sibling.
 
-For the solver binding track specifically: `solved_symbolic_` (`src/system.h`) is already the parallel ExprPtr map that the provenance-plumbing cycle shipped for trace output. The trace use case has landed; matrix bindings simply need to add their leaf type to `expr_to_string` dispatch — the carrier itself requires no structural change.
+For the solver binding track specifically: `solved_symbolic_` (`src/system.h`) is already the parallel ExprPtr map that the provenance-plumbing cycle shipped for trace output. The symbolic-differentiation cycle (#6) confirmed that `diff(...)` results commit into `solved_symbolic_` exactly as algebraic results do — no API change was needed. Matrix bindings simply need to add their leaf type to `expr_to_string` dispatch; the carrier itself requires no structural change.
 
 ## 11. Curve Fitting — ✅ DONE
 
@@ -773,6 +752,30 @@ sets the file's preferred cap. CLI `--cse N` would still override.
 **Reopen trigger**: a user reports the default cap of 3 is wrong for their
 domain AND a different `value` formula would not fix it (i.e. the cap
 itself is the issue, not the ranking).
+
+## 47. Higher-order `diff(f, x, n)` sugar
+
+`diff(diff(f, x), x)` already works via composition — the output of `symbolic_diff` is a valid expression that can be fed back into `symbolic_diff`. A sugar form `diff(f, x, 3)` would expand to `n` nested calls at parse time. Opt-in when a third argument is present; the two-argument form is unchanged.
+
+**Reopen trigger:** a user requests the shorthand, OR a `--derive` use case requires high-order derivatives (e.g. Taylor series output).
+
+## 48. Generic `resolve_at_load(rewriter)` mechanism
+
+`resolve_diff_in_equations` (system.h) is the first post-load tree-rewriter. When a second consumer wants the same pattern — integrals (#16), units (#7), LaTeX hints (#9) — factor out the recursive visitor into a `resolve_at_load(rewriter_fn)` primitive that `FormulaSystem::load_with_sections()` invokes for each registered rewriter in order.
+
+**Reopen trigger:** a second feature needs a post-load tree-rewriting pass.
+
+## 49. Per-builtin metadata registry
+
+`symbolic_diff`'s FUNC_CALL case is an inline if-chain over 9 builtin names. When a second consumer of per-builtin metadata appears (e.g. an antiderivative table for future #16, or a LaTeX renderer for #9), refactor the chain into a shared registry (`map<string, BuiltinMeta>`) that stores derivative rule, antiderivative rule, and LaTeX form together.
+
+**Reopen trigger:** a second consumer of per-builtin metadata (antiderivative table, LaTeX rendering, dimensional annotation) enters a planning cycle.
+
+## 50. `diff(formula_call, var)` corner cases
+
+The post-load pass (`resolve_diff_in_equations`) inlines formula-call bodies for `diff(formula_call_placeholder, var)` via `unfold_formula_call_for_diff`. Corner cases deferred: piecewise formula calls (multiple RHS branches — which branch to differentiate?), multi-return formula calls (which output var?), and formula calls with expression bindings that themselves contain `diff`. Revisit when Future #20 typed FORMULA_CALL nodes land (giving stable node identity for the chain rule), or when >2 user reports of unexpected behavior surface.
+
+**Reopen trigger:** Future #20 (typed FORMULA_CALL nodes) enters a planning cycle, OR >2 user reports of unexpected `diff(formula_call, var)` behavior.
 
 ## Interaction with existing features
 
