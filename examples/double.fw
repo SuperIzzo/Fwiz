@@ -1,0 +1,2 @@
+[double(x) -> result]
+result = x * 2
