@@ -1,0 +1,80 @@
+# derivatives.fw — Symbolic differentiation showcase
+#
+# Demonstrates the `diff(f, x)` builtin and `diff(...)=?` CLI query form.
+# `diff(named_var, x)` looks up the named equation and differentiates its
+# RHS — users write the math, fwiz unfolds and differentiates symbolically.
+#
+# Try (numeric — bind every free variable):
+#
+#   fwiz 'examples/derivatives.fw(velocity=?, v0=10, a=9.81, t=2)'
+#       # → velocity = 1481 / 50    (= 29.62 m/s)
+#
+#   fwiz 'examples/derivatives.fw(acceleration=?, a=9.81)'
+#       # → acceleration = 981 / 100
+#
+# Try (symbolic — list unbound vars as bare names, use --derive):
+#
+#   fwiz --derive 'examples/derivatives.fw(velocity=?, distance, t, v0, a)'
+#       # → velocity = v0 + a * t
+#
+#   fwiz --derive 'examples/derivatives.fw(circumference=?, area_circle, r)'
+#       # → circumference = 2 * pi * r
+#
+# Try (`diff(...)=?` CLI form — ad-hoc sensitivity, no .fw edit needed):
+#
+#   fwiz 'examples/derivatives.fw(diff(distance, t)=?, v0=10, a=9.81, t=2)'
+#       # → diff_t = 1481 / 50    (instantaneous velocity at t=2)
+#
+#   fwiz 'examples/derivatives.fw(diff(kinetic_energy, v)=?, m=5, v=10)'
+#       # → diff_v = 50           (marginal KE at v=10)
+#
+#   fwiz 'examples/derivatives.fw(diff(area_circle, r)=?, r=3)'
+#       # → diff_r = 6 * pi       (circumference at r=3)
+#
+# Try (inline diff of CLI-supplied expression — no file lookup needed):
+#
+#   fwiz 'examples/derivatives.fw(diff(x^3 + 2*x^2 + x + 1, x)=?)'
+#       # → diff_x = 3 * x^2 + 4 * x + 1
+#
+#   fwiz 'examples/derivatives.fw(diff(sin(x) * cos(x), x)=?)'
+#       # → diff_x = cos(x)^2 - sin(x)^2
+#
+# See the work:
+#
+#   fwiz --steps 'examples/derivatives.fw(velocity=?, v0=10, a=9.81, t=2)'
+
+# --- Kinematics: position, velocity, acceleration ---
+# Position under constant acceleration:
+distance = v0 * t + 0.5 * a * t ^ 2
+
+# Velocity is the time-derivative of position.
+# fwiz looks up `distance` in the equation table, substitutes its RHS,
+# differentiates with respect to t. Result: v0 + a * t.
+velocity = diff(distance, t)
+
+# Acceleration is the time-derivative of velocity (= d²x/dt²).
+# Higher-order via composition — no special syntax needed.
+acceleration = diff(velocity, t)
+
+# --- Energy: a function of velocity ---
+# Kinetic energy as a function of velocity (independent variable v
+# rather than t, so we can ask "how does KE change with speed?").
+kinetic_energy = 0.5 * m * v ^ 2
+
+# Marginal KE: how much extra energy per unit increase in velocity?
+# diff(0.5 * m * v^2, v) = m * v.
+marginal_ke = diff(kinetic_energy, v)
+
+# --- Geometry: derivatives reveal classic relationships ---
+# Area of a circle as a function of radius:
+area_circle = pi * r ^ 2
+
+# d(area)/dr = 2*pi*r — exactly the circumference. The derivative of
+# area w.r.t. radius IS the boundary curve. (Same for sphere → surface,
+# cube → faces, etc. — a deep geometric fact.)
+circumference = diff(area_circle, r)
+
+volume_sphere = 4 / 3 * pi * r ^ 3
+
+# d(volume)/dr = 4*pi*r^2 — the surface area of the sphere.
+surface_sphere = diff(volume_sphere, r)
