@@ -14,7 +14,7 @@ See Developer.md.
 
 **Remaining enhancements:**
 - Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
-- Symbolic differentiation for exact Newton derivatives — infrastructure ready (M4 micro-cycle). `symbolic_diff` is now available; wire it into `newton_solve` as an opt-in exact-Jacobian path.
+- Newton now uses symbolic derivatives automatically when `try_resolve_numeric` calls `symbolic_diff_simplified`; finite-diff is the fallback when `symbolic_diff_simplified` returns `nullptr` (e.g., unrecognized function). No further wiring needed.
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
 ## 5. Batch/Table Mode

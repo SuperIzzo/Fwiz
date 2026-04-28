@@ -184,7 +184,7 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 - FUNC_CALL inline if-chain (9 builtins): sin → `cos(u) * u'`, cos → `-sin(u) * u'`, tan → `u' / cos(u)^2`, asin → `u' / sqrt(1-u^2)`, acos → `-u' / sqrt(1-u^2)`, atan → `u' / (u^2+1)`, log → `u' / u`, sqrt → `u' / (2 * sqrt(u))`, abs → `abs(u)/u * u'` (requiring `sign` builtin + two rewrite rules).
 - Returns `nullptr` for unknown or multi-arg FUNC_CALL nodes — the post-load pass treats `nullptr` as a "leave-symbolic" signal.
 
-**symbolic_diff_simplified(const Expr&, const std::string& var) → ExprPtr** — Thin wrapper that calls `symbolic_diff` then `simplify()`. Use this at call sites that want a canonical result; use `symbolic_diff` directly when the caller will do its own simplification pass.
+**symbolic_diff_simplified(const Expr&, const std::string& var) → ExprPtr** — Thin wrapper that calls `symbolic_diff` then `simplify()`. Use this at call sites that want a canonical result; use `symbolic_diff` directly when the caller will do its own simplification pass. Called once per query by `try_resolve_numeric` (`system.h`) before `find_numeric_roots`: if non-null, the result is wrapped in a `std::function` lambda and passed as the optional `fp` parameter to Newton's method, giving quadratic convergence (2 evaluations per iteration instead of 3). If `symbolic_diff_simplified` returns `nullptr` (unrecognized function), `fp` stays null and Newton falls back to central finite-differences transparently.
 
 **sign(x)** — New builtin registered in `builtin_functions()` (expr.h). `sign_eval` numeric evaluator returns −1, 0, or +1 per IEEE-754 sign comparison; NaN propagates. Symbolic-only intent: appears in derivative of `abs(x)` as `abs(x)/x = sign(x) iff x != 0`.
 
@@ -294,7 +294,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2272+ tests organized into functional tests, edge cases, and robustness groups:
+2288+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -355,7 +355,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2272+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2288+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

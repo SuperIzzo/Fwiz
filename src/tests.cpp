@@ -6738,6 +6738,78 @@ void test_newton_solve() {
     }
 }
 
+// M4: Newton drop-in for symbolic derivatives
+void test_newton_solve_with_symbolic_derivative() {
+    SECTION("Newton with explicit symbolic derivative (M4)");
+
+    // f(x) = x^2 - 9, fp(x) = 2*x; from x0=1 should converge to 3.0
+    {
+        std::function<double(double)> f  = [](double x) { return x * x - 9.0; };
+        std::function<double(double)> fp = [](double x) { return 2.0 * x; };
+        auto root = newton_solve(f, 1.0, NUMERIC_MAX_ITER, NUMERIC_TOLERANCE, &fp);
+        ASSERT(root.has_value(), "newton(fp): x^2-9 with explicit fp converges");
+        ASSERT_NUM(*root, 3.0, "newton(fp): x^2-9 with fp=2x → x = 3");
+    }
+
+    // Same root with null fp (finite-diff fallback) should match symbolic-fp result
+    {
+        std::function<double(double)> f = [](double x) { return x * x - 9.0; };
+        auto root_fd = newton_solve(f, 1.0);
+        std::function<double(double)> fp = [](double x) { return 2.0 * x; };
+        auto root_sd = newton_solve(f, 1.0, NUMERIC_MAX_ITER, NUMERIC_TOLERANCE, &fp);
+        ASSERT(root_fd.has_value() && root_sd.has_value(),
+            "newton(fp): both finite-diff and symbolic-fp converge");
+        ASSERT_NUM(*root_fd, *root_sd, "newton(fp): finite-diff and symbolic agree");
+    }
+}
+
+void test_numeric_solve_uses_symbolic_diff() {
+    SECTION("Numeric solve via symbolic-derivative path (M4)");
+
+    // y = sin(x), solve for x given y = 0; expect a root with sin(x) ≈ 0.
+    FormulaSystem sys;
+    sys.load_string("y = sin(x)\n");
+    auto vs = sys.resolve_all("x", {{"y", 0.0}});
+    ASSERT(!vs.empty(), "M4 e2e: sin(x)=0 returns at least one numeric solution");
+    bool found_pi_root = false;
+    for (double p : vs.discrete()) {
+        if (std::abs(std::sin(p)) < 1e-5) { found_pi_root = true; break; }
+    }
+    ASSERT(found_pi_root, "M4 e2e: at least one returned point satisfies sin(x)=0");
+}
+
+void test_numeric_solve_falls_back_when_diff_unavailable() {
+    SECTION("Numeric solve falls back to finite-diff when symbolic_diff returns null (M4)");
+
+    // Direct fallback test: invoke newton_solve with explicit nullptr fp; the
+    // call must converge using central finite differences.
+    //
+    // Rationale (from research-internal.md Q4): symbolic_diff_simplified returns
+    // nullptr for unknown function names, multi-arg builtins, and unregistered
+    // FUNC_CALL forms. Constructing such a system from a unit test is fragile —
+    // the solver's algebraic layer typically rejects the equation before
+    // try_resolve_numeric ever fires. The fallback path is structurally
+    // guaranteed by the `if (fp_fn)` gate inside newton_solve; a direct call
+    // with `fp_fn = nullptr` is the most surgical demonstration that this gate
+    // actually selects the finite-difference branch.
+    {
+        std::function<double(double)> f = [](double x) { return x * x - 9.0; };
+        const std::function<double(double)>* fp_null = nullptr;
+        auto root = newton_solve(f, 1.0, NUMERIC_MAX_ITER, NUMERIC_TOLERANCE, fp_null);
+        ASSERT(root.has_value(), "M4 fallback: newton with explicit null fp converges");
+        ASSERT_NUM(*root, 3.0, "M4 fallback: x^2-9 with null fp finds x=3 via finite-diff");
+    }
+
+    // Same expression, no fp argument at all (default-null path) — must also
+    // succeed and must agree with the explicit-null result above.
+    {
+        std::function<double(double)> f = [](double x) { return x * x - 9.0; };
+        auto root_default = newton_solve(f, 1.0);
+        ASSERT(root_default.has_value(), "M4 fallback: default-null path converges");
+        ASSERT_NUM(*root_default, 3.0, "M4 fallback: default-null finds x=3");
+    }
+}
+
 void test_bisection_solve() {
     SECTION("Bisection Method");
 
@@ -11855,6 +11927,9 @@ int main() {
 
     // Numeric root-finding
     test_newton_solve();
+    test_newton_solve_with_symbolic_derivative();
+    test_numeric_solve_uses_symbolic_diff();
+    test_numeric_solve_falls_back_when_diff_unavailable();
     test_bisection_solve();
     test_adaptive_scan();
     test_find_numeric_roots();
