@@ -3289,11 +3289,25 @@ private:
                 return evaluate(*simplify(subst)).value_or_nan();
             };
 
+            // M4: compute symbolic derivative once and pass to newton_solve.
+            // If symbolic_diff_simplified returns null (unknown function, etc.),
+            // fp_ptr stays null and Newton uses central finite differences.
+            ExprPtr d_expr = symbolic_diff_simplified(*expr, target);
+            std::function<double(double)> fp_fn;
+            const std::function<double(double)>* fp_ptr = nullptr;
+            if (d_expr) {
+                fp_fn = [&, d_expr](double x) -> double {
+                    ExprPtr subst = substitute(d_expr, target, Expr::Num(x));
+                    return evaluate(*simplify(subst)).value_or_nan();
+                };
+                fp_ptr = &fp_fn;
+            }
+
             if (try_integer) {
-                roots = find_numeric_roots(f, lo, hi, true, numeric_samples);
+                roots = find_numeric_roots(f, lo, hi, true, numeric_samples, fp_ptr);
                 if (!roots.empty()) goto filter;
             }
-            roots = find_numeric_roots(f, lo, hi, false, numeric_samples);
+            roots = find_numeric_roots(f, lo, hi, false, numeric_samples, fp_ptr);
             if (!roots.empty()) goto filter;
         }
 

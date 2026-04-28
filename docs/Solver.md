@@ -99,7 +99,7 @@ Enabled by default. Kicks in when algebraic strategies can't isolate the target 
 
 1. **Adaptive grid scan**: sample the search range at `--precision` points (default 200); identify sign changes
 2. **Bisection**: bracket each sign change
-3. **Newton's method**: refine to machine precision
+3. **Newton's method**: refine to machine precision. When a symbolic derivative is available (`symbolic_diff_simplified` in `expr.h` returns non-null), Newton uses it directly — quadratic convergence with 2 evaluations per iteration. Falls back to central finite-differences when no symbolic derivative exists (e.g., custom `@extern` functions).
 
 Re-entrance guard prevents stack overflow when a numeric solve recursively calls another numeric solve. Results are memoized.
 

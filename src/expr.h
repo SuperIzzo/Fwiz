@@ -2509,19 +2509,26 @@ inline double snap_integer(double x, double tol = EPSILON_ZERO) {
 }
 
 // Newton's method: solve f(x) = 0 starting from x0.
-// Uses central finite differences for derivative.
+// Optional `fp_fn` supplies the analytic derivative; when null, central finite
+// differences are used (default behavior, byte-identical to the pre-M4 path).
 inline std::optional<double> newton_solve(
         const std::function<double(double)>& f, double x0,
-        int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE) {
+        int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE,
+        const std::function<double(double)>* fp_fn = nullptr) {
     double x = x0;
     for (int i = 0; i < max_iter; i++) {
         double fx = f(x);
         if (std::isnan(fx) || std::isinf(fx)) return std::nullopt;
         if (std::abs(fx) < tol) return snap_integer(x);
 
-        // Central difference derivative
-        double h = std::max(1e-8, std::abs(x) * 1e-8);
-        double fp = (f(x + h) - f(x - h)) / (2.0 * h);
+        double fp;
+        if (fp_fn) {
+            fp = (*fp_fn)(x);
+        } else {
+            // Central difference derivative
+            double h = std::max(1e-8, std::abs(x) * 1e-8);
+            fp = (f(x + h) - f(x - h)) / (2.0 * h);
+        }
         if (std::isnan(fp) || std::isinf(fp) || std::abs(fp) < 1e-15)
             return std::nullopt; // flat or singular — can't continue
 
@@ -2645,9 +2652,12 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
 
 // Find all numeric roots of f(x) = 0 in [lo, hi].
 // Uses adaptive scan to find intervals, then refines with Newton/bisection.
+// Optional `fp_fn` is the analytic derivative passed through to newton_solve;
+// null falls back to central finite differences.
 inline std::vector<double> find_numeric_roots(
         const std::function<double(double)>& f, double lo, double hi,
-        bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES) {
+        bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES,
+        const std::function<double(double)>* fp_fn = nullptr) {
     auto intervals = adaptive_scan(f, lo, hi, integer_only, n_samples);
     std::vector<double> roots;
 
@@ -2671,7 +2681,7 @@ inline std::vector<double> find_numeric_roots(
         } else {
             // Try Newton from midpoint, fallback to bisection
             double mid = (a + b) / 2.0;
-            root = newton_solve(f, mid);
+            root = newton_solve(f, mid, NUMERIC_MAX_ITER, NUMERIC_TOLERANCE, fp_fn);
             if (!root || *root < a - 1.0 || *root > b + 1.0)
                 root = bisection_solve(f, a, b);
         }
