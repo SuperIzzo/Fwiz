@@ -129,6 +129,8 @@ The core of the system. Contains:
 
 **ValueSet** — unified representation for conditions, ranges, and solutions. Intervals (open/closed, half-infinite) + discrete points. Operations: intersect, union, filter, contains. Returned by `resolve_all()`.
 
+**`Condition` / `CondClause` / `CondOp` / `CondLogic`** — Condition AST structs. Defined in `expr.h` after `ValueSet` and before `RewriteRule`. Moved from `system.h` in the T1 cycle, mirroring the existing `ValueSet` split: data and evaluation live in `expr.h`; parsing (`parse_condition`) stays in `system.h` because it uses `Lexer`/`Parser`. `check_condition(const Condition&, numeric_bindings)` is a free function in `expr.h` that evaluates a condition AST against numeric bindings; clauses with unbound wildcards return `nullopt` (treated as satisfied, same permissive default as before). `condition_to_string(const Condition&, expr_bindings)` serializes a condition AST with wildcard bindings substituted inline (using `expr_to_string`); used by `apply_rewrite_rules` to record assumption strings for `--steps`/`--calc` output. `RewriteRule::condition` is `std::optional<Condition>`, parsed once at rule-load time — not re-parsed per match attempt.
+
 **collect_vars()** — Collects all variable names in a tree into a set. Used by the solver to find what needs resolving.
 
 **contains_var()** — Direct recursive search for a variable. Returns at first hit with no allocation — unlike `collect_vars`, this doesn't build a set.
@@ -147,9 +149,18 @@ The core of the system. Contains:
 
 **canonicity_score(ExprPtr)** — Lex pair `{leaf_count, non_integer_num_count}` measuring expression complexity. Lower is simpler/more canonical. `leaf_count` is the primary key (size first); `non_integer_num_count` is the secondary tiebreaker (penalizes raw decimal literals). Integer `NUM` leaves are not penalized on the secondary key. Used by `derive_all` to sort output ascending — simplest formulas first — and to break ties when two candidates share a fingerprint.
 
-**substitute()** — Replaces a named variable with an expression throughout the tree.
+**substitute()** — Replaces a named variable with an expression throughout the tree. Implemented via `tree_map_leaf`.
 
-**substitute_builtin_constants()** — Tree walk; replaces Var nodes whose names appear in `builtin_constants()` (`pi`, `e`, `phi`) with their Num values. Used by the `--approximate` derive path before re-simplification. Other Var nodes pass through unchanged.
+**substitute_builtin_constants()** — Tree walk; replaces Var nodes whose names appear in `builtin_constants()` (`pi`, `e`, `phi`) with their Num values. Used by the `--approximate` derive path before re-simplification. Other Var nodes pass through unchanged. Implemented via `tree_map_leaf`.
+
+**`tree_map<Fn>` / `tree_map_leaf<Fn>`** — Two post-order tree-rewrite templates in `expr.h` (before the `substitute` section). Both use a pointer-equality short-circuit: if no child node changed, the original parent pointer is returned without reconstructing the node — zero allocations on the no-match path.
+
+- `tree_map<Fn>(ExprPtr, Fn)` — calls `fn` on every node *after* its children have been rewritten. Use when the transform may match any node shape (interior or leaf). Current consumers: `cse_replace` (matches subtrees by `expr_equal`), `resolve_diff_calls` in `system.h` (matches `FUNC_CALL` nodes named `"diff"`).
+- `tree_map_leaf<Fn>(ExprPtr, Fn)` — calls `fn` only on `NUM`/`VAR` terminals; passes interior nodes through structurally without invoking `fn`. Use when the transform targets only leaves and the per-node guard (`if (!is_var(node)) return node`) would otherwise be repeated at every call site. Current consumers: `substitute` (replaces `VAR` by name), `substitute_builtin_constants` (replaces `VAR` by builtin lookup), `expr_recognize_constants` in `fit.h` (replaces `NUM` by constant recognition).
+
+`expand_for_var` is the explicit non-consumer: its MUL-distribution logic inspects the *reconstructed* `l`/`r` child shapes after recursion to decide whether to distribute — a post-recurse sibling dependency that cannot be expressed as a pure per-node lambda. It stays as a hand-written recursive function.
+
+When adding a new tree pass, prefer a `.fw` rewrite rule first (per CLAUDE.md "simplification over filtration"). Reach for `tree_map`/`tree_map_leaf` only when the transform cannot be expressed as a pattern match on a static LHS. Baseline after T1: 5 consumers total; >7 without rule-equivalence justification triggers re-review (see Future.md T1 reopen triggers).
 
 **simplify()** — Algebraic simplification, run to fixpoint (max 20 iterations, checked via `expr_equal`). Rules:
 - Constant folding: `2 + 3 → 5`
@@ -160,7 +171,7 @@ The core of the system. Contains:
 - Negation factoring via `simplify_neg_pair()`: handles `(-a)⊗(-b) → a⊗b`, `(-a)⊗b → -(a⊗b)`, `a⊗(-b) → -(a⊗b)` for both MUL and DIV in a single shared function
 - Structural fractions: `Num(a) / Num(b)` preserved as `DIV(Num(a), Num(b))` when result is non-integer; GCD-normalized, sign in numerator. Rational arithmetic via `to_rational()` and `make_rational()` helpers. `flatten_multiplicative()` treats structural fractions as opaque factors.
 - Negative-exponent normalization: `rebuild_multiplicative` splits the factor list by exponent sign — positive exponents go into a numerator product, negative exponents (sign-flipped) go into a denominator product — and emits `DIV(num, denom)` when any negative-exp factors are present. `MUL(a, POW(b, Num(-1)))` → `a / b`; `MUL(a, POW(b, Num(-2)))` → `a / b^2`. This is a rebuilder invariant, not a rewrite rule; it fires wherever `flatten_multiplicative` rebuilds a MUL chain.
-- Data-driven rewrite rules (`BUILTIN_REWRITE_RULES` string, 23 rules): applied after the structural rules above via `apply_rewrite_rules`. The two Tier 1 additions (G1: `k * x / (k * y) = x / y iff k != 0` and G3: `x / (1 / y) = x * y iff y != 0`) close numeric-common-factor cancellation and unit-fraction-denominator rewriting respectively. Rules with `iff cond` check `condition_violated` against the current numeric bindings; if the result is `-1` (condition undetermined — variable is symbolic, sign unknown), the rule fires permissively. This is intentional: `sqrt(x)^2 = x iff x >= 0` simplifies `sqrt(a)^2` to `a` even when `a` has no known sign, because the alternative — leaving the `sqrt^2` wrapper intact — adds no information and blocks downstream fingerprint dedup. The semantic cost is accepted: the condition annotation documents the domain constraint without enforcing it for symbolic unknowns. Rules that must NOT fire for unknown-sign variables (e.g. `abs(x) = x iff x >= 0`) require a principled domain-propagation mechanism before they can be added; see Future #31.
+- Data-driven rewrite rules (`BUILTIN_REWRITE_RULES` string, 23 rules): applied after the structural rules above via `apply_rewrite_rules`. The two Tier 1 additions (G1: `k * x / (k * y) = x / y iff k != 0` and G3: `x / (1 / y) = x * y iff y != 0`) close numeric-common-factor cancellation and unit-fraction-denominator rewriting respectively. Rules with `iff cond` evaluate `check_condition` against numeric bindings built from the current pattern match; clauses with unbound wildcards return `nullopt` (treated as satisfied — permissive for symbolic unknowns). This is intentional: `sqrt(x)^2 = x iff x >= 0` simplifies `sqrt(a)^2` to `a` even when `a` has no known sign, because the alternative — leaving the `sqrt^2` wrapper intact — adds no information and blocks downstream fingerprint dedup. The semantic cost is accepted: the condition annotation documents the domain constraint without enforcing it for symbolic unknowns. Rules that must NOT fire for unknown-sign variables (e.g. `abs(x) = x iff x >= 0`) require a principled domain-propagation mechanism before they can be added; see Future #31.
 
 **decompose_linear()** — The key insight for solving. Decomposes an expression into `coeff * target + rest` where `coeff` and `rest` are free of the target variable. This works by walking the expression tree:
 - `VAR(target)` → coeff=1, rest=0
@@ -294,7 +305,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2288+ tests organized into functional tests, edge cases, and robustness groups:
+2299+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -355,7 +366,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2288+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2299+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 

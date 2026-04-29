@@ -562,6 +562,31 @@ stdlib/
     hypothesis.fw       # t-test, chi-squared, p-values
 ```
 
+## T1 Cleanup Cycle — ✅ DONE (2026-04-28, net −279 LOC)
+
+Three structural cleanup milestones shipped. Zero behavior changes except the `||` correctness fix in M3.
+
+- **T1.1 (M3):** Condition parsing unified on the existing `Condition` AST. `RewriteRule::condition` changed from `std::string` to `std::optional<Condition>`. `condition_violated` and `substitute_condition` deleted (−114 LOC string-substitution reimplementations of `check_condition` and expression substitution). `Condition`/`CondClause`/`CondOp`/`CondLogic` structs and `check_condition` moved from `system.h` into `expr.h` (after `ValueSet`, before `RewriteRule`), mirroring the existing ValueSet split. `parse_condition` stays in `system.h` (uses Lexer/Parser). `condition_to_string(const Condition&, bindings)` helper added in `expr.h` for `--steps`/`--calc` assumption strings. Silent `||` bug in rewrite-rule conditions closed (old string scanner split only on `&&`; AST path correctly evaluates `||`). Test 11 in `test_rewrite_rules` is the witness case.
+- **T1.2 (M2):** Five near-identical post-order tree walkers (`substitute`, `cse_replace`, `substitute_builtin_constants`, `expr_recognize_constants`, `resolve_diff_calls`) replaced by two narrow templates in `expr.h`: `tree_map<Fn>` (full-tree post-order, used by `cse_replace` and `resolve_diff_calls`) and `tree_map_leaf<Fn>` (leaf-only, used by the three VAR/NUM-matching walkers). Pointer-equality short-circuit is now universal. `expand_for_var` not migrated — its MUL-distribution logic inspects post-recurse sibling shapes, not a pure leaf transform. 4 new ASSERTs in `test_tree_map_primitives` pin the pointer-identity invariant.
+- **T1.3 (M1):** `FWIZ_TRACE_SOLVER` instrumentation deleted from `system.h` (−185 LOC). Removed: `fwiz_trace_solver()`, `MAX_DIAGNOSTIC_SOLVE_DEPTH`, `diag_keyset_str`, `diag_set_str`, `diag_expr_preview`, `dump_dead_ends`, and ~45 `if (fwiz_trace_solver())` guard sites in `derive_recursive`, `solve_all`, `solve_recursive`, `try_resolve`, `try_resolve_numeric`.
+
+**Reopen triggers (carry forward to T2+ cycles):**
+
+- **T2.1** (`approximate_mode` sub-system non-propagation, `system.h:420-421`) — trigger: user reports `--approximate` output differs between parent and sub-system formula call. Fix: propagate on set OR `SolveContext` struct (T4.2).
+- **T2.2** (`static int call_counter` shared across instances, `system.h:893`) — trigger: any test creating two `FormulaSystem` instances in the same process and checking `_fc` variable naming for structural equality. Fix: move counter to `FormulaSystem` as `int next_call_id_ = 0`.
+- **T2.3** (`const_cast<ExprPtr>` at `system.h:3692`) — trigger: `expr_recognize_constants` ever adds a mutation (new node type, memoization write). Fix: widen `expr_recognize_constants` to accept `const Expr*`.
+- **T3.1** (`recognize_constant` table rebuilt per call, `fit.h:265-271`) — trigger: profiling shows `fit.h` allocations in hot path. Fix: promote to file-scope `static const std::map` per `feedback_constant_table.md`.
+- **T3.2** (`expr_to_string` on simplifier hot path, `expr.h:1479`) — trigger: profiling shows string allocations dominating `simplify_div`. Fix: store `ExprPtr` in `SimplifyAssumption`, defer `expr_to_string` to output site.
+- **T3.3** (`cse_extract` keys by string, `system.h:277`) — trigger: `--cse` output is visibly slow on large derive results (>50 candidates). Fix: structural hash (integer mixing, no allocation).
+- **T4.1** (file split: `numeric.h` first, then `query.h`) — trigger: immediately after T1 cycle ships, or when `system.h` exceeds 4000 LOC after T1 deletions, or when a new contributor asks "where does CLI parsing live?" Post-T1, `system.h` is the larger file (~3580 LOC); extract `numeric.h` (700 LOC, newton/bisection/adaptive_scan boundary at `try_resolve_numeric`) first, then `query.h` (200 LOC, CLI query parsing) if still warranted.
+- **T4.2** (`SolveContext` struct replacing mutable mode flags) — trigger: T2.1 reopen, OR any second mutable solve-mode flag added to `FormulaSystem`. Fix: explicit `SolveContext` passed through the solve chain.
+- **T4.5** (`match_pattern` `std::function` for recursive lambdas, `expr.h:702,764,859`) — trigger: profiling shows SBO-overflow heap allocations in `match_pattern` (23 rules × 20 nodes per simplify = ~460 calls per node). Fix: named struct with recursive member functions.
+- **`tree_map` creep guard** — trigger: a new `tree_map`/`tree_map_leaf` caller is added in a subsequent cycle without first checking whether a `.fw` rewrite rule subsumes it. Baseline: 5 callers post-T1. Threshold: >7 callers without rule-equivalence justification triggers re-review.
+- **Condition-in-expr.h spread** — trigger: a second non-rewrite-rule consumer in `expr.h` starts holding `Condition` (e.g. simplifier internals consulting global conditions per Future.md #31). At that point, "should `Condition` be a first-class part of the simplifier contract?" is open and warrants design.
+- **M3 description-string regression** — trigger: a user reports a `--steps`/`--calc` trace where the assumption text is less informative post-T1. Fix: `condition_to_string` is already the intended solution; trigger fires only if its output is itself unsatisfactory.
+
+---
+
 ## 23. `group_like` contract inversion (expr.h)
 
 The two lambdas at expr.h:1259/1267 carry `// cppcheck-suppress constParameterReference` because they expose a `double&` write-back interface (`val(x) -> double&`). Structural fix: invert the contract to a `combine(dst, src)` callable — callee receives destination + source, writes the merged value directly, no reference escape. Eliminates both suppressions without silencing cppcheck.
@@ -608,7 +633,7 @@ Drop derive candidates whose `leaf_count > sum(source_equation_rhs_leaf_counts)`
 
 Blocked by permissive-condition behavior breaking existing `abs` tests (`tests.cpp:8289` asserts `simplify(abs(abs(x))) == "abs(x)"` but with the rule becomes `"x"`; `tests.cpp:8291` asserts `simplify(abs(-x)) == "abs(x)"` but becomes `"x"`). The existing rule `abs(-x) = abs(x)` fires first, then `abs(x) = x iff x >= 0` (condition undetermined → permissive) fires on the result. This is a semantic correctness question — dropping sign info from `abs(-x)` is a soundness bug for unknown-sign symbolic `x`. The existing failing tests are specifications: `abs` preserves sign information until we have a principled way to discharge it.
 
-**Reopen trigger:** when global-condition propagation to the simplifier is implemented (specifically when `condition_violated` can query `global_conditions` for domain bounds). The long-term form is `abs(x) = x iff known(x >= 0)` — guarded rather than permissive. When domain-propagation ships, the tests at `tests.cpp:8289/8291` naturally pass (`x` is unknown-sign so the guard blocks) while `abs(x) where x >= 0` simplifies as expected.
+**Reopen trigger:** when global-condition propagation to the simplifier is implemented (specifically when `check_condition` can query `global_conditions` for domain bounds). The long-term form is `abs(x) = x iff known(x >= 0)` — guarded rather than permissive. When domain-propagation ships, the tests at `tests.cpp:8289/8291` naturally pass (`x` is unknown-sign so the guard blocks) while `abs(x) where x >= 0` simplifies as expected.
 
 ## 32. Category C architectural tautology — derivation over-enumeration
 

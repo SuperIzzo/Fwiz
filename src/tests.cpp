@@ -355,6 +355,38 @@ void test_substitute() {
     ASSERT_EQ(expr_to_string(r6), "a + b", "sub missing var is no-op");
 }
 
+// ---- tree_map / tree_map_leaf primitives (M2) ----
+//
+// Pointer-equality short-circuit invariants. The whole point of the templates
+// is that the no-match path returns the input pointer without rebuilding the
+// tree. These tests pin that contract directly.
+
+void test_tree_map_primitives() {
+    SECTION("tree_map / tree_map_leaf identity short-circuit");
+
+    // Identity transform on a non-trivial tree returns the same pointer.
+    auto e1 = parse("sin(x^2 + y) - 3 * z");
+    const auto* r1 = tree_map(e1, [](ExprPtr n) { return n; });
+    ASSERT(r1 == e1, "tree_map identity returns same pointer (no rebuild)");
+
+    auto e2 = parse("sin(x^2 + y) - 3 * z");
+    const auto* r2 = tree_map_leaf(e2, [](ExprPtr n) { return n; });
+    ASSERT(r2 == e2, "tree_map_leaf identity returns same pointer (no rebuild)");
+
+    // tree_map_leaf with a no-match lambda (looks for var "y" but tree has only
+    // "x" leaves and a Num) — interior nodes must pass through structurally.
+    auto e3 = Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Var("x"));
+    const auto* r3 = tree_map_leaf(e3, [](ExprPtr n) {
+        return (is_var(n) && n->name == "y") ? Expr::Num(99) : n;
+    });
+    ASSERT(r3 == e3, "tree_map_leaf no-match returns same pointer (interior pass-through)");
+
+    // tree_map with no-match on full tree.
+    auto e4 = parse("a + b * c");
+    const auto* r4 = tree_map(e4, [](ExprPtr n) { return n; });
+    ASSERT(r4 == e4, "tree_map identity on BINOP tree returns same pointer");
+}
+
 // ---- collect_vars / contains_var tests ----
 
 void test_var_helpers() {
@@ -8807,7 +8839,10 @@ void test_rewrite_rules() {
         ExprArena::Scope scope(arena);
         auto pattern = Expr::BinOpExpr(BinOp::DIV, Expr::Var("x"), Expr::Var("x"));
         auto replacement = Expr::Num(1);
-        sys.rewrite_rules.push_back({pattern, replacement, "x/x = 1", "x != 0"});
+        Condition cond_x_ne_0;
+        cond_x_ne_0.clauses.push_back({Expr::Var("x"), Expr::Num(0), CondOp::NE});
+        sys.rewrite_rules.push_back({pattern, replacement, "x/x = 1",
+                                     std::optional<Condition>(std::move(cond_x_ne_0)), false, -1});
 
         sys.load_string("y = a / a\n");
         auto results = sys.derive_all("y", {}, {{"a", "a"}});
@@ -8881,6 +8916,66 @@ void test_rewrite_rules() {
                 && a.desc.find("b > 0") != std::string::npos)
                 found = true;
         ASSERT(found, "compound condition: 'a > 0 && b > 0' recorded");
+    }
+
+    // 11. Disjunctive condition (||) — pre-M3 silently misapplied; AST path fixes it.
+    // Rule: nonzero(x) = 1 iff x > 0 || x < 0   (i.e., x != 0)
+    {
+        FormulaSystem sys;
+        sys.load_string("nonzero(x) = 1 iff x > 0 || x < 0\n");
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+
+        // x = 5 (positive branch satisfied) → should fire
+        const auto* e_pos = simplify(parse("nonzero(5)"));
+        ASSERT(expr_to_string(e_pos) == "1",
+            "|| rule: nonzero(5) → 1 (got " + expr_to_string(e_pos) + ")");
+
+        // x = -5 (negative branch satisfied) → should fire
+        const auto* e_neg = simplify(parse("nonzero(-5)"));
+        ASSERT(expr_to_string(e_neg) == "1",
+            "|| rule: nonzero(-5) → 1 (got " + expr_to_string(e_neg) + ")");
+
+        // x = 0 (neither branch satisfied) → must NOT fire (the closed-bug witness)
+        const auto* e_zero = simplify(parse("nonzero(0)"));
+        ASSERT(expr_to_string(e_zero) != "1",
+            "|| rule: nonzero(0) NOT rewritten to 1 (got " + expr_to_string(e_zero) + ")");
+    }
+
+    // 12. condition_to_string round-trips Condition AST with bindings substituted inline.
+    {
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        // Build "x > 0 && y != 1" directly as a Condition AST.
+        Condition cond;
+        cond.clauses.push_back({Expr::Var("x"), Expr::Num(0), CondOp::GT});
+        cond.clauses.push_back({Expr::Var("y"), Expr::Num(1), CondOp::NE});
+        cond.connectors.push_back(CondLogic::AND);
+        std::map<std::string, ExprPtr> binds = {
+            {"x", Expr::Num(5)},
+            {"y", Expr::Num(2)},
+        };
+        std::string s = condition_to_string(cond, binds);
+        // Substituted form should reflect bound numeric values for x and y.
+        ASSERT(s.find("5") != std::string::npos && s.find("> 0") != std::string::npos,
+            "condition_to_string: x->5 substituted in '> 0' clause (got '" + s + "')");
+        ASSERT(s.find("2") != std::string::npos && s.find("!= 1") != std::string::npos,
+            "condition_to_string: y->2 substituted in '!= 1' clause (got '" + s + "')");
+        ASSERT(s.find(" && ") != std::string::npos,
+            "condition_to_string: && connector preserved (got '" + s + "')");
+    }
+
+    // 13. condition_to_string handles || connector
+    {
+        ExprArena arena;
+        ExprArena::Scope scope(arena);
+        Condition cond;
+        cond.clauses.push_back({Expr::Var("x"), Expr::Num(0), CondOp::GT});
+        cond.clauses.push_back({Expr::Var("x"), Expr::Num(0), CondOp::LT});
+        cond.connectors.push_back(CondLogic::OR);
+        std::map<std::string, ExprPtr> binds = {{"x", Expr::Num(7)}};
+        std::string s = condition_to_string(cond, binds);
+        ASSERT(s.find(" || ") != std::string::npos,
+            "condition_to_string: || connector preserved (got '" + s + "')");
     }
 }
 
@@ -11757,6 +11852,7 @@ int main() {
     test_evaluate();
     test_simplify();
     test_substitute();
+    test_tree_map_primitives();
     test_var_helpers();
     test_decompose();
     test_solve_for();

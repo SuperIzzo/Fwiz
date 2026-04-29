@@ -30,80 +30,6 @@ inline std::string trim(const std::string& s) {
 //  Formula system
 // ============================================================================
 
-enum class CondOp : uint8_t { GT, GE, LT, LE, EQ, NE, COUNT_ };
-enum class CondLogic : uint8_t { AND, OR };
-
-struct CondClause {
-    ExprPtr lhs;
-    ExprPtr rhs;
-    CondOp op;
-};
-
-struct Condition {
-    std::vector<CondClause> clauses;
-    std::vector<CondLogic> connectors; // size = clauses.size() - 1
-
-    // Convert condition to a ValueSet for a specific variable
-    // Only works for simple conditions like "x > 0", "x <= 10"
-    ValueSet to_valueset(const std::string& var,
-                         const std::map<std::string, double>& bindings = {}) const {
-        ValueSet result = ValueSet::all();
-        for (size_t i = 0; i < clauses.size(); i++) {
-            const auto& c = clauses[i];
-            // Check if this clause constrains `var`
-            bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
-            bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
-            if (!lhs_is_var && !rhs_is_var) continue;
-
-            // Try to evaluate the other side
-            ExprPtr other = lhs_is_var ? c.rhs : c.lhs;
-            ExprPtr resolved = other;
-            std::set<std::string> vars;
-            collect_vars(other, vars);
-            for (auto& v : vars) {
-                if (auto it = bindings.find(v); it != bindings.end())
-                    resolved = substitute(resolved, v, Expr::Num(it->second));
-                else return ValueSet::all(); // can't evaluate — return unconstrained
-            }
-            auto val_opt = evaluate(*simplify(resolved));
-            if (!val_opt) return ValueSet::all();
-            double val = val_opt.value();
-
-            // Build ValueSet from operator (flip if var is on RHS)
-            CondOp op = c.op;
-            if (rhs_is_var) {
-                // Flip: "5 > x" becomes "x < 5"
-                switch (op) {
-                    case CondOp::GT: op = CondOp::LT; break;
-                    case CondOp::GE: op = CondOp::LE; break;
-                    case CondOp::LT: op = CondOp::GT; break;
-                    case CondOp::LE: op = CondOp::GE; break;
-                    default: break;
-                }
-            }
-
-            ValueSet clause_set;
-            switch (op) {
-                case CondOp::GT: clause_set = ValueSet::gt(val); break;
-                case CondOp::GE: clause_set = ValueSet::ge(val); break;
-                case CondOp::LT: clause_set = ValueSet::lt(val); break;
-                case CondOp::LE: clause_set = ValueSet::le(val); break;
-                case CondOp::EQ: clause_set = ValueSet::eq(val); break;
-                case CondOp::NE: clause_set = ValueSet::ne(val); break;
-                case CondOp::COUNT_: break;
-            }
-
-            // i == 0 always intersects (no prior connector); otherwise the
-            // connector at i-1 decides intersect vs unite.
-            if (i == 0 || connectors[i-1] == CondLogic::AND)
-                result = result.intersect(clause_set);
-            else
-                result = result.unite(clause_set);
-        }
-        return result;
-    }
-};
-
 struct Equation {
     std::string lhs_var;
     ExprPtr rhs;
@@ -133,28 +59,6 @@ struct FormulaCall {
 // formula calls construct their own independently (no leakage).
 using DeadEndSet = std::set<std::pair<std::string, std::set<std::string>>>;
 
-// Diagnostic helper: dump dead-end set in readable form.
-// Format: "(size=N) [(var1, {b1,b2}), (var2, {}), ...]"
-inline void dump_dead_ends(std::ostream& os, const DeadEndSet& de) {
-    os << "(size=" << de.size() << ")";
-    if (de.empty()) return;
-    os << " [";
-    bool first = true;
-    for (auto& [var, keys] : de) {
-        if (!first) os << ", ";
-        os << "(" << var << ", {";
-        bool first_k = true;
-        for (const auto& k : keys) {
-            if (!first_k) os << ",";
-            os << k;
-            first_k = false;
-        }
-        os << "})";
-        first = false;
-    }
-    os << "]";
-}
-
 // Thrown when the per-query solve budget is exhausted. Signals a critical
 // bug (should never fire in practice given dead-end sharing); distinct from
 // regular solve failures so CLI can return a dedicated exit code.
@@ -164,52 +68,6 @@ inline void dump_dead_ends(std::ostream& os, const DeadEndSet& de) {
 struct SolveBudgetExceededError : std::exception {
     const char* what() const noexcept override { return "TIMEOUT: solve budget exceeded"; }
 };
-
-// ============================================================================
-//  Diagnostic logging (gated by FWIZ_TRACE_SOLVER env var)
-// ============================================================================
-// Temporary instrumentation for diagnosing triangle-hang. When FWIZ_TRACE_SOLVER
-// is set in the environment, key solver entry / exit sites stream a concise
-// structured line to std::cerr so we can see depth, bindings, dead-end and
-// budget state. The env var is read exactly once (static-local lazy init).
-
-inline bool fwiz_trace_solver() {
-    static bool enabled = std::getenv("FWIZ_TRACE_SOLVER") != nullptr;
-    return enabled;
-}
-
-constexpr int MAX_DIAGNOSTIC_SOLVE_DEPTH = 100; // hard cap while diagnosing
-
-inline std::string diag_keyset_str(const std::map<std::string, double>& m) {
-    std::string out = "{";
-    bool first = true;
-    for (auto& [k, _] : m) {
-        if (!first) out += ",";
-        out += k;
-        first = false;
-    }
-    out += "}";
-    return out;
-}
-
-inline std::string diag_set_str(const std::set<std::string>& s) {
-    std::string out = "{";
-    bool first = true;
-    for (const auto& v : s) {
-        if (!first) out += ",";
-        out += v;
-        first = false;
-    }
-    out += "}";
-    return out;
-}
-
-inline std::string diag_expr_preview(const ExprPtr& e, size_t limit = 60) {
-    if (!e) return "<null>";
-    std::string s = expr_to_string(e);
-    if (s.size() > limit) { s.resize(limit); s += "..."; }
-    return s;
-}
 
 // ============================================================================
 //  CSE (common subexpression elimination) for --derive output (Option C)
@@ -800,29 +658,26 @@ abs(x) / x = undefined iff x = 0
 
             for (size_t idx : group.rule_indices) {
                 const auto& rule = rewrite_rules[idx];
-                if (rule.condition.empty()) {
+                if (!rule.condition.has_value()) {
                     // Unconditional rule → covers everything
                     group.exhaustive = true;
                     break;
                 }
-                try {
-                    auto cond = parse_condition(rule.condition);
-                    if (!cond) { all_have_conditions = false; continue; }
+                const Condition& cond = *rule.condition;
 
-                    // Extract constrained variables from condition
-                    for (auto& clause : cond->clauses) {
-                        std::string var;
-                        if (is_var(clause.lhs)) var = clause.lhs->name;
-                        else if (is_var(clause.rhs)) var = clause.rhs->name;
-                        if (var.empty()) continue;
+                // Extract constrained variables from condition
+                for (const auto& clause : cond.clauses) {
+                    std::string var;
+                    if (is_var(clause.lhs)) var = clause.lhs->name;
+                    else if (is_var(clause.rhs)) var = clause.rhs->name;
+                    if (var.empty()) continue;
 
-                        auto vs = cond->to_valueset(var);
-                        if (var_coverage.count(var))
-                            var_coverage[var] = var_coverage[var].unite(vs);
-                        else
-                            var_coverage[var] = vs;
-                    }
-                } catch (const std::runtime_error&) { all_have_conditions = false; }
+                    auto vs = cond.to_valueset(var);
+                    if (var_coverage.count(var))
+                        var_coverage[var] = var_coverage[var].unite(vs);
+                    else
+                        var_coverage[var] = vs;
+                }
             }
 
             if (group.exhaustive) continue;  // already set by unconditional rule
@@ -977,77 +832,59 @@ abs(x) / x = undefined iff x = 0
     }
 
     // Walks `e` post-order; replaces any `diff(target, var)` FUNC_CALL with the
-    // corresponding derivative tree (simplified). Recurses through children
-    // before checking the current node so nested `diff(diff(x^3, x), x)` works.
+    // corresponding derivative tree (simplified). The post-order tree_map
+    // recursion handles nested `diff(diff(x^3, x), x)` naturally — by the time
+    // the outer node is examined, inner diff(...) calls are already expanded.
     ExprPtr resolve_diff_calls(ExprPtr e) {
-        if (!e) return e;
-        // Recurse on children first.
-        switch (e->type) {
-            case ExprType::NUM:
-            case ExprType::VAR:
-                return e;
-            case ExprType::UNARY_NEG:
-                e->child = resolve_diff_calls(e->child);
-                return e;
-            case ExprType::BINOP:
-                e->left  = resolve_diff_calls(e->left);
-                e->right = resolve_diff_calls(e->right);
-                return e;
-            case ExprType::FUNC_CALL:
-                for (auto& a : e->args) a = resolve_diff_calls(a);
-                break;
-            case ExprType::COUNT_:
-                assert(false && "invalid ExprType");
-                return e;
-        }
+        return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+            if (node->type != ExprType::FUNC_CALL || node->name != "diff" ||
+                node->args.size() != 2) return node;
+            const Expr* target_expr = node->args[0];
+            const Expr* var_expr    = node->args[1];
+            if (!is_var(var_expr))
+                throw std::runtime_error("diff: second argument must be a variable name");
+            const std::string& var = var_expr->name;
 
-        // Post-children: is this a diff(...) call to rewrite?
-        if (e->name != "diff" || e->args.size() != 2) return e;
-        const Expr* target_expr = e->args[0];
-        const Expr* var_expr    = e->args[1];
-        if (!is_var(var_expr))
-            throw std::runtime_error("diff: second argument must be a variable name");
-        const std::string& var = var_expr->name;
+            ExprPtr derived = nullptr;
 
-        ExprPtr derived = nullptr;
-
-        // Case 1: target is a Var that names a system equation.
-        if (is_var(target_expr)) {
-            const std::string& tname = target_expr->name;
-            for (const auto& eq : equations) {
-                if (eq.lhs_var == tname) {
-                    derived = symbolic_diff_simplified(*eq.rhs, var);
-                    break;
-                }
-            }
-            // Case 2: target is a Var that names a FormulaCall output.
-            if (!derived) {
-                for (const auto& call : formula_calls) {
-                    if (call.output_var != tname) continue;
-                    const Expr* unfolded = unfold_formula_call_for_diff(call);
-                    if (unfolded) {
-                        derived = symbolic_diff_simplified(*unfolded, var);
+            // Case 1: target is a Var that names a system equation.
+            if (is_var(target_expr)) {
+                const std::string& tname = target_expr->name;
+                for (const auto& eq : equations) {
+                    if (eq.lhs_var == tname) {
+                        derived = symbolic_diff_simplified(*eq.rhs, var);
+                        break;
                     }
-                    break;
+                }
+                // Case 2: target is a Var that names a FormulaCall output.
+                if (!derived) {
+                    for (const auto& call : formula_calls) {
+                        if (call.output_var != tname) continue;
+                        const Expr* unfolded = unfold_formula_call_for_diff(call);
+                        if (unfolded) {
+                            derived = symbolic_diff_simplified(*unfolded, var);
+                        }
+                        break;
+                    }
                 }
             }
-        }
 
-        // Case 3 (or fallback when 1/2 produced nullptr): treat target as
-        // a literal expression.
-        if (!derived) {
-            derived = symbolic_diff_simplified(*target_expr, var);
-        }
+            // Case 3 (or fallback when 1/2 produced nullptr): treat target as
+            // a literal expression.
+            if (!derived) {
+                derived = symbolic_diff_simplified(*target_expr, var);
+            }
 
-        // If everything failed (unknown function inside target, etc.), keep
-        // the original `diff(...)` call so downstream stages can surface a
-        // useful error rather than a silent zero.
-        if (!derived) {
-            trace.step("  diff: cannot differentiate " + expr_to_string(target_expr)
-                       + " w.r.t. " + var + " — keeping symbolic form");
-            return e;
-        }
-        return derived;
+            // If everything failed (unknown function inside target, etc.), keep
+            // the original `diff(...)` call so downstream stages can surface a
+            // useful error rather than a silent zero.
+            if (!derived) {
+                trace.step("  diff: cannot differentiate " + expr_to_string(target_expr)
+                           + " w.r.t. " + var + " — keeping symbolic form");
+                return node;
+            }
+            return derived;
+        });
     }
 
     // Inline a FormulaCall body into the parent scope: substitute the
@@ -1488,7 +1325,7 @@ abs(x) / x = undefined iff x = 0
 
                     for (const auto& eq : sub_sys.equations) {
                         if (eq.lhs_var != c.call->query_var) continue;
-                        if (eq.condition && !sub_sys.check_condition(*eq.condition, numeric))
+                        if (eq.condition && !check_condition(*eq.condition, numeric))
                             continue;
                         ExprPtr unfolded = eq.rhs;
                         for (auto& [sv, pe] : parent_map) {
@@ -1980,24 +1817,10 @@ private:
                                    std::map<std::string, double>& bindings,
                                    std::set<std::string> visited, int depth,
                                    DeadEndSet& dead_ends) const {
-        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-            std::cerr << "[depth=" << depth << " fn=solve_all target=" << target << "]\n"
-                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
-                      << "  visited: " << diag_set_str(visited) << "\n"
-                      << "  dead_ends: ";
-            dump_dead_ends(std::cerr, dead_ends);
-            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
-        }
         if (auto it = bindings.find(target); it != bindings.end()) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
-                          << " exit=bound]\n";
             return {it->second};
         }
         if (visited.count(target)) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
-                          << " exit=visited-cycle]\n";
             return {};
         }
         visited.insert(target);
@@ -2111,24 +1934,15 @@ private:
         if (results.empty() && !missing.empty()) {
             // Part A: record dead-end — target unreachable from current bindings.
             dead_ends.insert({target, bindings_keyset(bindings)});
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
-                          << " exit=exhausted missing=" << diag_set_str(missing) << "]\n";
             std::string list;
             for (const auto& v : missing) list += (list.empty() ? "" : ", ") + ("'" + v + "'");
             throw std::runtime_error("Cannot solve for '" + target + "': no value for " + list);
         }
         if (results.empty()) {
             dead_ends.insert({target, bindings_keyset(bindings)});
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
-                          << " exit=no-equation]\n";
             throw std::runtime_error("Cannot solve for '" + target + "'");
         }
 
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=solve_all target=" << target
-                      << " exit=ok count=" << results.size() << "]\n";
         return results;
     }
     static void strip_bom(std::string& line) {
@@ -2325,59 +2139,6 @@ private:
         return cond.clauses.empty() ? std::nullopt : std::optional<Condition>(cond);
     }
 
-    // Check if a condition is satisfied given current bindings
-    static bool check_condition(const Condition& cond,
-                         const std::map<std::string, double>& bindings) {
-        auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
-            // Substitute known bindings into lhs and rhs
-            ExprPtr lhs = c.lhs, rhs = c.rhs;
-            std::set<std::string> vars;
-            collect_vars(lhs, vars);
-            collect_vars(rhs, vars);
-            auto& consts = builtin_constants();
-            for (auto& v : vars) {
-                if (auto it = bindings.find(v); it != bindings.end()) {
-                    lhs = substitute(lhs, v, Expr::Num(it->second));
-                    rhs = substitute(rhs, v, Expr::Num(it->second));
-                } else if (consts.count(v)) {
-                    // Builtin constant — evaluate() handles it, no substitution needed
-                } else {
-                    return std::nullopt; // unknown variable — can't evaluate
-                }
-            }
-            auto l_opt = evaluate(*simplify(lhs));
-            auto r_opt = evaluate(*simplify(rhs));
-            if (!l_opt || !r_opt) return std::nullopt;
-            double l = l_opt.value();
-            double r = r_opt.value();
-            switch (c.op) {
-                case CondOp::GT: return l > r;
-                case CondOp::GE: return l >= r;
-                case CondOp::LT: return l < r;
-                case CondOp::LE: return l <= r;
-                case CondOp::EQ: return std::abs(l - r) < EPSILON_ZERO;
-                case CondOp::NE: return std::abs(l - r) >= EPSILON_ZERO;
-                case CondOp::COUNT_: assert(false && "invalid CondOp"); return false;
-            }
-            return std::nullopt;
-        };
-
-        bool result = true;
-        for (size_t i = 0; i < cond.clauses.size(); i++) {
-            auto val = eval_clause(cond.clauses[i]);
-            bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
-
-            if (i == 0) {
-                result = clause_result;
-            } else {
-                auto logic = cond.connectors[i - 1];
-                if (logic == CondLogic::AND) result = result && clause_result;
-                else                         result = result || clause_result;
-            }
-        }
-        return result;
-    }
-
     void parse_line(const std::string& line) {
         // Split at condition keyword: "if", "iff", or ":" (legacy)
         // Not inside parentheses. Optional comma before if/iff.
@@ -2469,8 +2230,13 @@ private:
             auto lhs_expr = lp.parse_expr();
             auto rhs_expr = rp.parse_expr();
             std::string desc = eq_part;
-            std::string cond = (is_iff && !cond_part.empty()) ? trim(cond_part) : "";
-            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, cond, is_undefined(rhs_expr)});
+            std::optional<Condition> cond_ast;
+            if (is_iff && !cond_part.empty()) {
+                // NOLINTNEXTLINE(bugprone-empty-catch) — malformed condition at load time → store unconditional
+                try { cond_ast = parse_condition(trim(cond_part)); } catch (const std::runtime_error&) {}
+            }
+            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, std::move(cond_ast),
+                                     is_undefined(rhs_expr), -1});
             return;
         }
 
@@ -2934,49 +2700,19 @@ private:
                              std::map<std::string, ExprPtr>& bindings,
                              std::set<std::string> visited, int depth,
                              DeadEndSet& dead_ends) const {
-        // Diagnostic: hard cap to prevent true-infinite recursion during diagnosis.
-        // Only enforced when FWIZ_TRACE_SOLVER is set.
-        if (fwiz_trace_solver() && depth > MAX_DIAGNOSTIC_SOLVE_DEPTH)
-            throw std::runtime_error("Max solve depth 100 reached (diagnostic cap)");
-        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-            std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target << "]\n"
-                      << "  bindings: {";
-            bool first = true;
-            for (auto& [k, _] : bindings) {
-                if (!first) std::cerr << ",";
-                std::cerr << k;
-                first = false;
-            }
-            std::cerr << "}\n  visited: " << diag_set_str(visited) << "\n"
-                      << "  dead_ends: ";
-            dump_dead_ends(std::cerr, dead_ends);
-            std::cerr << "\n";
-        }
         if (auto it = bindings.find(target); it != bindings.end()) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
-                          << " exit=bound]\n";
             return it->second;
         }
         if (is_active_builtin(target)) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
-                          << " exit=builtin]\n";
             return Expr::Var(target);
         }
         if (visited.count(target)) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
-                          << " exit=visited-cycle]\n";
             return nullptr;
         }
         // Fix 1: pre-filter — skip if a sibling in this top-level derive
         // already discovered (target, current-bindings-keyset) is a dead-end.
         auto dead_key = std::make_pair(target, bindings_keyset(bindings));
         if (dead_ends.count(dead_key)) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
-                          << " exit=dead-end-hit]\n";
             return nullptr;
         }
         visited.insert(target);
@@ -3013,7 +2749,7 @@ private:
                             for (auto& [sv, pe] : parent_map) {
                                 if (auto v = evaluate(*pe)) cond_binds[sv] = v.value();
                             }
-                            if (!sub_sys.check_condition(*eq.condition, cond_binds))
+                            if (!check_condition(*eq.condition, cond_binds))
                                 continue;
                         }
                         // Substitute sub-system vars with parent expressions
@@ -3094,7 +2830,7 @@ private:
                             for (auto& [k, v] : bindings) {
                                 if (auto nv = evaluate(*v)) cond_binds[k] = nv.value();
                             }
-                            if (!sub_sys.check_condition(*eq.condition, cond_binds))
+                            if (!check_condition(*eq.condition, cond_binds))
                                 continue;
                         }
                         ExprPtr unfolded = eq.rhs;
@@ -3140,9 +2876,6 @@ private:
         // Fix 1: post-fail — record dead-end before returning nullptr so
         // sibling candidates in the outer query don't redundantly re-explore.
         if (!found) dead_ends.insert(dead_key);
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=derive_recursive target=" << target
-                      << " exit=" << (found ? "found" : "exhausted") << "]\n";
         return found;
     }
 
@@ -3219,15 +2952,6 @@ private:
             const Condition* eq_condition,
             DeadEndSet& dead_ends) const {
         charge_budget(); // Part C: insurance
-        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
-                      << " expr=" << diag_expr_preview(combined) << "]\n"
-                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
-                      << "  visited: " << diag_set_str(visited) << "\n"
-                      << "  dead_ends: ";
-            dump_dead_ends(std::cerr, dead_ends);
-            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
-        }
 
         // Re-entrance guard: prevent infinite recursion on coupled systems
         static thread_local std::set<std::string> numeric_active_;
@@ -3366,9 +3090,6 @@ private:
             }
         }
 
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
-                      << " exit=empty]\n";
         return {};
 
         filter:
@@ -3383,9 +3104,6 @@ private:
                 if (!check_condition(gc, test_binds)) ok = false;
             if (ok) filtered.push_back(r);
         }
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=try_resolve_numeric target=" << target
-                      << " exit=roots count=" << filtered.size() << "]\n";
         return filtered;
     }
 
@@ -3395,24 +3113,8 @@ private:
                            std::map<std::string, double>& bindings,
                            std::set<std::string> visited, int depth,
                            DeadEndSet& dead_ends) const {
-        // Diagnostic: hard cap to prevent true-infinite recursion during diagnosis.
-        // Only enforced when FWIZ_TRACE_SOLVER is set, so legitimate deep chains
-        // (e.g. 500-eq chain tests) don't break during normal test runs.
-        if (fwiz_trace_solver() && depth > MAX_DIAGNOSTIC_SOLVE_DEPTH)
-            throw std::runtime_error("Max solve depth 100 reached (diagnostic cap)");
-        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-            std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target << "]\n"
-                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
-                      << "  visited: " << diag_set_str(visited) << "\n"
-                      << "  dead_ends: ";
-            dump_dead_ends(std::cerr, dead_ends);
-            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
-        }
         if (auto it = bindings.find(target); it != bindings.end()) {
             trace.calc("known: " + target + " = " + fmt_trace(it->second, nullptr, target), depth + 1);
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
-                          << " exit=bound result=" << it->second << "]\n";
             return it->second;
         }
         if (is_active_builtin(target)) {
@@ -3511,19 +3213,6 @@ private:
         bool solved = false;
         enumerate_candidates(target, [&](const Candidate& c) {
             charge_budget(); // Part C: insurance — per-candidate-evaluation
-            if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-                const char* tname = "?";
-                switch (c.type) {
-                    case CandidateType::EXPR: tname = "EXPR"; break;
-                    case CandidateType::FORMULA_FWD: tname = "FORMULA_FWD"; break;
-                    case CandidateType::FORMULA_REV: tname = "FORMULA_REV"; break;
-                    case CandidateType::NUMERIC: tname = "NUMERIC"; break;
-                    case CandidateType::COUNT_: break;
-                }
-                std::cerr << "  [depth=" << depth << " solve_recursive candidate type=" << tname
-                          << " group=" << c.source_group
-                          << " expr=" << diag_expr_preview(c.expr) << "]\n";
-            }
             // Check condition BEFORE solving if all vars are known
             if (c.condition && !check_condition(*c.condition, bindings)) {
                 trace.step("  condition failed (pre-check), skipping", depth + 1);
@@ -3582,9 +3271,6 @@ private:
             return false;
         }, &bindings);
         if (solved) {
-            if (fwiz_trace_solver())
-                std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
-                          << " exit=solved result=" << bindings.at(target) << "]\n";
             return bindings.at(target);
         }
 
@@ -3592,9 +3278,6 @@ private:
         // candidates in the outer query won't redundantly re-try the same
         // free vars with the same bindings.
         dead_ends.insert(dead_key);
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=solve_recursive target=" << target
-                      << " exit=exhausted missing=" << diag_set_str(missing) << "]\n";
 
         // Error reporting
         if (!found_eq)
@@ -3616,14 +3299,6 @@ private:
                      bool& had_nan_inf, std::set<std::string>& missing,
                      DeadEndSet& dead_ends) const {
         charge_budget(); // Part C: insurance — should never trip given Part A
-        if (fwiz_trace_solver() && depth <= MAX_DIAGNOSTIC_SOLVE_DEPTH) {
-            std::cerr << "[depth=" << depth << " fn=try_resolve target=" << target
-                      << " expr=" << diag_expr_preview(expr) << "]\n"
-                      << "  bindings: " << diag_keyset_str(bindings) << "\n"
-                      << "  dead_ends: ";
-            dump_dead_ends(std::cerr, dead_ends);
-            std::cerr << "\n  budget: " << solve_budget_remaining_ << "\n";
-        }
         // Resolve all free variables in the expression
         std::set<std::string> vars;
         collect_vars(expr, vars);
@@ -3694,9 +3369,6 @@ private:
         solved_symbolic_[target] = recognized;
         trace.step("result: " + target + " = " + fmt_trace(result, recognized), depth + 1);
         bindings[target] = result;
-        if (fwiz_trace_solver())
-            std::cerr << "[depth=" << depth << " fn=try_resolve target=" << target
-                      << " exit=ok result=" << result << "]\n";
         return true;
     }
 };

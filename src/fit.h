@@ -336,37 +336,14 @@ inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
 // Used by derive output to produce clean symbolic expressions.
 inline ExprPtr expr_recognize_constants(const ExprPtr& e,
         const std::map<std::string, double>& extra_constants = {}) {
-    if (!e) return e;
-    switch (e->type) {
-        case ExprType::NUM: {
-            if (is_integer_value(e->num)) return e; // already clean
-            if (is_zero(*e)) return e;
-            // Try fraction first
-            auto frac = recognize_fraction(e->num, RECOGNIZE_FRACTION_MAX_DEN);
-            if (frac) return make_rational(frac->p, frac->q);
-            // Try constant recognition
-            auto cf = recognize_constant(e->num, extra_constants);
-            if (cf) return constant_form_to_expr(*cf);
-            return e;
-        }
-        case ExprType::VAR: return e;
-        case ExprType::UNARY_NEG:
-            return Expr::Neg(expr_recognize_constants(e->child, extra_constants));
-        case ExprType::BINOP: {
-            auto l = expr_recognize_constants(e->left, extra_constants);
-            auto r = expr_recognize_constants(e->right, extra_constants);
-            return Expr::BinOpExpr(e->op, l, r);
-        }
-        case ExprType::FUNC_CALL: {
-            std::vector<ExprPtr> args;
-            args.reserve(e->args.size());
-            for (auto& a : e->args)
-                args.push_back(expr_recognize_constants(a, extra_constants));
-            return Expr::Call(e->name, std::move(args));
-        }
-        case ExprType::COUNT_: assert(false && "invalid ExprType"); return e;
-    }
-    return e;
+    return tree_map_leaf(e, [&](ExprPtr node) -> ExprPtr {
+        if (!is_num(node) || is_integer_value(node->num) || is_zero(*node)) return node;
+        if (auto frac = recognize_fraction(node->num, RECOGNIZE_FRACTION_MAX_DEN))
+            return make_rational(frac->p, frac->q);
+        if (auto cf = recognize_constant(node->num, extra_constants))
+            return constant_form_to_expr(*cf);
+        return node;
+    });
 }
 
 // Shared "double → exact pretty string" formatter used by both solve and

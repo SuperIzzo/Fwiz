@@ -981,27 +981,96 @@ inline int precedence(const Expr* e) { return e ? precedence(*e) : 5; }
 inline std::string expr_to_string(const Expr* e) { return e ? expr_to_string(*e) : "?"; }
 
 // ============================================================================
+//  Tree-map templates — post-order rewrite primitives
+// ============================================================================
+//
+// Two narrow primitives shared by all leaf/full-tree rewriters in fwiz.
+//
+// `tree_map<Fn>` calls `fn(node)` AFTER a node's children have been rewritten.
+// If `fn` returns the same pointer it received and no child changed, the
+// original parent is returned without reconstruction (zero allocations on the
+// no-match path). Used by callers that match subtrees of any shape.
+//
+// `tree_map_leaf<Fn>` calls `fn(node)` only on NUM/VAR terminals; interior
+// nodes are passed through structurally with the same pointer-equality
+// short-circuit. Used by callers that only ever rewrite leaves — they avoid
+// the "if (!is_var(node)) return node;" guard at every call site.
+//
+// Both templates are function templates (implicitly inline) and forward `Fn`
+// by universal reference so lambdas with captures pass through cleanly.
+template<typename Fn>
+ExprPtr tree_map(ExprPtr e, Fn&& fn) {
+    if (!e) return e;
+    switch (e->type) {
+        case ExprType::NUM:
+        case ExprType::VAR:
+            return fn(e);
+        case ExprType::UNARY_NEG: {
+            auto nc = tree_map(e->child, fn);
+            return fn((nc == e->child) ? e : Expr::Neg(nc));
+        }
+        case ExprType::BINOP: {
+            auto nl = tree_map(e->left, fn);
+            auto nr = tree_map(e->right, fn);
+            return fn((nl == e->left && nr == e->right) ? e : Expr::BinOpExpr(e->op, nl, nr));
+        }
+        case ExprType::FUNC_CALL: {
+            std::vector<ExprPtr> na;
+            bool changed = false;
+            na.reserve(e->args.size());
+            for (const auto& a : e->args) {
+                auto ra = tree_map(a, fn);
+                if (ra != a) changed = true;
+                na.push_back(ra);
+            }
+            return fn(changed ? Expr::Call(e->name, std::move(na)) : e);
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); return e;
+    }
+    return e;  // unreachable; switch is exhaustive
+}
+
+template<typename Fn>
+ExprPtr tree_map_leaf(ExprPtr e, Fn&& fn) {
+    if (!e) return e;
+    switch (e->type) {
+        case ExprType::NUM:
+        case ExprType::VAR:
+            return fn(e);
+        case ExprType::UNARY_NEG: {
+            auto nc = tree_map_leaf(e->child, fn);
+            return (nc == e->child) ? e : Expr::Neg(nc);
+        }
+        case ExprType::BINOP: {
+            auto nl = tree_map_leaf(e->left, fn);
+            auto nr = tree_map_leaf(e->right, fn);
+            return (nl == e->left && nr == e->right) ? e : Expr::BinOpExpr(e->op, nl, nr);
+        }
+        case ExprType::FUNC_CALL: {
+            std::vector<ExprPtr> na;
+            bool changed = false;
+            na.reserve(e->args.size());
+            for (const auto& a : e->args) {
+                auto ra = tree_map_leaf(a, fn);
+                if (ra != a) changed = true;
+                na.push_back(ra);
+            }
+            return changed ? Expr::Call(e->name, std::move(na)) : e;
+        }
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); return e;
+    }
+    return e;  // unreachable; switch is exhaustive
+}
+
+// ============================================================================
 //  Substitute
 // ============================================================================
 
 inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
-    if (!e) return e;
-    switch (e->type) {
-        case ExprType::NUM:       return e;
-        case ExprType::VAR:       return (e->name == var) ? val : e;
-        case ExprType::UNARY_NEG: return Expr::Neg(substitute(e->child, var, val));
-        case ExprType::BINOP:     return Expr::BinOpExpr(e->op,
-                                      substitute(e->left, var, val),
-                                      substitute(e->right, var, val));
-        case ExprType::FUNC_CALL: {
-            std::vector<ExprPtr> a;
-            a.reserve(e->args.size());
-            for (auto& arg : e->args) a.push_back(substitute(arg, var, val));
-            return Expr::Call(e->name, a);
-        }
-        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
-    }
-    return e;
+    return tree_map_leaf(e, [&](ExprPtr node) -> ExprPtr {
+        if (is_var(node) && node->name == var) return val;
+        return node;
+    });
 }
 
 // ============================================================================
@@ -1023,56 +1092,11 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 // AND (b) no helper subtree equals the current node.
 inline ExprPtr cse_replace(ExprPtr e,
         const std::vector<std::pair<std::string, ExprPtr>>& helpers) {
-    if (!e) return e;
-    // Walk children first (post-order).
-    ExprPtr new_left = nullptr, new_right = nullptr, new_child = nullptr;
-    std::vector<ExprPtr> new_args;
-    bool args_changed = false;
-    switch (e->type) {
-        case ExprType::NUM:
-        case ExprType::VAR:
-            break;  // atomic; no children to walk
-        case ExprType::UNARY_NEG:
-            new_child = cse_replace(e->child, helpers);
-            break;
-        case ExprType::BINOP:
-            new_left  = cse_replace(e->left,  helpers);
-            new_right = cse_replace(e->right, helpers);
-            break;
-        case ExprType::FUNC_CALL:
-            new_args.reserve(e->args.size());
-            for (auto& a : e->args) {
-                auto na = cse_replace(a, helpers);
-                if (na != a) args_changed = true;
-                new_args.push_back(na);
-            }
-            break;
-        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
-    }
-    // Now check helpers against the current subtree. We use post-order so a
-    // helper always matches the original shape (helpers themselves never
-    // contain Var(t_i) for any helper name).
-    for (auto& [name, sub] : helpers) {
-        if (expr_equal(e, sub)) return Expr::Var(name);
-    }
-    // Pointer-equality short-circuit: nothing changed in children AND no helper
-    // matched at this node → return original (avoids O(|tree|) rebuild).
-    switch (e->type) {
-        case ExprType::NUM:
-        case ExprType::VAR:
-            return e;
-        case ExprType::UNARY_NEG:
-            if (new_child == e->child) return e;
-            return Expr::Neg(new_child);
-        case ExprType::BINOP:
-            if (new_left == e->left && new_right == e->right) return e;
-            return Expr::BinOpExpr(e->op, new_left, new_right);
-        case ExprType::FUNC_CALL:
-            if (!args_changed) return e;
-            return Expr::Call(e->name, new_args);
-        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
-    }
-    return e;
+    return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+        for (auto& [name, sub] : helpers)
+            if (expr_equal(node, sub)) return Expr::Var(name);
+        return node;
+    });
 }
 
 // Walk an expression tree and replace every Var node whose name is a builtin
@@ -1082,28 +1106,12 @@ inline ExprPtr cse_replace(ExprPtr e,
 // the source of truth is builtin_constants() which holds only the true
 // mathematical constants.
 inline ExprPtr substitute_builtin_constants(ExprPtr e) {
-    if (!e) return e;
-    switch (e->type) {
-        case ExprType::NUM:       return e;
-        case ExprType::VAR: {
-            auto& consts = builtin_constants();
-            auto it = consts.find(e->name);
-            if (it != consts.end()) return Expr::Num(it->second);
-            return e;
-        }
-        case ExprType::UNARY_NEG: return Expr::Neg(substitute_builtin_constants(e->child));
-        case ExprType::BINOP:     return Expr::BinOpExpr(e->op,
-                                      substitute_builtin_constants(e->left),
-                                      substitute_builtin_constants(e->right));
-        case ExprType::FUNC_CALL: {
-            std::vector<ExprPtr> a;
-            a.reserve(e->args.size());
-            for (auto& arg : e->args) a.push_back(substitute_builtin_constants(arg));
-            return Expr::Call(e->name, a);
-        }
-        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
-    }
-    return e;
+    return tree_map_leaf(e, [](ExprPtr node) -> ExprPtr {
+        if (!is_var(node)) return node;
+        auto& consts = builtin_constants();
+        auto it = consts.find(node->name);
+        return (it != consts.end()) ? Expr::Num(it->second) : node;
+    });
 }
 
 // ============================================================================
@@ -1490,6 +1498,175 @@ inline void simplify_clear_assumptions() {
 }
 
 // ============================================================================
+//  Conditions — symmetric AST shared by equations and rewrite rules
+// ============================================================================
+
+// Forward decl: Condition::to_valueset / check_condition call simplify (defined
+// later in this file). Inline member-function bodies need the name visible at
+// definition; the actual call resolves at the post-parse point of use.
+inline ExprPtr simplify(const ExprPtr& e);
+
+enum class CondOp : uint8_t { GT, GE, LT, LE, EQ, NE, COUNT_ };
+enum class CondLogic : uint8_t { AND, OR };
+
+static_assert(static_cast<int>(CondOp::COUNT_) == 6, "CondOp has 6 real values");
+
+struct CondClause {
+    ExprPtr lhs;
+    ExprPtr rhs;
+    CondOp op;
+};
+
+struct Condition {
+    std::vector<CondClause> clauses;
+    std::vector<CondLogic> connectors; // size = clauses.size() - 1
+
+    // Convert condition to a ValueSet for a specific variable
+    // Only works for simple conditions like "x > 0", "x <= 10"
+    ValueSet to_valueset(const std::string& var,
+                         const std::map<std::string, double>& bindings = {}) const {
+        ValueSet result = ValueSet::all();
+        for (size_t i = 0; i < clauses.size(); i++) {
+            const auto& c = clauses[i];
+            // Check if this clause constrains `var`
+            bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
+            bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
+            if (!lhs_is_var && !rhs_is_var) continue;
+
+            // Try to evaluate the other side
+            ExprPtr other = lhs_is_var ? c.rhs : c.lhs;
+            ExprPtr resolved = other;
+            std::set<std::string> vars;
+            collect_vars(other, vars);
+            for (auto& v : vars) {
+                if (auto it = bindings.find(v); it != bindings.end())
+                    resolved = substitute(resolved, v, Expr::Num(it->second));
+                else return ValueSet::all(); // can't evaluate — return unconstrained
+            }
+            auto val_opt = evaluate(*simplify(resolved));
+            if (!val_opt) return ValueSet::all();
+            double val = val_opt.value();
+
+            // Build ValueSet from operator (flip if var is on RHS)
+            CondOp op = c.op;
+            if (rhs_is_var) {
+                // Flip: "5 > x" becomes "x < 5"
+                switch (op) {
+                    case CondOp::GT: op = CondOp::LT; break;
+                    case CondOp::GE: op = CondOp::LE; break;
+                    case CondOp::LT: op = CondOp::GT; break;
+                    case CondOp::LE: op = CondOp::GE; break;
+                    default: break;
+                }
+            }
+
+            ValueSet clause_set;
+            switch (op) {
+                case CondOp::GT: clause_set = ValueSet::gt(val); break;
+                case CondOp::GE: clause_set = ValueSet::ge(val); break;
+                case CondOp::LT: clause_set = ValueSet::lt(val); break;
+                case CondOp::LE: clause_set = ValueSet::le(val); break;
+                case CondOp::EQ: clause_set = ValueSet::eq(val); break;
+                case CondOp::NE: clause_set = ValueSet::ne(val); break;
+                case CondOp::COUNT_: break;
+            }
+
+            // i == 0 always intersects (no prior connector); otherwise the
+            // connector at i-1 decides intersect vs unite.
+            if (i == 0 || connectors[i-1] == CondLogic::AND)
+                result = result.intersect(clause_set);
+            else
+                result = result.unite(clause_set);
+        }
+        return result;
+    }
+};
+
+// Check if a condition is satisfied given current bindings.
+// Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied.
+inline bool check_condition(const Condition& cond,
+                            const std::map<std::string, double>& bindings) {
+    auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
+        ExprPtr lhs = c.lhs, rhs = c.rhs;
+        std::set<std::string> vars;
+        collect_vars(lhs, vars);
+        collect_vars(rhs, vars);
+        auto& consts = builtin_constants();
+        for (auto& v : vars) {
+            if (auto it = bindings.find(v); it != bindings.end()) {
+                lhs = substitute(lhs, v, Expr::Num(it->second));
+                rhs = substitute(rhs, v, Expr::Num(it->second));
+            } else if (consts.count(v)) {
+                // Builtin constant — evaluate() handles it, no substitution needed
+            } else {
+                return std::nullopt; // unknown variable — can't evaluate
+            }
+        }
+        auto l_opt = evaluate(*simplify(lhs));
+        auto r_opt = evaluate(*simplify(rhs));
+        if (!l_opt || !r_opt) return std::nullopt;
+        double l = l_opt.value();
+        double r = r_opt.value();
+        switch (c.op) {
+            case CondOp::GT: return l > r;
+            case CondOp::GE: return l >= r;
+            case CondOp::LT: return l < r;
+            case CondOp::LE: return l <= r;
+            case CondOp::EQ: return std::abs(l - r) < EPSILON_ZERO;
+            case CondOp::NE: return std::abs(l - r) >= EPSILON_ZERO;
+            case CondOp::COUNT_: assert(false && "invalid CondOp"); return false;
+        }
+        return std::nullopt;
+    };
+
+    bool result = true;
+    for (size_t i = 0; i < cond.clauses.size(); i++) {
+        auto val = eval_clause(cond.clauses[i]);
+        bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
+
+        if (i == 0) {
+            result = clause_result;
+        } else {
+            auto logic = cond.connectors[i - 1];
+            if (logic == CondLogic::AND) result = result && clause_result;
+            else                         result = result || clause_result;
+        }
+    }
+    return result;
+}
+
+// Serialize a Condition AST to a string with bindings substituted inline.
+// Used for human-readable assumption descriptions in --steps/--calc traces.
+inline std::string cond_op_to_string(CondOp op) {
+    switch (op) {
+        case CondOp::GT: return ">";
+        case CondOp::GE: return ">=";
+        case CondOp::LT: return "<";
+        case CondOp::LE: return "<=";
+        case CondOp::EQ: return "=";
+        case CondOp::NE: return "!=";
+        case CondOp::COUNT_: assert(false && "invalid CondOp"); return "?";
+    }
+    return "?";
+}
+
+inline std::string condition_to_string(const Condition& cond,
+        const std::map<std::string, ExprPtr>& bindings) {
+    std::string out;
+    for (size_t i = 0; i < cond.clauses.size(); i++) {
+        if (i > 0) out += (cond.connectors[i-1] == CondLogic::AND) ? " && " : " || ";
+        const auto& c = cond.clauses[i];
+        ExprPtr l = c.lhs, r = c.rhs;
+        for (auto& [var, val] : bindings) {
+            l = substitute(l, var, val);
+            r = substitute(r, var, val);
+        }
+        out += expr_to_string(l) + " " + cond_op_to_string(c.op) + " " + expr_to_string(r);
+    }
+    return out;
+}
+
+// ============================================================================
 //  Rewrite rules — thread-local access for simplifier
 // ============================================================================
 
@@ -1499,9 +1676,8 @@ struct RewriteRule {
     ExprPtr pattern;      // e.g., cos(Neg(Var("x")))
     ExprPtr replacement;  // e.g., cos(Var("x"))
     std::string desc;     // human-readable: "cos(-x) = cos(x)"
-    // Condition template: pattern variables are substituted with bound expressions.
-    // e.g., "x != 0" with binding x→(a+b) becomes "(a + b) != 0"
-    std::string condition;
+    // Optional condition AST parsed at rule-load time. nullopt = unconditional.
+    std::optional<Condition> condition;
     bool is_undefined_branch = false;  // true when replacement is "undefined"
     int group_index = -1;              // index into rewrite_rule_groups_ (-1 = ungrouped)
 };
@@ -1870,123 +2046,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     return e;
 }
 
-// Apply user-defined rewrite rules to a simplified expression
-// Substitute pattern variable names in a condition string with bound expressions
-inline std::string substitute_condition(const std::string& cond,
-        const std::map<std::string, ExprPtr>& bindings) {
-    std::string result = cond;
-    // Replace longest variable names first to avoid partial matches
-    std::vector<std::pair<std::string, std::string>> replacements;
-    replacements.reserve(bindings.size());
-    for (auto& [var, expr] : bindings)
-        replacements.push_back({var, expr_to_string(expr)});
-    std::sort(replacements.begin(), replacements.end(),
-        [](auto& a, auto& b) { return a.first.size() > b.first.size(); });
-    for (auto& [var, str] : replacements) {
-        size_t pos = 0;
-        while ((pos = result.find(var, pos)) != std::string::npos) {
-            // Only replace whole identifiers (not substrings of longer names)
-            bool before_ok = (pos == 0 || !std::isalnum(result[pos-1]));
-            bool after_ok = (pos + var.size() >= result.size()
-                || !std::isalnum(result[pos + var.size()]));
-            if (before_ok && after_ok) {
-                result.replace(pos, var.size(), str);
-                pos += str.size();
-            } else {
-                pos += var.size();
-            }
-        }
-    }
-    return result;
-}
-
-// Check if a rewrite rule condition is violated by numeric bindings.
-// Returns true if the condition is definitely false (should skip rule).
-// Returns false if condition holds or can't be determined (should apply rule).
-// Works by substituting the condition string and checking simple patterns.
-inline bool condition_violated(const std::string& cond,
-        const std::map<std::string, ExprPtr>& bindings) {
-    // Try to resolve each bound expression to a number
-    // Use both the expression itself and the global bindings
-    auto* global_bindings = simplify_bindings_();
-    std::map<std::string, double> numeric;
-    for (auto& [var, expr] : bindings) {
-        if (is_num(expr)) {
-            numeric[var] = expr->num;
-        } else if (is_var(expr) && global_bindings) {
-            auto it = global_bindings->find(expr->name);
-            if (it != global_bindings->end())
-                numeric[var] = it->second;
-            // else: symbolic, can't resolve this variable
-        }
-        // else: complex symbolic expression, can't check
-    }
-
-    // Check simple clause: "VAR CMP VALUE"
-    auto check_clause = [&](const std::string& clause) -> int {
-        // Returns: 1 = true, 0 = false, -1 = can't determine
-        // Find the comparison operator
-        struct { const char* str; size_t len; } ops[] = {
-            {"!=", 2}, {">=", 2}, {"<=", 2}, {"==", 2}, {">", 1}, {"<", 1}, {"=", 1}
-        };
-        for (auto& [opstr, oplen] : ops) {
-            auto p = clause.find(opstr);
-            if (p == std::string::npos) continue;
-            // Skip if this = is part of a longer operator
-            if (oplen == 1 && opstr[0] == '=' && p > 0
-                && (clause[p-1] == '!' || clause[p-1] == '>' || clause[p-1] == '<'))
-                continue;
-            if (oplen == 1 && opstr[0] == '=' && p + 1 < clause.size() && clause[p+1] == '=')
-                continue;
-            if (oplen == 1 && opstr[0] == '>' && p + 1 < clause.size() && clause[p+1] == '=')
-                continue;
-            if (oplen == 1 && opstr[0] == '<' && p + 1 < clause.size() && clause[p+1] == '=')
-                continue;
-
-            // Extract LHS and RHS variable/value
-            auto lhs_s = clause.substr(0, p);
-            auto rhs_s = clause.substr(p + oplen);
-            while (!lhs_s.empty() && lhs_s.back() == ' ') lhs_s.pop_back();
-            while (!lhs_s.empty() && lhs_s.front() == ' ') lhs_s.erase(lhs_s.begin());
-            while (!rhs_s.empty() && rhs_s.back() == ' ') rhs_s.pop_back();
-            while (!rhs_s.empty() && rhs_s.front() == ' ') rhs_s.erase(rhs_s.begin());
-
-            // Resolve to numbers
-            auto resolve = [&](const std::string& s) -> std::optional<double> {
-                auto it = numeric.find(s);
-                if (it != numeric.end()) return it->second;
-                // NOLINTNEXTLINE(bugprone-empty-catch) — std::stod throws on non-numeric input; fall back to nullopt
-                try { return std::stod(s); } catch (const std::invalid_argument&) {} catch (const std::out_of_range&) {}
-                return std::nullopt;
-            };
-            auto lval = resolve(lhs_s);
-            auto rval = resolve(rhs_s);
-            if (!lval || !rval) return -1;  // can't determine
-
-            std::string op(opstr, oplen);
-            if (op == "!=") return std::abs(*lval - *rval) > EPSILON_ZERO ? 1 : 0;
-            if (op == "=" || op == "==") return std::abs(*lval - *rval) <= EPSILON_ZERO ? 1 : 0;
-            if (op == ">") return *lval > *rval + EPSILON_ZERO ? 1 : 0;
-            if (op == ">=") return *lval >= *rval - EPSILON_ZERO ? 1 : 0;
-            if (op == "<") return *lval < *rval - EPSILON_ZERO ? 1 : 0;
-            if (op == "<=") return *lval <= *rval + EPSILON_ZERO ? 1 : 0;
-        }
-        return -1;
-    };
-
-    // Split by && and check each clause
-    std::string remaining = cond;
-    while (!remaining.empty()) {
-        auto pos = remaining.find("&&");
-        std::string clause = (pos != std::string::npos)
-            ? remaining.substr(0, pos) : remaining;
-        remaining = (pos != std::string::npos) ? remaining.substr(pos + 2) : "";
-        int result = check_clause(clause);
-        if (result == 0) return true;   // clause is false → condition violated
-    }
-    return false;  // all clauses passed or undetermined
-}
-
+// Apply user-defined rewrite rules to a simplified expression.
 inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
     auto* rules = simplify_get_rewrite_rules();
     if (!rules) return e;
@@ -1995,14 +2055,24 @@ inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
         if (rule.is_undefined_branch) continue;  // skip: exists for exhaustiveness only
         auto bindings = match_pattern(rule.pattern, e);
         if (!bindings) continue;
-        if (!rule.condition.empty()) {
-            // Context-aware: if bound values are numeric, check condition
-            if (condition_violated(rule.condition, *bindings)) continue;
+        if (rule.condition.has_value()) {
+            // Resolve bound expressions to numerics where possible, then check.
+            auto* global_bindings = simplify_bindings_();
+            std::map<std::string, double> numeric;
+            for (auto& [var, expr] : *bindings) {
+                if (is_num(expr)) {
+                    numeric[var] = expr->num;
+                } else if (is_var(expr) && global_bindings) {
+                    auto it = global_bindings->find(expr->name);
+                    if (it != global_bindings->end()) numeric[var] = it->second;
+                }
+            }
+            if (!check_condition(*rule.condition, numeric)) continue;
             bool inherent = exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index];
             simplify_record_assumption(nullptr,
-                substitute_condition(rule.condition, *bindings), inherent);
+                condition_to_string(*rule.condition, *bindings), inherent);
         }
         return apply_rewrite(rule.replacement, *bindings);
     }
