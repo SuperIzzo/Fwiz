@@ -1829,7 +1829,7 @@ private:
         std::set<std::string> missing;
 
         auto try_expr_all = [&](const ExprPtr& expr,
-                                const std::string& label,
+                                [[maybe_unused]] const std::string& label,
                                 const Condition* cond) {
             auto b = bindings; // copy — each attempt gets fresh bindings
             bool nan_inf = false;
@@ -2685,7 +2685,7 @@ private:
         auto result = simplify(resolved);
         for (const auto& a : simplify_get_assumptions())
             trace.step("  assuming: " + a.desc
-                + (a.inherent ? " (inherent)" : ""), depth + 1);
+                + (a.source == AssumptionSource::Inherent ? " (inherent)" : ""), depth + 1);
 
         // If the target appears in the resolved expression, we have:
         //   target = f(target, ...) — try to solve algebraically
@@ -3346,7 +3346,7 @@ private:
         auto assumptions = simplify_get_assumptions();
         for (const auto& a : assumptions)
             trace.step("  assuming: " + a.desc
-                + (a.inherent ? " (inherent)" : ""), depth + 2);
+                + (a.source == AssumptionSource::Inherent ? " (inherent)" : ""), depth + 2);
         auto result_opt = evaluate(simplified);
         if (!result_opt) {
             // Empty can mean either (a) an unresolved variable / unknown function

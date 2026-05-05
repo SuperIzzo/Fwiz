@@ -471,6 +471,8 @@ Classic Mac line endings (bare `\r` without `\n`) are not supported as line sepa
 - No external dependencies — stdlib only
 - All enums use `uint8_t` base type to minimize struct sizes
 - No magic numbers — use named constants (`EPSILON_ZERO`, `EPSILON_REL`, `SIMPLIFY_MAX_ITER`)
+- Warning flags: `-Wall -Wextra -Wpedantic -Wshadow -Wuninitialized -Wnull-dereference -Wimplicit-fallthrough -Wdouble-promotion`. All flags are locked in `Makefile`; `make` must produce zero warnings. `-Wconversion` is deferred (untriaged).
+- **Boolean discriminators → `enum class`**: a `bool` parameter or field that encodes a two-valued semantic distinction (e.g., "is this assumption inherent or derived?") must be replaced with a named `enum class`. Canonical example: `AssumptionSource : uint8_t { Derived, Inherent }` replacing `bool inherent` on `SimplifyAssumption` (`expr.h`).
 
 ### Memory model
 

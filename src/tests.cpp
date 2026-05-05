@@ -9183,7 +9183,7 @@ void test_undefined() {
         for (const auto& a : assumptions)
             if (a.desc.find("a") != std::string::npos
                 && a.desc.find("!= 0") != std::string::npos
-                && a.inherent)
+                && a.source == AssumptionSource::Inherent)
                 found_inherent = true;
         ASSERT(found_inherent, "inherent: a != 0 marked as inherent");
     }
@@ -9204,7 +9204,7 @@ void test_undefined() {
         for (const auto& a : assumptions)
             if (a.desc.find("a") != std::string::npos
                 && a.desc.find("!= 0") != std::string::npos
-                && !a.inherent)
+                && a.source == AssumptionSource::Derived)
                 found_non_inherent = true;
         ASSERT(found_non_inherent, "non-inherent: a != 0 NOT marked inherent");
     }

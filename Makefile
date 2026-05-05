@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -O2
+CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -Wshadow -Wuninitialized -Wnull-dereference -Wimplicit-fallthrough -Wdouble-promotion -O2
 TARGET = bin/fwiz
 TEST = bin/fwiz_tests
 HEADERS = src/system.h src/expr.h src/fit.h src/parser.h src/lexer.h src/trace.h
