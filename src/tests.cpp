@@ -11530,7 +11530,9 @@ void test_provenance_plumbing() {
         // Construct an @extern sub-system via .fw file (mysin → C++ sin).
         // Cross-file formula call mysin(...) takes the formula-call path,
         // and the section's @extern fires the fast path inside try_formula.
-        write_fw("/tmp/prov_e_mysin.fw",
+        // Filename must match the formula call ("mysin") for cross-file
+        // resolution to find it (load_sub_system looks for base_dir/<stem>.fw).
+        write_fw("/tmp/mysin.fw",
             "[mysin(x) -> result] @extern sin; x = asin(result)\n");
         write_fw("/tmp/prov_e_caller.fw",
             "y1 = mysin(z1)\ny2 = mysin(z2)\n");
@@ -11830,6 +11832,99 @@ void test_symbolic_diff_provenance() {
         "PROV-DIFF: solved_symbolic_['sensitivity'] populated after resolve_all");
 }
 
+// T2.2: Two FormulaSystem instances should each get _fc0 (per-instance counter).
+// Pre-fix: a static counter inside extract_positional_calls makes the second
+// instance produce _fc1 (and so on). Post-fix: each instance has its own
+// next_call_id_ member starting at 0.
+void test_t22_positional_call_counter_per_instance() {
+    SECTION("T2.2: positional-call counter is per-FormulaSystem (not global static)");
+    {
+        std::ofstream f("/tmp/t22_sq.fw");
+        f << "[t22_sq(x) -> result]\nresult = x^2\n";
+    }
+
+    FormulaSystem s1;
+    s1.base_dir = "/tmp";
+    s1.load_string("a = t22_sq(3)\n");
+    ASSERT(!s1.formula_calls.empty(), "T2.2: instance 1 has formula_calls");
+    ASSERT_EQ(s1.formula_calls[0].output_var, std::string("_fc0"),
+              "T2.2: instance 1 first positional call -> _fc0");
+
+    FormulaSystem s2;
+    s2.base_dir = "/tmp";
+    s2.load_string("a = t22_sq(3)\n");
+    ASSERT(!s2.formula_calls.empty(), "T2.2: instance 2 has formula_calls");
+    ASSERT_EQ(s2.formula_calls[0].output_var, std::string("_fc0"),
+              "T2.2: instance 2 also gets _fc0 (independent counter)");
+}
+
+// Issue 1: a malformed `iff <cond>` on a rewrite rule must DROP the rule at
+// load time (stderr warning observable), and the resulting group must NOT be
+// flagged as exhaustive. Pre-fix: the rule was kept with no condition (silent
+// "covers everything" semantics → false exhaustiveness).
+void test_issue1_drop_parsefailed_rewrite_rules() {
+    SECTION("Issue 1: drop rewrite rules with malformed conditions at load time");
+
+    // Capture stderr during load (where the warning is emitted).
+    std::ostringstream captured;
+    auto* old_cerr = std::cerr.rdbuf(captured.rdbuf());
+
+    FormulaSystem sys;
+    // Two rules under the same LHS shape "x / x":
+    //   1) valid:    x/x = 1 iff x != 0
+    //   2) malformed: x/x = undefined iff x >       (no RHS to comparison)
+    sys.load_string(
+        "x/x = 1 iff x != 0\n"
+        "x/x = undefined iff x >\n",
+        "issue1");
+
+    std::cerr.rdbuf(old_cerr);
+    std::string err = captured.str();
+
+    // Stderr must mention dropping the malformed rule.
+    ASSERT(err.find("warning: dropping rewrite rule") != std::string::npos,
+           std::string("Issue 1: stderr warning observable on malformed rule load (got: ") + err + ")");
+
+    // Find the "x / x" group: it should contain ONLY the valid rule.
+    int found_idx = -1;
+    for (size_t i = 0; i < sys.rewrite_rule_groups_.size(); i++) {
+        if (sys.rewrite_rule_groups_[i].pattern_key == "x / x") {
+            found_idx = static_cast<int>(i);
+            break;
+        }
+    }
+    ASSERT(found_idx >= 0, "Issue 1: x/x group exists post-load");
+    if (found_idx >= 0) {
+        const auto& group = sys.rewrite_rule_groups_[static_cast<size_t>(found_idx)];
+        // Post-fix: NO rule in the group should have an `undefined` replacement with
+        // a NULL condition. Pre-fix, the malformed rule was kept with cond=nullopt
+        // (parse threw, was swallowed), giving a uniformly-applicable
+        // `x/x = undefined` rule that breaks the simplifier.
+        bool found_unconditional_undefined = false;
+        for (size_t idx : group.rule_indices) {
+            const auto& r = sys.rewrite_rules[idx];
+            if (r.is_undefined_branch && !r.condition.has_value()) {
+                found_unconditional_undefined = true;
+                break;
+            }
+        }
+        ASSERT(!found_unconditional_undefined,
+               "Issue 1: NO unconditional 'x/x = undefined' rule in group post-load");
+    }
+
+    // Sanity: the valid rule still simplifies x/x → 1 (with x != 0 in scope).
+    // Just confirm we did not break basic simplification by dropping rules.
+    {
+        // The builtins already have x/x = 1 iff x != 0; the user-added duplicate
+        // is a no-op semantically. Confirm group size is the builtin-baseline
+        // (2 builtins + 1 user-valid = 3); malformed is dropped.
+        const auto& group = sys.rewrite_rule_groups_[static_cast<size_t>(found_idx)];
+        ASSERT(group.rule_indices.size() == 3,
+               std::string("Issue 1: x/x group has 3 rules (2 builtin + 1 valid user-add); got ")
+                   + std::to_string(group.rule_indices.size()));
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -12113,6 +12208,10 @@ int main() {
     test_symbolic_diff_surface2_e2e();
     test_symbolic_diff_unfold_formula_call();
     test_symbolic_diff_provenance();
+
+    // T2+T3 cleanup cycle (M1: correctness, 4 silent bugs)
+    test_t22_positional_call_counter_per_instance();
+    test_issue1_drop_parsefailed_rewrite_rules();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

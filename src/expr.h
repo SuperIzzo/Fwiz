@@ -1556,7 +1556,7 @@ struct Condition {
                     case CondOp::GE: op = CondOp::LE; break;
                     case CondOp::LT: op = CondOp::GT; break;
                     case CondOp::LE: op = CondOp::GE; break;
-                    default: break;
+                    case CondOp::EQ: case CondOp::NE: case CondOp::COUNT_: break;
                 }
             }
 
@@ -1568,7 +1568,7 @@ struct Condition {
                 case CondOp::LE: clause_set = ValueSet::le(val); break;
                 case CondOp::EQ: clause_set = ValueSet::eq(val); break;
                 case CondOp::NE: clause_set = ValueSet::ne(val); break;
-                case CondOp::COUNT_: break;
+                case CondOp::COUNT_: assert(false && "invalid CondOp in to_valueset"); break;
             }
 
             // i == 0 always intersects (no prior connector); otherwise the
@@ -1820,14 +1820,17 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
         if (ld != 0 && rd != 0 && rn != 0)
             return make_rational(ln * rd, ld * rn);
     }
+    // branch retained: needed by tests 505/512/526/6605/6642/9712 (literal -k denominator)
     if (is_neg_num(r))
         return Expr::BinOpExpr(BinOp::DIV, Expr::Neg(l), Expr::Num(-r->num));
-    if (is_neg(l) && is_neg(r))
-        return Expr::BinOpExpr(BinOp::DIV, l->child, r->child);
+    // T3.4: branch 2 (is_neg(l) && is_neg(r) -> l/r) deleted — subsumed by branches 3+4 firing in sequence
+    // branch retained: needed by tests 8567/8576 (sum / Neg(x) cancellation)
     if (is_neg(r))
         return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l, r->child));
+    // branch retained: needed by tests 10480/11342 (Neg(l) / k pulled out for term cancellation)
     if (is_neg(l))
         return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
+    // not migratable: rational arithmetic; see Future.md typed-binding-predicates
     // Constant reassociation: (K * a) / K2 or (a * K) / K2
     if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
         if (is_num(l->right)) {
@@ -2029,7 +2032,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                         for (int64_t i = 0; i < exp; i++) { rn *= n; rd *= d; }
                         return make_rational(rn, rd);
                     }
-                    // x^(-n) → 1/x^n — stays in C++ (needs numeric check)
+                    // not migratable: x^n wildcard would loop on symbolic exp; see Future.md typed-binding-predicates
                     if (is_num(r) && r->num < 0) {
                         if (r->num == -1.0)
                             return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), l);
@@ -2216,7 +2219,6 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
 
     auto ok = [](ExprPtr c, ExprPtr r) -> std::optional<LinearForm> { return LinearForm{c, r}; };
     auto fail = []() -> std::optional<LinearForm> { return std::nullopt; };
-    auto S = simplify;
 
     switch (e->type) {
         case ExprType::NUM:
@@ -2228,7 +2230,7 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
 
         case ExprType::UNARY_NEG: {
             auto d = decompose_linear(e->child, t);
-            return d ? ok(S(Expr::Neg(d->coeff)), S(Expr::Neg(d->rest))) : fail();
+            return d ? ok(simplify(Expr::Neg(d->coeff)), simplify(Expr::Neg(d->rest))) : fail();
         }
 
         case ExprType::BINOP:
@@ -2237,8 +2239,8 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
                     auto ld = decompose_linear(e->left, t);
                     auto rd = decompose_linear(e->right, t);
                     if (!ld || !rd) return fail();
-                    return ok(S(Expr::BinOpExpr(e->op, ld->coeff, rd->coeff)),
-                              S(Expr::BinOpExpr(e->op, ld->rest, rd->rest)));
+                    return ok(simplify(Expr::BinOpExpr(e->op, ld->coeff, rd->coeff)),
+                              simplify(Expr::BinOpExpr(e->op, ld->rest, rd->rest)));
                 }
                 case BinOp::MUL: {
                     bool lh = contains_var(e->left, t), rh = contains_var(e->right, t);
@@ -2247,14 +2249,14 @@ inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::s
                     auto [side, factor] = lh ? std::pair{e->left, e->right}
                                              : std::pair{e->right, e->left};
                     auto d = decompose_linear(side, t);
-                    return d ? ok(S(Expr::BinOpExpr(BinOp::MUL, factor, d->coeff)),
-                                  S(Expr::BinOpExpr(BinOp::MUL, factor, d->rest))) : fail();
+                    return d ? ok(simplify(Expr::BinOpExpr(BinOp::MUL, factor, d->coeff)),
+                                  simplify(Expr::BinOpExpr(BinOp::MUL, factor, d->rest))) : fail();
                 }
                 case BinOp::DIV: {
                     if (contains_var(e->right, t)) return fail();
                     auto d = decompose_linear(e->left, t);
-                    return d ? ok(S(Expr::BinOpExpr(BinOp::DIV, d->coeff, e->right)),
-                                  S(Expr::BinOpExpr(BinOp::DIV, d->rest, e->right))) : fail();
+                    return d ? ok(simplify(Expr::BinOpExpr(BinOp::DIV, d->coeff, e->right)),
+                                  simplify(Expr::BinOpExpr(BinOp::DIV, d->rest, e->right))) : fail();
                 }
                 case BinOp::POW:
                     if (contains_var(e->left, t) || contains_var(e->right, t)) return fail();

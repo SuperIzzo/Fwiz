@@ -4,17 +4,13 @@
 
 Features that build on each other to make fwiz significantly more expressive while staying true to the "equations, not assignments" philosophy.
 
-## 0-3: Conditions, Ranges, Recursion, Numeric Solving — ✅ DONE
+> Shipped features and cleanup cycles live in `docs/COMPLETED.md`. Numbering matches across the two files — `#22` here is `#22` there.
 
-All implemented. `if`/`iff` conditions, ValueSet ranges, recursive formula calls with depth guard, numeric solving with adaptive grid scan + Newton/bisection. See Developer.md for details.
+## 4. Numeric Solving — Remaining enhancements
 
-## 4. Numeric Solving — ✅ DONE
+Core landed; see COMPLETED.md #4.
 
-See Developer.md.
-
-**Remaining enhancements:**
 - Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
-- Newton now uses symbolic derivatives automatically when `try_resolve_numeric` calls `symbolic_diff_simplified`; finite-diff is the fallback when `symbolic_diff_simplified` returns `nullptr` (e.g., unrecognized function). No further wiring needed.
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
 ## 5. Batch/Table Mode
@@ -56,22 +52,6 @@ Multiple range inputs → cartesian product (or zip mode with `--zip`).
 - Generating lookup tables
 - Plotting data (pipe to gnuplot: `fwiz --table ... | gnuplot`)
 - Sensitivity analysis: how does output change across input range?
-
-## 6. Symbolic Differentiation — ✅ DONE (2026-04-26)
-
-`symbolic_diff(const Expr&, const std::string& var) → ExprPtr` (expr.h). Two-level dispatch: per-AST-class switch for ADD/SUB/MUL/DIV/POW/NEG, inline if-chain for FUNC_CALL covering 9 builtins (sin, cos, tan, asin, acos, atan, log, sqrt, abs). `symbolic_diff_simplified` wrapper calls `simplify()` on the result. Returns `nullptr` for unknown FUNC_CALLs — used as a "leave-symbolic" signal by the post-load pass.
-
-Post-load pass `resolve_diff_in_equations` (system.h): rewrites `diff(named_var, x)` and `diff(formula_call_placeholder, x)` nodes after all equations and rewrite rules are loaded. Handles three target shapes: Var-as-equation RHS, Var-as-formula-call output, and literal expression.
-
-Two API surfaces:
-1. In-file builtin: `sensitivity = diff(force, mass)` — parser-level recognition replaces the call with the differentiated tree at load time.
-2. CLI query: `fwiz kinematic.fw 'diff(distance, time)=?'` — `CLIDiffQuery` struct in `parse_cli_query`; dispatched in `main.cpp` Pass 1.5 by injecting a synthetic equation then running the post-load pass. Falls back to printing the symbolic expression when free variables remain.
-
-`solved_symbolic_` carries derivative results (confirmed via `test_symbolic_diff_provenance`), validating the pre-positioned carrier.
-
-Three new rewrite rules in `BUILTIN_REWRITE_RULES`: `x^a / x^b = x^(a-b) iff x != 0` (pulled forward from Future #5 scope), `abs(x) / x = sign(x) iff x != 0`, `abs(x) / x = undefined iff x = 0`. `sign(x)` registered as a new builtin with `sign_eval` numeric evaluator.
-
-Tests: 2237 → 2272 (+35). Newton-exact-Jacobian drop-in remains a near-term M4 micro-cycle — see #4 remaining enhancements.
 
 ## 7. Units and Dimensional Analysis
 
@@ -147,13 +127,11 @@ fwiz --latex --derive triangle(C=?, a=a, b=b, c=c)
 
 Useful for documentation, papers, and reports. The expression tree already has all the structure needed — just a different printer.
 
-## 10. Fraction Representation — ✅ DONE
+## 10. Fraction Representation — Remaining enhancements
 
-Structural fractions: `DIV(Num(a), Num(b))` preserved when result is non-integer. GCD normalization, sign normalization, rational arithmetic (add/sub/mul/div/pow). Constant recognition in derive output (`log(2)`, `log(3)`, `sqrt(N)`, `pi`, `e`). Rational display in solve output via `fmt_solve_result` (main.cpp) when the result is exact. No Expr struct changes — sizeof(Expr) unchanged.
+Core landed; see COMPLETED.md #10.
 
-**Remaining enhancements:**
-- ~~Extended constant table (configurable extra constants)~~ — shipped 2026-04-19 (ccacc8e / 43cbc0d) via `fmt_exact_double` alias threading and `build_alias_table()`: user-defined `.fw` constants (e.g. `deg = pi/180`) are now recognized in solve + derive output.
-- Rational propagation in evaluate() for exact intermediate results
+- Rational propagation in `evaluate()` for exact intermediate results
 
 ## 10a. Extending `evaluate_symbolic` for new number types
 
@@ -203,14 +181,12 @@ When `evaluate()` gains a `bindings` parameter (symbolic substitution during eva
 
 For the solver binding track specifically: `solved_symbolic_` (`src/system.h`) is already the parallel ExprPtr map that the provenance-plumbing cycle shipped for trace output. The symbolic-differentiation cycle (#6) confirmed that `diff(...)` results commit into `solved_symbolic_` exactly as algebraic results do — no API change was needed. Matrix bindings simply need to add their leaf type to `expr_to_string` dispatch; the carrier itself requires no structural change.
 
-## 11. Curve Fitting — ✅ DONE
+## 11. Curve Fitting — Remaining enhancements
 
-Implemented as `--fit [N]` flag. Templates: polynomial, power law, exponential (including Gaussian/quadratic exponent), logarithmic, sinusoidal, reciprocal. Recursive composition (depth N, default 5) discovers nested forms like `sin(sin(x))`, `e^(x*log(x))` = `x^x`. Product inners (`x*log(x)`, `x*sin(x)`) enable complex decompositions. Constant recognition (pi, e, phi, sqrt(2), sqrt(3)) in fitted coefficients.
+Core landed; see COMPLETED.md #11.
 
-**Remaining enhancements:**
 - Rational (Padé) approximation: `p(x)/q(x)` for better convergence near singularities
 - Sum-of-products inners: `a*f(x) + b*g(x)` for Stirling-type approximations
-- Canonical number representation: ✅ structural fractions preserved; constant recognition in derive output
 
 ## 12. Periodicity Detection
 
@@ -255,10 +231,6 @@ Arbitrary-precision integers and rationals for exact computation beyond double r
 ## 18. Bitwise / Programming Operators
 
 `xor`, `and`, `or`, `nand`, `nor`, `not`, bit shifts, modulo. Enables digital logic, cryptographic formulas, CS-oriented problem solving. Integer-only operations — error on non-integer inputs.
-
-## 19. `Checked<double>` — zero-overhead optional alternative — ✅ DONE
-
-Implemented as `Checked<T>` (not `checked_value`). NaN-sentinel optional replacing `std::optional<double>` for `evaluate()` return type. `sizeof(Checked<double>) == sizeof(double)`; returns in one FP register; `operator*` deliberately absent — unwrap via `.value()`. Full three-file migration: `expr.h` (type definition + evaluate signature), `system.h` (~20 call sites + hot probe lambda), `fit.h` (2 probe lambdas). Commits 7095f95 (type + evaluate), 620c3d9 (hot probe), 6608bdd (fit.h). 1829/1829 tests passing post-migration.
 
 ## 20. Formula calls as typed expression nodes
 
@@ -436,110 +408,6 @@ Dotted form interacts with #15 — a shared implementation of path-qualified
 variable names covers both CLI-query dotted access and in-file sub-scope
 references.
 
-## 22. Post-derive simplification and deduplication — ✅ DONE (2026-04-19, ccacc8e / 43cbc0d / 319c9e3)
-
-Semantic fingerprint dedup shipped. `fingerprint_expr` + `canonicity_score` primitives in `expr.h`; streaming `winners` map in `derive_all`; `build_alias_table()` + `source_label_` on `FormulaSystem`; `RECOGNIZE_FRACTION_MAX_DEN` raised to 360 with `extra_constants` threading. Triangle reproducer: 294 → 159 output lines (46% reduction). Results now emitted ascending by `canonicity_score` — simplest formula first; sentinel-bucket forms last. `--derive N` caps at N results. Defect A fixed: `free_vars` in fingerprinting now uses alias values, not keys, so CLI alias queries fingerprint correctly. 1944/1944 tests pass.
-
-**Original problem statement (archived):**
-
-`fwiz --derive "examples/triangle(A=?, a=4, B=20, c, b)"` used to produce 294
-distinct output lines. Many were semantically equivalent, just rendered
-differently — e.g.:
-
-```
-A = 180 / pi * acos((b^2 + c^2 - 16) / (2 * b * c))
-A = acos((b^2 + c^2 - 16) / (2 * b * c)) / 0.01745329252
-```
-
-Same equation; one uses `180/pi`, the other uses its decimal reciprocal.
-
-Worse, individual expressions contain obvious dead arithmetic. Example
-from the same output:
-
-```
-A = ... (-b/2 - c/2 + (b+4)/2 - 2) ...
-```
-
-That parenthesized sub-expression equals `-c/2`. Verified: fwiz's simplifier
-correctly handles `-b/2 - c/2 + b/2 + 4/2 - 2 → -c/2` when the user writes
-the distributed form, but leaves `(b+4)/2` opaque.
-
-### Root cause
-
-The simplifier's like-term combiner can't peek inside `DIV(ADD(b, 4), 2)`
-to see the `b/2` hiding there. Distribution of division over addition
-(`(a + c) / k → a/k + c/k` when `k` is a numeric literal) is missing.
-
-Two independent improvements:
-
-### Improvement A — Division-over-addition distribution
-
-Add a simplification rule (either in `simplify_div` in `src/expr.h` or as
-a `.fw` rewrite rule in `BUILTIN_REWRITE_RULES`):
-
-```
-(a + b) / k = a/k + b/k   iff k is a numeric literal, k != 0
-(a - b) / k = a/k - b/k   iff k is a numeric literal, k != 0
-```
-
-Guard on `k` being a literal to avoid introducing `1/k` symbolic inverses
-where `k` is itself variable. The like-term combiner then collapses terms
-like `-b/2 + b/2` automatically as it already does.
-
-### Improvement B — Post-derive deduplication pass
-
-After `derive_all` produces its raw result set, run each expression
-through `simplify()` once more (re-simplification may catch patterns
-produced by the cross-equation-elimination strategy that weren't in
-canonical form when the candidate was emitted), then `expr_to_string`,
-then deduplicate the string set. With Improvement A in place, the
-deduplication becomes effective — many of the 294 current outputs collapse.
-
-### Why queue these together
-
-- (A) alone simplifies individual expressions but doesn't reduce the output
-  count — two differently-structured derivations may still produce equivalent
-  forms that only match after simplification.
-- (B) alone collapses exact-string duplicates but misses semantic duplicates
-  whose differing forms survive simplification.
-- Together: simplifier handles pattern (A), re-simplification in (B) maps
-  variants to canonical forms, deduplication collapses the set.
-
-### Cost estimate
-
-- Improvement A: ~10-20 lines (either a `.fw` rule or a few lines in
-  `simplify_div`), plus tests.
-- Improvement B: ~5 lines (re-simplify + string-set dedup in `derive_all`),
-  plus tests for the 294-line triangle case.
-
-### Interaction with planned features
-
-- `--validate` (#21) benefits — cross-checking is cheaper when the output
-  set is minimal and canonical.
-- `--fit` interactions: fit output already goes through simplification; no
-  change.
-
-### Post-commit follow-up: Semantic (numeric) fingerprint dedup
-
-Distribution over addition (Improvement A) landed. It successfully reduces
-individual expression complexity — `(-b/2 - c/2 + (b+4)/2 - 2)` now simplifies
-to `-c/2` as intended. But `fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)'`
-still produces ~294 output lines. Diagnostic: those 294 lines are not exact-string
-duplicates — they're **294 structurally-distinct derivations** produced by the
-solver exploring different candidate paths. Distribution simplifies each line but
-doesn't merge them.
-
-The real fix: **semantic/numeric fingerprint dedup**. After formatting each
-candidate, evaluate it at several random points in the free-variable space (small
-integer coordinates, avoiding known singularities). Group candidates whose
-fingerprints match to within `EPSILON_REL`. Surface one canonical form per group.
-
-Estimated cost: ~30 lines in `derive_all` — pick 3-5 random-but-seeded test
-points, evaluate each candidate, hash the result tuple, dedupe. Edge cases:
-expressions that evaluate to NaN at some points (fall back to second tuple),
-expressions with different valid domains (rare — accept false-dup as a
-non-blocking loss).
-
 ## Standard Library Ideas
 
 Beyond the collections in #8:
@@ -562,24 +430,14 @@ stdlib/
     hypothesis.fw       # t-test, chi-squared, p-values
 ```
 
-## T1 Cleanup Cycle — ✅ DONE (2026-04-28, net −279 LOC)
+## Open cleanup-cycle reopen triggers
 
-Three structural cleanup milestones shipped. Zero behavior changes except the `||` correctness fix in M3.
+Carried forward from completed T1 and T2+T3 cleanup cycles (see COMPLETED.md). Each fires under a specific condition.
 
-- **T1.1 (M3):** Condition parsing unified on the existing `Condition` AST. `RewriteRule::condition` changed from `std::string` to `std::optional<Condition>`. `condition_violated` and `substitute_condition` deleted (−114 LOC string-substitution reimplementations of `check_condition` and expression substitution). `Condition`/`CondClause`/`CondOp`/`CondLogic` structs and `check_condition` moved from `system.h` into `expr.h` (after `ValueSet`, before `RewriteRule`), mirroring the existing ValueSet split. `parse_condition` stays in `system.h` (uses Lexer/Parser). `condition_to_string(const Condition&, bindings)` helper added in `expr.h` for `--steps`/`--calc` assumption strings. Silent `||` bug in rewrite-rule conditions closed (old string scanner split only on `&&`; AST path correctly evaluates `||`). Test 11 in `test_rewrite_rules` is the witness case.
-- **T1.2 (M2):** Five near-identical post-order tree walkers (`substitute`, `cse_replace`, `substitute_builtin_constants`, `expr_recognize_constants`, `resolve_diff_calls`) replaced by two narrow templates in `expr.h`: `tree_map<Fn>` (full-tree post-order, used by `cse_replace` and `resolve_diff_calls`) and `tree_map_leaf<Fn>` (leaf-only, used by the three VAR/NUM-matching walkers). Pointer-equality short-circuit is now universal. `expand_for_var` not migrated — its MUL-distribution logic inspects post-recurse sibling shapes, not a pure leaf transform. 4 new ASSERTs in `test_tree_map_primitives` pin the pointer-identity invariant.
-- **T1.3 (M1):** `FWIZ_TRACE_SOLVER` instrumentation deleted from `system.h` (−185 LOC). Removed: `fwiz_trace_solver()`, `MAX_DIAGNOSTIC_SOLVE_DEPTH`, `diag_keyset_str`, `diag_set_str`, `diag_expr_preview`, `dump_dead_ends`, and ~45 `if (fwiz_trace_solver())` guard sites in `derive_recursive`, `solve_all`, `solve_recursive`, `try_resolve`, `try_resolve_numeric`.
-
-**Reopen triggers (carry forward to T2+ cycles):**
-
-- **T2.1** (`approximate_mode` sub-system non-propagation, `system.h:420-421`) — trigger: user reports `--approximate` output differs between parent and sub-system formula call. Fix: propagate on set OR `SolveContext` struct (T4.2).
-- **T2.2** (`static int call_counter` shared across instances, `system.h:893`) — trigger: any test creating two `FormulaSystem` instances in the same process and checking `_fc` variable naming for structural equality. Fix: move counter to `FormulaSystem` as `int next_call_id_ = 0`.
-- **T2.3** (`const_cast<ExprPtr>` at `system.h:3692`) — trigger: `expr_recognize_constants` ever adds a mutation (new node type, memoization write). Fix: widen `expr_recognize_constants` to accept `const Expr*`.
-- **T3.1** (`recognize_constant` table rebuilt per call, `fit.h:265-271`) — trigger: profiling shows `fit.h` allocations in hot path. Fix: promote to file-scope `static const std::map` per `feedback_constant_table.md`.
 - **T3.2** (`expr_to_string` on simplifier hot path, `expr.h:1479`) — trigger: profiling shows string allocations dominating `simplify_div`. Fix: store `ExprPtr` in `SimplifyAssumption`, defer `expr_to_string` to output site.
 - **T3.3** (`cse_extract` keys by string, `system.h:277`) — trigger: `--cse` output is visibly slow on large derive results (>50 candidates). Fix: structural hash (integer mixing, no allocation).
-- **T4.1** (file split: `numeric.h` first, then `query.h`) — trigger: immediately after T1 cycle ships, or when `system.h` exceeds 4000 LOC after T1 deletions, or when a new contributor asks "where does CLI parsing live?" Post-T1, `system.h` is the larger file (~3580 LOC); extract `numeric.h` (700 LOC, newton/bisection/adaptive_scan boundary at `try_resolve_numeric`) first, then `query.h` (200 LOC, CLI query parsing) if still warranted.
-- **T4.2** (`SolveContext` struct replacing mutable mode flags) — trigger: T2.1 reopen, OR any second mutable solve-mode flag added to `FormulaSystem`. Fix: explicit `SolveContext` passed through the solve chain.
+- **T4.1** (file split: `numeric.h` first, then `query.h`) — trigger: when `system.h` exceeds 4000 LOC, or when a new contributor asks "where does CLI parsing live?" Post-T1, `system.h` is ~3580 LOC; extract `numeric.h` (700 LOC, newton/bisection/adaptive_scan boundary at `try_resolve_numeric`) first, then `query.h` (200 LOC, CLI query parsing) if still warranted. **T3.8 payload**: include the `numeric_results_` → `result_is_exact_` rename as part of the file-split atomic diff (deferred from T2+T3 M3 to avoid dual-churn).
+- **T4.2** (`SolveContext` struct replacing mutable mode flags) — trigger: a second mutable solve-mode flag is added to `FormulaSystem`, OR Future #56 escalation lands. Fix: explicit `SolveContext` passed through the solve chain.
 - **T4.5** (`match_pattern` `std::function` for recursive lambdas, `expr.h:702,764,859`) — trigger: profiling shows SBO-overflow heap allocations in `match_pattern` (23 rules × 20 nodes per simplify = ~460 calls per node). Fix: named struct with recursive member functions.
 - **`tree_map` creep guard** — trigger: a new `tree_map`/`tree_map_leaf` caller is added in a subsequent cycle without first checking whether a `.fw` rewrite rule subsumes it. Baseline: 5 callers post-T1. Threshold: >7 callers without rule-equivalence justification triggers re-review.
 - **Condition-in-expr.h spread** — trigger: a second non-rewrite-rule consumer in `expr.h` starts holding `Condition` (e.g. simplifier internals consulting global conditions per Future.md #31). At that point, "should `Condition` be a first-class part of the simplifier contract?" is open and warrants design.
@@ -592,18 +450,6 @@ Three structural cleanup milestones shipped. Zero behavior changes except the `|
 The two lambdas at expr.h:1259/1267 carry `// cppcheck-suppress constParameterReference` because they expose a `double&` write-back interface (`val(x) -> double&`). Structural fix: invert the contract to a `combine(dst, src)` callable — callee receives destination + source, writes the merged value directly, no reference escape. Eliminates both suppressions without silencing cppcheck.
 
 **Reopen trigger:** next warnings-cleanup cycle, or any refactor of additive/multiplicative flattening in expr.h.
-
-## 24. ~~Widen `is_one`/`is_neg_one`/`is_neg` pointer overloads to `const Expr*`~~ — **done 2026-04-19 (0708bf5)**
-
-Widened in the M6+M7+F24 micro-cycle. No caller cascade surfaced (unlike M3/M10).
-
-## 25. ~~M6/M7 deferred: `variableScope` and shadow renames~~ — **done 2026-04-19 (0708bf5)**
-
-All 24 warnings cleared (8 `variableScope` + 16 shadow renames). No behavior changes; test output byte-identical.
-
-## 26. ~~`system.h:1890` redundantAssignment bug-smell~~ — **done 2026-04-19 (6caf0a4)**
-
-Debugger round confirmed truly-dead code (inner branch fires 2× in test suite but the else-if below independently re-finds the builtin). Four lines deleted; semantically equivalent. Findings preserved in `.fwiz-workflow/debug-findings-system-1890.md`.
 
 ## 27. Unified tolerance doctrine
 
@@ -651,12 +497,6 @@ The 21 lines in the triangle reproducer output using pre-evaluated numeric const
 
 **Reopen trigger:** user requests symbolic intermediate steps in derive output (e.g. `--derive --symbolic` or a stepped-derivation mode), OR scheduled batch-mode feature (see Future #5) requires preserved symbolic form for tabular output.
 
-## 34. `x / (1/y) = x*y iff y != 0` rewrite rule — ✅ DONE (2026-04-24, <commit-hash-placeholder>)
-
-Shipped as a builtin rewrite rule alongside the related `k * x / (k * y) = x / y iff k != 0` cancellation rule. Now also handles **numeric** denominators — `a / (1/20) → a * 20` (canonical: `20 * a`) — eliminating all 57 instances of `/ (1 / 20)` in the triangle reproducer's derive output. The original reopen-trigger ("`/(1/SYMBOL)` substring where SYMBOL is a non-numeric identifier") is now ACTIVE as a regression guard.
-
-**Open residual** (not addressed by this rule): composite-denominator patterns like `x / ((1/k) * Y)` where the unit fraction is one factor inside a MUL. These survive (29 occurrences in the triangle output, all of form `1 / deg * acos(...) * ...` or `1 / 2 * (b+c+4) * ...`). Rewriting these would require a wider rule (`x / (a/b * y) = x * b / (a * y)`) — see Future entry to be added if/when needed.
-
 ## 35. Stale CLAUDE.md / `system.h:521` claim about `stdlib/builtin.fw` mirroring
 
 The comment at `src/system.h:521` claims `stdlib/builtin.fw` mirrors `BUILTIN_REWRITE_RULES` for documentation. The file actually contains only builtin-function section definitions (sin, cos, sqrt, log, abs, etc.) — NOT rewrite rules. Fix the stale comment in a future cleanup pass.
@@ -688,22 +528,6 @@ forms. Triangle measurement: `/ (1 / ` count dropped 29 → 26 (-3). The bulk
 of the residual is unrelated to negative exponents (e.g. `1 / deg * acos(...)`
 constructed directly from a deg-multiplication, not from a `^(-1)` factor).
 Entry remains valid; not obsolete.
-
-## 38. `x^(-n)` rendering as `1/x^n` for any integer n — ✅ DONE-BY-SIDE-EFFECT (2026-04-24)
-
-Originally tracked as a residual: `simplify_pow`'s standalone case
-(`expr.h:1759-1765`) handled `x^(-n)` outside any MUL chain, but the moment
-the POW-with-negative-exponent was wrapped in a MUL chain, the
-`rebuild_multiplicative` factor-emit loop would re-emit `POW(base, Num(-n))`
-unconditionally, undoing the cleanup.
-
-**Resolution:** `rebuild_multiplicative` (`src/expr.h`, ~lines 1296-1330) was
-rewritten to split factors by exponent sign: positive exponents → numerator
-product; negative exponents (with sign flipped) → denominator product;
-emit `DIV(num, denom)` when any negative-exp factors exist. Walker assertion
-(`tests.cpp` M3-6 block) pins the invariant: no `^(-` substring in derive
-output for the triangle reproducer. Triangle measurement: 66 `^(-` substrings
-→ 0; 159 lines → 158; 42024 chars → 40983.
 
 ## 39. Shared CSE helper preamble across `--table` rows
 
@@ -813,6 +637,36 @@ When `diff(formula_call, var)` targets a sub-system with multiple equations defi
 The `diff(...)=?` query path returns a `ValueSet` (CLI Surface 2) and so should support range/interval results in addition to discrete values. Polish-pass Item 6 attempted to construct a CLI-level reproducer for the range branch but found that range-valued constraints on RHS variables (e.g., `slope = a` with `a > 1, a < 5`) do not propagate through `resolve_all` to the LHS — this is a structural gap independent of `diff()`. A range-result test for `diff(...)=?` therefore requires either (a) extending `resolve_all` to propagate constraint ranges through equation chains, or (b) constructing a derivative whose internal evaluation directly produces a `ValueSet` interval.
 
 **Reopen trigger:** range-propagation through `resolve_all` lands (independent feature), OR a user surfaces a `diff(...)=?` query whose natural answer is an interval.
+
+## 53. Typed-binding predicates in `.fw` rule conditions
+
+Extend the rule-condition language with predicates `is_num(x)`, `is_neg_num(x)`, `is_int(x)` that test the runtime binding of a wildcard: `is_num(x)` is true only when `x` binds to a numeric literal — NOT permissive-unknown (unknown → false, not true). This is the foundational extension that would unblock three blocked migrations and one blocked rule: T3.5 (rational arithmetic in `simplify_div`), T3.6 (`x^(-n)` rendering), and Future #31 (`abs(x) = x iff x >= 0`). Without this, the rule engine's wildcard semantics treat any binding — symbolic or numeric — identically, making it impossible to safely restrict a rule to numeric-only operands.
+
+**Reopen trigger**: a third C++ simplifier block resists migration for the same reason (wildcard binds both numeric and symbolic, rational arithmetic is C++-only), OR Future #31 (`abs(x) = x iff x >= 0`) is reopened, OR T3.5/T3.6 are reopened.
+
+## 54. T3.5 non-migration: constant reassociation in `simplify_div`
+
+The constant-reassociation block in `simplify_div` (expr.h) cannot migrate to `.fw` rewrite rules. Root cause: the block extracts numeric factors from symbolic expressions using `make_rational` — a C++-only operation — and rebalances the numeric side. The rule engine's wildcard semantics bind `b` to any expression (symbolic or numeric) indistinguishably, so a rule condition like `iff is_num(a)` cannot be expressed today.
+
+**Reopen trigger**: typed-binding predicates (Future #53) ship AND `make_rational` is callable from rule RHS evaluation.
+
+## 55. T3.6 non-migration: `x^(-n) → 1/x^n`
+
+The `x^(-n)` rewriting in the simplifier cannot migrate to a `.fw` rewrite rule. Root cause: permissive-condition semantics would treat `x^y` (symbolic exponent) as satisfying any numeric-sign condition on `y` (unknown → permissive), causing infinite rewriting loops on symbolic exponents. The check that `n` is a negative numeric literal requires `is_neg_num(n)` — a typed-binding predicate not yet in the rule engine.
+
+**Reopen trigger**: typed-binding predicates (Future #53) ship.
+
+## 56. Issue 1 severity escalation option
+
+The T2+T3 M1 fix drops parse-failed rewrite rules at load time with a stderr warning (`"warning: dropping rewrite rule '…' — malformed condition: …"`). If the load-time warning proves insufficient for diagnostics — e.g. a user's `.fw` file silently loses rules and they cannot see why — add a `bool condition_parse_failed` flag to `RewriteRule` and surface it at `compute_rewrite_groups` (option (b) from the original fix discussion). Today option (d) "drop silently to stderr" was chosen as the smallest correct delta; option (b) is available as a follow-up if the warning surface is too weak.
+
+**Reopen trigger**: a user reports they lost a rewrite rule silently (i.e. did not see the stderr warning) due to a malformed condition string in their `.fw` file, OR the T4.2 `SolveContext` structural fix absorbs this anyway.
+
+## 57. recognize_constant: std::map → sorted std::array
+
+`base_recognition_constants()` in `fit.h` currently uses `std::map<std::string, double>` as the backing store for the merged builtins+sqrt/log table (9 entries). Iteration is alphabetical (red-black tree order), which is what `recognize_constant` and downstream fingerprint-dedup depend on. At 9 entries the tree fits in ~5 cache lines and is L1-warm after the first call, so real-world impact is negligible. If the constant table grows past ~20 entries OR `recognize_constant` becomes a measurable hot path under `--fit`/`--derive`, replacing the `std::map` with a `constexpr`-sorted `std::array<std::pair<const char*, double>>` would convert pointer-chasing tree traversal into a sequential scan.
+
+**Reopen trigger**: constant table size > 20 entries, OR perf-auditor flags `recognize_constant` as measurably hot in a future cycle.
 
 ## Interaction with existing features
 

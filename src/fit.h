@@ -1,5 +1,6 @@
 #pragma once
 #include "expr.h"
+#include <array>
 #include <numeric>
 
 // ============================================================================
@@ -247,6 +248,33 @@ struct ConstantForm {
     int power = 1;               // constant^power (1, 2, -1)
 };
 
+// Common irrational roots and logs that recognize_constant tests against,
+// alongside builtins (pi/e/phi) and any caller-supplied extras. File-scope
+// static so the table is built once at program start, not per call.
+inline const std::array<std::pair<const char*, double>, 6>& sqrt_log_constants() {
+    static const std::array<std::pair<const char*, double>, 6> t = {{
+        {"sqrt(2)", std::sqrt(2.0)}, {"sqrt(3)", std::sqrt(3.0)}, {"sqrt(5)", std::sqrt(5.0)},
+        {"log(2)", std::log(2.0)},  {"log(3)", std::log(3.0)},  {"log(10)", std::log(10.0)},
+    }};
+    static_assert(std::tuple_size<decltype(t)>::value == 6,
+                  "update size literal in sqrt_log_constants() when adding entries");
+    return t;
+}
+
+// Combined builtins+sqrt/log table in sorted (std::map) order. Built once at
+// static-init; recognize_constant iterates this without per-call allocation.
+// Iteration order matters — a value that matches multiple constants returns
+// the first hit, and downstream fingerprint dedup relies on the historical
+// alphabetical order (e < log(*) < phi < pi < sqrt(*)).
+inline const std::map<std::string, double>& base_recognition_constants() {
+    static const std::map<std::string, double> t = []() {
+        std::map<std::string, double> m = builtin_constants();
+        for (const auto& [k, v] : sqrt_log_constants()) m[k] = v;
+        return m;
+    }();
+    return t;
+}
+
 // Try to express x as (p/q) * constant^power
 // Tests against builtin constants plus any additional constants provided.
 // Returns nullopt if x is a simple rational number or not recognizable.
@@ -258,28 +286,35 @@ inline std::optional<ConstantForm> recognize_constant(double x,
     // If it's already a simple fraction, no constant needed
     if (recognize_fraction(x, RECOGNIZE_FRACTION_MAX_DEN, tol)) return std::nullopt;
 
-    // Build combined constant table: builtins + common roots + extras
-    auto& builtins = builtin_constants();
-    std::map<std::string, double> all_constants = builtins;
-    // Common irrational roots (output as sqrt(N) via constant_form_to_expr)
-    all_constants["sqrt(2)"] = std::sqrt(2.0);
-    all_constants["sqrt(3)"] = std::sqrt(3.0);
-    all_constants["sqrt(5)"] = std::sqrt(5.0);
-    // Common logarithms (output as log(N) via constant_form_to_expr)
-    all_constants["log(2)"] = std::log(2.0);
-    all_constants["log(3)"] = std::log(3.0);
-    all_constants["log(10)"] = std::log(10.0);
-    for (auto& [k, v] : extra_constants)
-        if (!all_constants.count(k)) all_constants[k] = v;
-
-    // Try each constant at various powers
+    // Try a (name, val) pair at powers {1, 2, -1}; return on first match.
     static const int powers[] = {1, 2, -1};
-    for (auto& [name, val] : all_constants) {
+    auto try_constant = [&](const std::string& name, double val) -> std::optional<ConstantForm> {
         for (int pw : powers) {
             double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
             double quotient = x / cv;
             auto frac = recognize_fraction(quotient, RECOGNIZE_FRACTION_MAX_DEN, tol);
             if (frac) return ConstantForm{frac->p, frac->q, name, pw};
+        }
+        return std::nullopt;
+    };
+
+    // Iterate base + extras as a single sorted (alphabetical) sequence via
+    // an in-place 2-way merge — preserves original semantics where the first
+    // alphabetically-matching constant wins. Extras are skipped on collision
+    // with a base entry (base takes precedence, as before). No per-call
+    // allocation: both inputs are already-sorted std::maps.
+    const auto& base = base_recognition_constants();
+    auto bi = base.begin(), be = base.end();
+    auto ei = extra_constants.begin(), ee = extra_constants.end();
+    while (bi != be || ei != ee) {
+        if (ei == ee || (bi != be && bi->first <= ei->first)) {
+            if (auto cf = try_constant(bi->first, bi->second)) return cf;
+            // skip extras entry that collides with this base name
+            if (ei != ee && ei->first == bi->first) ++ei;
+            ++bi;
+        } else {
+            if (auto cf = try_constant(ei->first, ei->second)) return cf;
+            ++ei;
         }
     }
     return std::nullopt;
@@ -334,9 +369,15 @@ inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
 // Walk an expression tree and replace floating-point NUM nodes with recognized
 // symbolic forms (fractions, constants like log(2), pi, etc.).
 // Used by derive output to produce clean symbolic expressions.
-inline ExprPtr expr_recognize_constants(const ExprPtr& e,
+//
+// Accepts `const Expr*` to compose cleanly with simplify()'s return type.
+// Internally, the only `Expr*` use is reading from `e`; tree_map_leaf produces
+// fresh nodes when the leaf functor returns a new value, and short-circuits to
+// the original pointer otherwise. The const_cast at the boundary is the
+// documented bridge — no path inside writes through the pointer.
+inline ExprPtr expr_recognize_constants(const Expr* e,
         const std::map<std::string, double>& extra_constants = {}) {
-    return tree_map_leaf(e, [&](ExprPtr node) -> ExprPtr {
+    return tree_map_leaf(const_cast<ExprPtr>(e), [&](ExprPtr node) -> ExprPtr {
         if (!is_num(node) || is_integer_value(node->num) || is_zero(*node)) return node;
         if (auto frac = recognize_fraction(node->num, RECOGNIZE_FRACTION_MAX_DEN))
             return make_rational(frac->p, frac->q);

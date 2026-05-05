@@ -10,9 +10,11 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2299+)
+make test         # run all tests (2307+)
 make sanitize     # ASan + UBSan
-make analyze      # clang-tidy (zero warnings expected)
+make analyze-fast # cppcheck only (~1-2 min, per-cycle gate)
+make analyze-full # clang-tidy (~1-2h, USER-triggered batch on idle PC)
+make analyze      # both tiers (analyze-fast + analyze-full)
 ```
 
 Run: `./bin/fwiz [flags] <file>(<var>=?, <var>=?!, <var>=<value>, <var>=<expr>, ...)`
@@ -156,7 +158,7 @@ Read `docs/Developer.md` for the full guide. Summary:
 - **Data-driven** — BinOp table, builtin registry, strategy enumeration
 - **No empty catch blocks** — return, log, or handle
 - **Write failing tests first**, commit tests before refactoring
-- `make test && make sanitize && make analyze` must all pass before committing
+- `make test && make sanitize && make analyze-fast` must pass before committing. `make analyze-full` (clang-tidy, ~1-2h) is a user-triggered batch on idle PC — see Quality bar below.
 
 ## Orchestrated Development Workflow
 
@@ -172,7 +174,10 @@ USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → re
 
 **Artifacts** (in `.fwiz-workflow/`, gitignored): research-brief.md, design-proposal.md, implementation-log.md, review-notes.md, next-priorities.md.
 
-**Quality bar**: `make test && make sanitize && make analyze` + periodic data locality / disassembly audits on hot paths.
+**Quality bar (tiered oracle)**:
+- **Per-cycle gate**: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). Must pass before cycle close.
+- **User-triggered batch**: `make analyze-full` (clang-tidy — ~1-2h on this header-heavy codebase). User runs during PC idle windows (overnight, before work). Orchestrator tracks debt across cycles and surfaces "N cycles since last clang-tidy" gently at cycle close — no hard-stop, no 3-strike escalation. When user runs the batch, orchestrator audits residuals against the cumulative diff since last green clang-tidy baseline.
+- **Periodic**: data locality / disassembly audits on hot paths (perf-auditor agent).
 
 **Core principle**: least code, least features, maximum flexibility, tiny fast core, infinite extendability via .fw rules.
 

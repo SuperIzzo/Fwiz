@@ -278,6 +278,7 @@ public:
     mutable bool approximate_mode = false;  // --approximate: collapse symbolic to floats in derive output
     int numeric_samples = NUMERIC_DEFAULT_SAMPLES;
     int fit_depth = FIT_DEFAULT_DEPTH;
+    int next_call_id_ = 0;  // counter for positional-call output variable names
     static inline thread_local int formula_depth_ = 0;
 
     // --- Budget sentinel (Part C) ---
@@ -654,7 +655,6 @@ abs(x) / x = undefined iff x = 0
 
             // Collect all condition variables and their ValueSets
             std::map<std::string, ValueSet> var_coverage;
-            bool all_have_conditions = true;
 
             for (size_t idx : group.rule_indices) {
                 const auto& rule = rewrite_rules[idx];
@@ -681,7 +681,7 @@ abs(x) / x = undefined iff x = 0
             }
 
             if (group.exhaustive) continue;  // already set by unconditional rule
-            if (!all_have_conditions || var_coverage.empty()) continue;
+            if (var_coverage.empty()) continue;
 
             // Exhaustive if every constrained variable covers all reals
             group.exhaustive = true;
@@ -743,9 +743,8 @@ abs(x) / x = undefined iff x = 0
                 if (return_var.empty()) return_var = "result";
                 call.query_var = return_var;
 
-                // Generate unique output variable name
-                static int call_counter = 0;
-                call.output_var = "_fc" + std::to_string(call_counter++);
+                // Generate unique output variable name (per-instance counter)
+                call.output_var = "_fc" + std::to_string(next_call_id_++);
 
                 // Map positional args
                 for (size_t i = 0; i < e->args.size() && i < pos_args.size(); i++) {
@@ -1829,7 +1828,8 @@ private:
         bool had_nan_inf = false;
         std::set<std::string> missing;
 
-        auto try_expr_all = [&](const ExprPtr& expr, const std::string& label,
+        auto try_expr_all = [&](const ExprPtr& expr,
+                                const std::string& label,
                                 const Condition* cond) {
             auto b = bindings; // copy — each attempt gets fresh bindings
             bool nan_inf = false;
@@ -2229,14 +2229,20 @@ private:
                 mod_tok.end()));
             auto lhs_expr = lp.parse_expr();
             auto rhs_expr = rp.parse_expr();
-            std::string desc = eq_part;
             std::optional<Condition> cond_ast;
+            bool cond_ok = true;
             if (is_iff && !cond_part.empty()) {
-                // NOLINTNEXTLINE(bugprone-empty-catch) — malformed condition at load time → store unconditional
-                try { cond_ast = parse_condition(trim(cond_part)); } catch (const std::runtime_error&) {}
+                try { cond_ast = parse_condition(trim(cond_part)); }
+                catch (const std::runtime_error& e) {
+                    cond_ok = false;
+                    std::cerr << "warning: dropping rewrite rule '" << eq_part
+                              << "' — malformed condition: " << e.what() << '\n';
+                }
             }
-            rewrite_rules.push_back({lhs_expr, rhs_expr, desc, std::move(cond_ast),
-                                     is_undefined(rhs_expr), -1});
+            if (cond_ok) {
+                rewrite_rules.push_back({lhs_expr, rhs_expr, eq_part, std::move(cond_ast),
+                                         is_undefined(rhs_expr), -1});
+            }
             return;
         }
 
@@ -2306,6 +2312,7 @@ private:
         auto sub = std::make_shared<FormulaSystem>();
         sub->trace = trace;
         sub->numeric_mode = numeric_mode;
+        sub->approximate_mode = approximate_mode;
         sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
 
         // Try loading from file first; fall back to embedded definition
@@ -2340,6 +2347,7 @@ private:
                 sub = std::make_shared<FormulaSystem>();
                 sub->trace = trace;
                 sub->numeric_mode = numeric_mode;
+                sub->approximate_mode = approximate_mode;
                 sub->custom_functions_ = custom_functions_;
                 if (def_source)
                     sub->load_string(*def_source, "@def:" + file_part, auto_section);
@@ -2519,7 +2527,6 @@ private:
         // For target T in equation E1 with unknown U, find E2 that can express U.
         // Substitute U into E1, then solve for T. If the result still contains
         // another unknown V, try a second elimination from remaining equations.
-        if (equations.size() >= 2) {
         for (size_t i = 0; i < equations.size(); i++) {
             auto& e1 = equations[i];
             if (!contains_var(e1.rhs, target)) continue;
@@ -2599,7 +2606,6 @@ private:
                 }
             }
         }
-        } // equations.size() >= 2
 
         // Strategy 6: numeric root-finding (--numeric only)
         if (numeric_mode) {
@@ -2678,7 +2684,8 @@ private:
         simplify_clear_assumptions();
         auto result = simplify(resolved);
         for (const auto& a : simplify_get_assumptions())
-            trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 1);
+            trace.step("  assuming: " + a.desc
+                + (a.inherent ? " (inherent)" : ""), depth + 1);
 
         // If the target appears in the resolved expression, we have:
         //   target = f(target, ...) — try to solve algebraically
@@ -2894,6 +2901,8 @@ private:
                             DeadEndSet* dead_ends = nullptr) const {
         // Build cache key: target + sorted bindings
         std::string key = target;
+        // Heuristic reserve: each binding contributes ~20 chars (",name=12.345").
+        key.reserve(target.size() + bindings.size() * 20);
         for (auto& [k, v] : bindings)
             key += "," + k + "=" + fmt_num(v);
 
@@ -3336,7 +3345,8 @@ private:
         const auto* simplified = simplify(resolved);
         auto assumptions = simplify_get_assumptions();
         for (const auto& a : assumptions)
-            trace.step("  assuming: " + a.desc + (a.inherent ? " (inherent)" : ""), depth + 2);
+            trace.step("  assuming: " + a.desc
+                + (a.inherent ? " (inherent)" : ""), depth + 2);
         auto result_opt = evaluate(simplified);
         if (!result_opt) {
             // Empty can mean either (a) an unresolved variable / unknown function
@@ -3362,10 +3372,9 @@ private:
         }
         // T10: write the recognized symbolic form to the provenance carrier
         // BEFORE rendering — trace and final share this exact ExprPtr.
-        // simplify() returns const Expr*; expr_recognize_constants takes
-        // ExprPtr (mutable) but never mutates the input — const_cast is the
-        // documented bridge between simplifier output and the recognizer.
-        ExprPtr recognized = expr_recognize_constants(const_cast<ExprPtr>(simplified), aliases_);
+        // expr_recognize_constants takes `const Expr*` and handles the bridge
+        // to tree_map_leaf internally.
+        ExprPtr recognized = expr_recognize_constants(simplified, aliases_);
         solved_symbolic_[target] = recognized;
         trace.step("result: " + target + " = " + fmt_trace(result, recognized), depth + 1);
         bindings[target] = result;

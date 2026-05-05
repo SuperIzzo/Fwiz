@@ -35,7 +35,11 @@ sanitize: asan ubsan
 	@echo "All sanitizer checks passed."
 
 # --- Static analysis ---
-analyze:
+# Tiered oracles. Per-cycle gate: `make analyze-fast` (cppcheck, ~1-2 min).
+# User-triggered batch (run during PC idle windows): `make analyze-full`
+# (clang-tidy, ~1-2h on this header-heavy codebase). `make analyze` runs both.
+
+analyze-fast:
 	@which cppcheck > /dev/null 2>&1 && ( \
 		echo "=== cppcheck ===" && \
 		cppcheck --enable=warning,style,performance --std=c++17 \
@@ -46,13 +50,19 @@ analyze:
 			--suppress=containerOutOfBounds:src/tests.cpp \
 			--error-exitcode=1 src/main.cpp src/tests.cpp 2>&1 \
 	) || echo "cppcheck not installed, skipping"
+	@echo "Fast static analysis complete (cppcheck)."
+
+analyze-full:
 	@which clang-tidy > /dev/null 2>&1 && ( \
 		echo "=== clang-tidy ===" && \
 		clang-tidy src/main.cpp \
 			--checks='bugprone-*,performance-*,clang-analyzer-*,-bugprone-easily-swappable-parameters,-performance-inefficient-string-concatenation' \
 			-- -std=c++17 -I src 2>&1 \
 	) || echo "clang-tidy not installed, skipping"
-	@echo "Static analysis complete."
+	@echo "Full static analysis complete (clang-tidy)."
+
+analyze: analyze-fast analyze-full
+	@echo "All static analysis complete."
 
 bin:
 	mkdir -p bin

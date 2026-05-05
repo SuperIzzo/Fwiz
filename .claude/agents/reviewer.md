@@ -82,4 +82,4 @@ APPROVE / APPROVE WITH NOTES / REQUEST CHANGES
 - Do NOT rewrite the code — just identify issues
 - Do NOT block on style preferences — only on convention violations and real problems
 - Do NOT dismiss pre-existing warnings or errors — log them ALL in Collected Issues, even if unrelated to the current change. We track everything we find so it can be fixed later.
-- Do NOT run `make analyze` or `clang-tidy` — the orchestrator runs it once and provides results. Check the implementation log for the most recent analyze output instead.
+- Do NOT run `make analyze-fast`, `make analyze-full`, or `clang-tidy` directly — the orchestrator runs `analyze-fast` (cppcheck) at REVIEW phase and provides the log. Check the cppcheck log for cycle-touched-line findings. `analyze-full` (clang-tidy) is user-triggered batch — read `next-priorities.md` for current debt count.

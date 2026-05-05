@@ -59,3 +59,13 @@ After implementation changes, update the project documentation to reflect what w
 - Do NOT add speculative documentation about things that might happen
 - Do NOT restructure or reformat existing documentation that wasn't affected
 - Do NOT add emoji or excessive formatting
+
+## Archive Doc Cross-Reference Rule
+
+When a NEW archive-style doc is created in `docs/` (e.g., `docs/COMPLETED.md` holding done-list entries moved out of `Future.md`, or any doc whose role is "preserves history but is read rarely"), add ONE-LINE cross-references from the relevant live doc(s) so readers can discover the archive without directory listing. Required pointers:
+
+- `CLAUDE.md` (if the archive is project-wide history, e.g., COMPLETED items): one-line mention near the doc-pointers section.
+- `docs/Developer.md` (if the archive contains technical/architectural items): one-line mention in the appropriate "Architecture" or "Conventions" subsection.
+- The source doc the archive was extracted FROM (e.g., `Future.md` → `COMPLETED.md`): one-line note at the top "Completed entries moved to `COMPLETED.md` (numbering preserved)."
+
+Do NOT add cross-references from agent profiles — agents discover via the live docs they already reference. Do NOT inflate the cross-reference into a duplicated TOC; one line per host doc is enough. Canonical miss: T2+T3 cleanup cycle 2026-05-02 — `docs/COMPLETED.md` (103 lines, numbering preserved per user spec) was created with no cross-references from `Developer.md` or `CLAUDE.md`; reviewer flagged the discoverability gap in review-notes.md item 6.2 as LOW priority but real.

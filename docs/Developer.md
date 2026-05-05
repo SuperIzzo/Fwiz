@@ -141,7 +141,7 @@ The core of the system. Contains:
 
 **evaluate()** — Evaluates a fully numeric expression tree. Returns `Checked<double>`: empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined` sentinel, null pointer). Division by zero also yields empty, via NaN sentinel — not a separate case. Built-in functions are dispatched via a static lookup table. Stays real-valued permanently — do not extend for complex or matrix types.
 
-`Checked<T>` (expr.h:30-89) makes check discipline type-enforced rather than convention-enforced — the complement to the "exceptions for exceptional cases only" principle. `sizeof(Checked<double>) == sizeof(double)`; no hidden bool. Test with `has_value()` / `operator bool`; unwrap with `.value()` (asserts on empty in debug). `.value_or_nan()` is the named boundary escape for handing `double` off to the pure-numeric root-finder layer (`find_numeric_roots`, `adaptive_scan`, `newton_solve`, `bisection_solve`) which has its own `isfinite` discipline — its use should stay rare and grep-worthy. The `Checked(T v)` constructor is deliberately NOT `explicit`: `return some_double;` in `Checked<double>`-returning functions is load-bearing throughout the evaluate paths. Three markers at the declaration document this intent: `// cppcheck-suppress noExplicitConstructor` silences cppcheck, `/*implicit*/` is the human-facing signal, and trailing `// NOLINT(google-explicit-constructor)` silences clang-tidy. All three are load-bearing — remove any one and `make analyze` will fire.
+`Checked<T>` (expr.h:30-89) makes check discipline type-enforced rather than convention-enforced — the complement to the "exceptions for exceptional cases only" principle. `sizeof(Checked<double>) == sizeof(double)`; no hidden bool. Test with `has_value()` / `operator bool`; unwrap with `.value()` (asserts on empty in debug). `.value_or_nan()` is the named boundary escape for handing `double` off to the pure-numeric root-finder layer (`find_numeric_roots`, `adaptive_scan`, `newton_solve`, `bisection_solve`) which has its own `isfinite` discipline — its use should stay rare and grep-worthy. The `Checked(T v)` constructor is deliberately NOT `explicit`: `return some_double;` in `Checked<double>`-returning functions is load-bearing throughout the evaluate paths. Three markers at the declaration document this intent: `// cppcheck-suppress noExplicitConstructor` silences cppcheck, `/*implicit*/` is the human-facing signal, and trailing `// NOLINT(google-explicit-constructor)` silences clang-tidy. All three are load-bearing — remove any one and `make analyze-full` (clang-tidy) or `make analyze-fast` (cppcheck) will fire.
 
 **evaluate_symbolic()** — Exact sibling of `evaluate()`. Returns an `ExprPtr` that preserves non-real structure (currently: integer rationals as `DIV(Num, Num)`). Used by the simplifier's constant-folding paths (`simplify_once_impl` BINOP num/num and FUNC_CALL all-numeric folds). This is the extension point for new number types — add complex or matrix dispatch here, not in `evaluate()`.
 
@@ -156,7 +156,7 @@ The core of the system. Contains:
 **`tree_map<Fn>` / `tree_map_leaf<Fn>`** — Two post-order tree-rewrite templates in `expr.h` (before the `substitute` section). Both use a pointer-equality short-circuit: if no child node changed, the original parent pointer is returned without reconstructing the node — zero allocations on the no-match path.
 
 - `tree_map<Fn>(ExprPtr, Fn)` — calls `fn` on every node *after* its children have been rewritten. Use when the transform may match any node shape (interior or leaf). Current consumers: `cse_replace` (matches subtrees by `expr_equal`), `resolve_diff_calls` in `system.h` (matches `FUNC_CALL` nodes named `"diff"`).
-- `tree_map_leaf<Fn>(ExprPtr, Fn)` — calls `fn` only on `NUM`/`VAR` terminals; passes interior nodes through structurally without invoking `fn`. Use when the transform targets only leaves and the per-node guard (`if (!is_var(node)) return node`) would otherwise be repeated at every call site. Current consumers: `substitute` (replaces `VAR` by name), `substitute_builtin_constants` (replaces `VAR` by builtin lookup), `expr_recognize_constants` in `fit.h` (replaces `NUM` by constant recognition).
+- `tree_map_leaf<Fn>(ExprPtr, Fn)` — calls `fn` only on `NUM`/`VAR` terminals; passes interior nodes through structurally without invoking `fn`. Use when the transform targets only leaves and the per-node guard (`if (!is_var(node)) return node`) would otherwise be repeated at every call site. Current consumers: `substitute` (replaces `VAR` by name), `substitute_builtin_constants` (replaces `VAR` by builtin lookup), `expr_recognize_constants` in `fit.h` (signature: `const Expr*` first parameter — the call site in `system.h` passes a `const Expr*` directly; the single `const_cast` is inside `fit.h` at the `tree_map_leaf` boundary, documented with a comment explaining that no path inside mutates through the pointer).
 
 `expand_for_var` is the explicit non-consumer: its MUL-distribution logic inspects the *reconstructed* `l`/`r` child shapes after recursion to decide whether to distribute — a post-recurse sibling dependency that cannot be expressed as a pure per-node lambda. It stays as a hand-written recursive function.
 
@@ -219,6 +219,7 @@ Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per desig
 - Detects global conditions (standalone `x > 0` lines)
 - Extracts formula calls from token stream before expression parsing
 - Distinguishes defaults (bare numbers without conditions) from equations
+- Rewrite rules with malformed `iff` conditions are **dropped at load time** with a stderr warning (`"warning: dropping rewrite rule '…' — malformed condition: …"`). A parse-failed rule is never pushed into the rule set, so it cannot accidentally be treated as unconditional. Sub-systems loaded via `load_sub_system` inherit the parent's `approximate_mode` at construction time (alongside `numeric_mode` and `custom_functions_`).
 
 `resolve()` / `resolve_all()` / `resolve_one()`:
 - `resolve()` returns first valid result (for internal use)
@@ -265,6 +266,8 @@ Curve fitting: `sample_function`, `fit_base`, `fit_all`, template functions, `re
 
 **`fmt_exact_double(double v, aliases={})`** — the single formatter for exact numeric output. Wraps `expr_recognize_constants(Expr::Num(v))` and stringifies the result; falls back to `fmt_num` when nothing matches. Accepts an optional `aliases` map (name → value) so callers can inject file-specific constants (e.g. `deg=pi/180`) that render as their names rather than raw decimals. Used from `fmt_solve_result` (main.cpp) and `format_derived` (system.h). `RECOGNIZE_FRACTION_MAX_DEN` (fit.h, currently 360) governs the denominator ceiling for rational recognition.
 
+`recognize_constant` uses two file-scope statics — `sqrt_log_constants()` (greppable `std::array` of `{value, name}` pairs for sqrt/log constants) and `base_recognition_constants()` (a merged `std::map` combining builtins and sqrt/log constants, built once at static initialization). Per-call iteration performs a zero-allocation 2-way merge between `base_recognition_constants()` and the caller's `extra_constants` (both already sorted), preserving the original alphabetical iteration order that downstream fingerprint dedup depends on. No heap allocation per call.
+
 ### Symbolic provenance carrier (`solved_symbolic_`, `aliases_`)
 
 `FormulaSystem` carries two parallel maps alongside the main numeric `bindings` (`map<string, double>`) to support exact-form trace output:
@@ -305,7 +308,7 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 
 ## Testing
 
-2299+ tests organized into functional tests, edge cases, and robustness groups:
+2307+ tests organized into functional tests, edge cases, and robustness groups:
 
 ```bash
 make test
@@ -366,7 +369,7 @@ make asan     # AddressSanitizer + LeakSanitizer
 make ubsan    # UndefinedBehaviorSanitizer
 ```
 
-All 2299+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
+All 2307+ tests pass clean under every sanitizer — no leaks, no undefined behavior, no memory errors.
 
 ### What each sanitizer catches
 
@@ -535,8 +538,8 @@ Prefer data tables and registries over switch statements and if-else chains:
 - **Commit tests separately** before refactoring so you can revert safely
 - **Semantic tests for output flexibility** — when simplifier output order may vary, test by evaluating with specific values rather than string comparison
 - **Accept either ordering** for commutative operations: `ASSERT(r == "x * y" || r == "y * x", ...)`
-- **Run the full pipeline** before committing: `make test && make sanitize && make analyze`
-- **cppcheck inline suppressions** require the `--inline-suppr` flag, which is included in the Makefile's `analyze` target. A `// cppcheck-suppress <id>` comment has no effect unless the tool is invoked with `--inline-suppr`.
+- **Per-cycle gate** before committing: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). `make analyze-full` (clang-tidy — ~1-2h) is a user-triggered idle-batch task; the orchestrator tracks debt and surfaces it in `next-priorities.md`. `make analyze` runs both tiers.
+- **cppcheck inline suppressions** require the `--inline-suppr` flag, which is included in the Makefile's `analyze-fast` target. A `// cppcheck-suppress <id>` comment has no effect unless the tool is invoked with `--inline-suppr`.
 
 ### Test organization
 
