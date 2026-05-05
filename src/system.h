@@ -20,7 +20,7 @@
 //  Shared utility
 // ============================================================================
 
-inline std::string trim(const std::string& s) {
+[[nodiscard]] inline std::string trim(const std::string& s) {
     size_t a = s.find_first_not_of(" \t\r\n");
     if (a == std::string::npos) return "";
     return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
@@ -98,7 +98,7 @@ struct SolveBudgetExceededError : std::exception {
 // skipping any name in `occupied`.
 //
 // Returns a vector in emission order (helpers first by topological depth).
-inline std::vector<std::pair<std::string, ExprPtr>> cse_extract(
+[[nodiscard]] inline std::vector<std::pair<std::string, ExprPtr>> cse_extract(
         const std::vector<ExprPtr>& exprs,
         int cap,
         const std::set<std::string>& occupied) {
@@ -321,7 +321,7 @@ public:
     // Collect the names (keys) of a bindings map as a set. Used to key
     // dead-end entries by available-binding context rather than specific values.
     template <typename Value>
-    static std::set<std::string> bindings_keyset(
+    [[nodiscard]] static std::set<std::string> bindings_keyset(
             const std::map<std::string, Value>& bindings) {
         std::set<std::string> keys;
         for (auto& [k, _] : bindings) keys.insert(k);
@@ -349,7 +349,7 @@ public:
     // the CLI diff path (perf-auditor WARN, polish-pass Item 5).
     size_t diff_resolved_up_to_ = 0;
 
-    std::set<std::string> all_variables() const {
+    [[nodiscard]] std::set<std::string> all_variables() const {
         std::set<std::string> vars;
         for (auto& eq : equations) {
             vars.insert(eq.lhs_var);
@@ -377,7 +377,7 @@ public:
     // Pre-parse: split raw lines into sections by [name] headers
     // Returns the section list. Lines before the first [name] go into section ""
     // Parse section header: [name], [name(x, y)], or [name(x, y) -> result]
-    static Section parse_section_header(const std::string& header) {
+    [[nodiscard]] static Section parse_section_header(const std::string& header) {
         Section sec;
         // Strip [ and ]
         std::string inner = trim(header.substr(1, header.size() - 2));
@@ -410,7 +410,7 @@ public:
         return sec;
     }
 
-    static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
+    [[nodiscard]] static std::vector<Section> split_sections(const std::vector<std::string>& all_lines) {
         std::vector<Section> result;
         result.push_back({"", {}, {}, {}, {}}); // top-level (unnamed)
         for (const auto& line : all_lines) {
@@ -526,7 +526,7 @@ public:
     }
 
     // Check if a variable name is a builtin constant not overridden by this system
-    bool is_active_builtin(const std::string& name) const {
+    [[nodiscard]] bool is_active_builtin(const std::string& name) const {
         auto& consts = builtin_constants();
         if (!consts.count(name)) return false;
         if (defaults.count(name)) return false;
@@ -546,7 +546,7 @@ public:
     }
 
     // Read all lines from a stream, stripping BOM and splitting on semicolons
-    static std::vector<std::string> read_all_lines(std::istream& in) {
+    [[nodiscard]] static std::vector<std::string> read_all_lines(std::istream& in) {
         std::vector<std::string> lines;
         std::string line;
         bool first = true;
@@ -702,7 +702,7 @@ abs(x) / x = undefined iff x = 0
     // Walk an expression, find FUNC_CALL nodes that aren't builtins, and convert them
     // to formula calls using positional arg metadata from the sub-system's section header.
     // Returns the expression with formula calls replaced by their output variables.
-    ExprPtr extract_positional_calls(const ExprPtr& e, const std::string& eq_lhs,
+    [[nodiscard]] ExprPtr extract_positional_calls(const ExprPtr& e, const std::string& eq_lhs,
                                      std::vector<FormulaCall>& calls) {
         if (!e) return e;
         if (e->type == ExprType::FUNC_CALL
@@ -834,7 +834,7 @@ abs(x) / x = undefined iff x = 0
     // corresponding derivative tree (simplified). The post-order tree_map
     // recursion handles nested `diff(diff(x^3, x), x)` naturally — by the time
     // the outer node is examined, inner diff(...) calls are already expanded.
-    ExprPtr resolve_diff_calls(ExprPtr e) {
+    [[nodiscard]] ExprPtr resolve_diff_calls(ExprPtr e) {
         return tree_map(e, [&](ExprPtr node) -> ExprPtr {
             if (node->type != ExprType::FUNC_CALL || node->name != "diff" ||
                 node->args.size() != 2) return node;
@@ -897,7 +897,7 @@ abs(x) / x = undefined iff x = 0
     // `iff` branches), only the FIRST matching equation is used. This
     // silently uses one branch's derivative. See Future #51 for the
     // multi-branch follow-up.
-    ExprPtr unfold_formula_call_for_diff(const FormulaCall& call) const {
+    [[nodiscard]] ExprPtr unfold_formula_call_for_diff(const FormulaCall& call) const {
         try {
             auto& sub_sys = load_sub_system(call.file_stem);
             for (auto& eq : sub_sys.equations) {
@@ -969,7 +969,7 @@ abs(x) / x = undefined iff x = 0
         }
     }
 
-    static bool approx_equal(double a, double b) {
+    [[nodiscard]] static bool approx_equal(double a, double b) {
         if (std::isnan(a) || std::isnan(b)) return false;
         if (std::isinf(a) || std::isinf(b)) return a == b;
         double eps = std::max(EPSILON_REL, EPSILON_REL * std::max(std::abs(a), std::abs(b)));
@@ -1042,7 +1042,7 @@ abs(x) / x = undefined iff x = 0
     // --- Derive (symbolic) ---
 
     // Prepare symbolic bindings for derive
-    std::map<std::string, ExprPtr> prepare_derive_bindings(
+    [[nodiscard]] std::map<std::string, ExprPtr> prepare_derive_bindings(
             const std::string& target,
             const std::map<std::string, double>& numeric_bindings,
             const std::map<std::string, std::string>& symbolic_bindings) const {
@@ -1070,7 +1070,7 @@ abs(x) / x = undefined iff x = 0
     // The stem is the FormulaSystem's source_label_ (file stem from load_file,
     // or the label argument from load_string). Called at format_derived time
     // (after enumerate_candidates has populated sub_systems).
-    std::map<std::string, double> build_alias_table() const {
+    [[nodiscard]] std::map<std::string, double> build_alias_table() const {
         auto& builtins = builtin_constants();
         // Raw (name, value, stem) tuples.
         struct Entry { double value; std::string stem; };
@@ -1131,14 +1131,14 @@ abs(x) / x = undefined iff x = 0
     //   - If the result is fully numeric, emit fmt_num; otherwise stringify
     //     the folded tree without triggering recognition (we don't want
     //     freshly-folded 3.14159 to get re-promoted back to 'pi').
-    std::string format_derived(const ExprPtr& result) const {
+    [[nodiscard]] std::string format_derived(const ExprPtr& result) const {
         // Back-compat entry point: build the alias table on the fly. Callers in
         // hot loops (e.g. derive_all) should pre-compute the table once and
         // use the overload below.
         return format_derived(result, build_alias_table());
     }
 
-    std::string format_derived(const ExprPtr& result,
+    [[nodiscard]] std::string format_derived(const ExprPtr& result,
                                const std::map<std::string, double>& aliases) const {
         // format_derived allocates via the arena (fmt_exact_double builds
         // Num nodes; substitute_builtin_constants rewrites the tree). Open
@@ -1171,7 +1171,7 @@ abs(x) / x = undefined iff x = 0
     }
 
     // Derive single result (backwards compatible)
-    std::string derive(const std::string& target,
+    [[nodiscard]] std::string derive(const std::string& target,
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
         ExprArena::Scope scope(arena);
@@ -1192,7 +1192,7 @@ abs(x) / x = undefined iff x = 0
     //   output_cap    — if > 0, truncate winners to first N (after canonicity
     //                   sort) BEFORE the CSE pass, so helpers reflect printed
     //                   equations only (replaces caller-side resize).
-    std::vector<std::string> derive_all(const std::string& target,
+    [[nodiscard]] std::vector<std::string> derive_all(const std::string& target,
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings,
                        std::vector<std::string>* out_helpers = nullptr,
@@ -1597,7 +1597,7 @@ abs(x) / x = undefined iff x = 0
 
     // Build a function inverter that resolves via .fw sub-system definitions.
     // Given f(inner) = rhs, loads f's sub-system and solves for the input variable.
-    FuncInverter make_func_inverter() const {
+    [[nodiscard]] FuncInverter make_func_inverter() const {
         return [this](const std::string& func_name, const ExprPtr& rhs) -> ExprPtr {
             try {
                 auto& sub = load_sub_system(func_name);
@@ -1639,12 +1639,12 @@ abs(x) / x = undefined iff x = 0
         ~FuncInverterGuard() { solve_set_func_inverter(nullptr); }
     };
 
-    double resolve(const std::string& target,
+    [[nodiscard]] double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
-        build_alias_table();      // populates aliases_ for fmt_trace fallback
+        (void)build_alias_table(); // populates aliases_ for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1653,12 +1653,12 @@ abs(x) / x = undefined iff x = 0
         return solve_recursive(target, prepared, {}, 0, dead_ends);
     }
 
-    ValueSet resolve_all(const std::string& target,
+    [[nodiscard]] ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
-        build_alias_table();      // populates aliases_ for fmt_trace fallback
+        (void)build_alias_table(); // populates aliases_ for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1759,7 +1759,7 @@ abs(x) / x = undefined iff x = 0
         throw std::runtime_error("Cannot solve for '" + target + "'");
     }
 
-    double resolve_one(const std::string& target,
+    [[nodiscard]] double resolve_one(const std::string& target,
                         std::map<std::string, double> bindings) const {
         auto result = resolve_all(target, std::move(bindings));
         auto& disc = result.discrete();
@@ -1783,7 +1783,7 @@ private:
     //   3. `key` provided → look up solved_symbolic_[key], render if found.
     //   4. fall back to fmt_exact_double(v, aliases_) — covers defaults /
     //      givens / @extern returns where no symbolic source exists.
-    std::string fmt_trace(double v, const Expr* sym = nullptr,
+    [[nodiscard]] std::string fmt_trace(double v, const Expr* sym = nullptr,
                           const std::string& key = "") const {
         if (approximate_mode) return fmt_num(v);
         if (!sym && !key.empty()) {
@@ -1794,7 +1794,7 @@ private:
         return fmt_exact_double(v, aliases_);
     }
 
-    std::map<std::string, double> prepare_bindings(const std::string& target,
+    [[nodiscard]] std::map<std::string, double> prepare_bindings(const std::string& target,
                                                     std::map<std::string, double>& bindings) const {
         trace.step("\nsolving for: " + target);
         for (auto& [k, v] : defaults) {
@@ -1812,7 +1812,7 @@ private:
     }
 
     // Like solve_recursive but collects ALL valid results instead of stopping at first
-    std::vector<double> solve_all(const std::string& target,
+    [[nodiscard]] std::vector<double> solve_all(const std::string& target,
                                    std::map<std::string, double>& bindings,
                                    std::set<std::string> visited, int depth,
                                    DeadEndSet& dead_ends) const {
@@ -1955,7 +1955,7 @@ private:
 
     // --- Formula call extraction ---
 
-    static size_t find_matching_rparen(const std::vector<Token>& tok, size_t lparen_pos) {
+    [[nodiscard]] static size_t find_matching_rparen(const std::vector<Token>& tok, size_t lparen_pos) {
         int depth = 1;
         for (size_t i = lparen_pos + 1; i < tok.size(); i++) {
             if (tok[i].type == TokenType::LPAREN) depth++;
@@ -1964,13 +1964,13 @@ private:
         return std::string::npos;
     }
 
-    static bool has_question_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
+    [[nodiscard]] static bool has_question_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
         for (size_t i = from; i < to; i++)
             if (tok[i].type == TokenType::QUESTION) return true;
         return false;
     }
 
-    static FormulaCall parse_call_args(const std::vector<Token>& tok, size_t name_pos, size_t rparen_pos) {
+    [[nodiscard]] static FormulaCall parse_call_args(const std::vector<Token>& tok, size_t name_pos, size_t rparen_pos) {
         FormulaCall call;
         call.file_stem = tok[name_pos].text;
 
@@ -2277,7 +2277,7 @@ private:
 
     // --- Sub-system loading ---
 
-    const FormulaSystem& load_sub_system(const std::string& file_stem) const {
+    [[nodiscard]] const FormulaSystem& load_sub_system(const std::string& file_stem) const {
         // Split dotted names: "geometry.rectangle" → file="geometry", section="rectangle"
         std::string file_part = file_stem;
         std::string section;
@@ -2625,7 +2625,7 @@ private:
 
     // Substitute all bindings into an expression. Works with both numeric and symbolic maps.
     template<typename MapType>
-    static ExprPtr substitute_bindings(ExprPtr expr, const MapType& bindings,
+    [[nodiscard]] static ExprPtr substitute_bindings(ExprPtr expr, const MapType& bindings,
             const std::string& skip_var = "") {
         std::set<std::string> vars;
         collect_vars(expr, vars);
@@ -2656,7 +2656,7 @@ private:
 
     // --- Derive (symbolic solver) ---
 
-    ExprPtr try_derive(const ExprPtr& expr, const std::string& target,
+    [[nodiscard]] ExprPtr try_derive(const ExprPtr& expr, const std::string& target,
                        std::map<std::string, ExprPtr>& bindings,
                        std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
                        DeadEndSet& dead_ends) const {
@@ -2703,7 +2703,7 @@ private:
         return result;
     }
 
-    ExprPtr derive_recursive(const std::string& target,
+    [[nodiscard]] ExprPtr derive_recursive(const std::string& target,
                              std::map<std::string, ExprPtr>& bindings,
                              std::set<std::string> visited, int depth,
                              DeadEndSet& dead_ends) const {
@@ -2896,7 +2896,7 @@ private:
     // probe iterations share dead-end knowledge across the 200+ samples.
     // When dead_ends is null (direct external call or a re-entrant test),
     // a fresh resolve() top-level call handles its own set and guards.
-    double resolve_memoized(const std::string& target,
+    [[nodiscard]] double resolve_memoized(const std::string& target,
                             std::map<std::string, double> bindings,
                             DeadEndSet* dead_ends = nullptr) const {
         // Build cache key: target + sorted bindings
@@ -2954,7 +2954,7 @@ private:
     }
 
     // Try to solve for target numerically by finding roots of f(target) = 0
-    std::vector<double> try_resolve_numeric(
+    [[nodiscard]] std::vector<double> try_resolve_numeric(
             const ExprPtr& combined, const std::string& target,
             std::map<std::string, double>& bindings,
             const std::set<std::string>& visited, int depth,
@@ -3118,7 +3118,7 @@ private:
 
     // --- Solver ---
 
-    double solve_recursive(const std::string& target,
+    [[nodiscard]] double solve_recursive(const std::string& target,
                            std::map<std::string, double>& bindings,
                            std::set<std::string> visited, int depth,
                            DeadEndSet& dead_ends) const {
@@ -3302,7 +3302,7 @@ private:
         throw std::runtime_error("Cannot solve for '" + target + "'");
     }
 
-    bool try_resolve(const ExprPtr& expr, const std::string& target,
+    [[nodiscard]] bool try_resolve(const ExprPtr& expr, const std::string& target,
                      std::map<std::string, double>& bindings,
                      std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
                      bool& had_nan_inf, std::set<std::string>& missing,
@@ -3413,7 +3413,7 @@ struct CLIQuery {
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
 };
 
-inline CLIQuery parse_cli_query(const std::string& input,
+[[nodiscard]] inline CLIQuery parse_cli_query(const std::string& input,
                                 bool allow_no_queries = false,
                                 bool allow_symbolic = false) {
     CLIQuery q;

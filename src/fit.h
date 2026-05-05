@@ -35,7 +35,7 @@ struct FitSample { double x, y; };
 
 // Evenly spaced samples of f over [lo, hi] with deterministic jitter.
 // Skips NaN/Inf results.
-inline std::vector<FitSample> sample_function(
+[[nodiscard]] inline std::vector<FitSample> sample_function(
         const std::function<double(double)>& f,
         double lo, double hi, int n_points = FIT_DEFAULT_SAMPLES) {
     std::vector<FitSample> samples;
@@ -64,7 +64,7 @@ inline std::vector<FitSample> sample_function(
 using FitMatrix = std::vector<std::vector<double>>;
 
 // Build Vandermonde matrix A[i][j] = x_i^j for j = 0..degree
-inline FitMatrix vandermonde(const std::vector<FitSample>& samples, int degree) {
+[[nodiscard]] inline FitMatrix vandermonde(const std::vector<FitSample>& samples, int degree) {
     FitMatrix A(samples.size(), std::vector<double>(degree + 1));
     for (size_t i = 0; i < samples.size(); i++) {
         double xp = 1.0;
@@ -80,7 +80,7 @@ inline FitMatrix vandermonde(const std::vector<FitSample>& samples, int degree) 
 // A is m×n (m >= n). Returns the n-element solution vector.
 // Uses Gaussian elimination with partial pivoting on the normal equations.
 // Stable enough for Vandermonde systems up to degree ~10.
-inline std::vector<double> least_squares_solve(const FitMatrix& A, const std::vector<double>& b) {
+[[nodiscard]] inline std::vector<double> least_squares_solve(const FitMatrix& A, const std::vector<double>& b) {
     int m = static_cast<int>(A.size());
     int n = static_cast<int>(A[0].size());
     assert(m >= n);
@@ -144,7 +144,7 @@ struct FitResult {
 };
 
 // Evaluate polynomial at x
-inline double poly_eval(const std::vector<double>& c, double x) {
+[[nodiscard]] inline double poly_eval(const std::vector<double>& c, double x) {
     double result = 0, xp = 1.0;
     for (size_t i = 0; i < c.size(); i++) {
         result += c[i] * xp;
@@ -174,13 +174,13 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
 }
 
 // Snap coefficient to nearest integer if within tolerance
-inline double snap_coeff(double c) {
+[[nodiscard]] inline double snap_coeff(double c) {
     double r = std::round(c);
     return std::abs(c - r) < FIT_COEFF_SNAP_TOL ? r : c;
 }
 
 // Fit a polynomial of given degree to samples
-inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degree) {
+[[nodiscard]] inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degree) {
     FitResult result;
     result.degree = degree;
 
@@ -207,7 +207,7 @@ inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degre
 
 // Auto-select best polynomial degree: tries 1 through max_degree.
 // Picks lowest degree where R² > threshold, or the best overall.
-inline FitResult fit_polynomial_auto(
+[[nodiscard]] inline FitResult fit_polynomial_auto(
         const std::vector<FitSample>& samples,
         int max_degree = FIT_MAX_DEGREE) {
     FitResult best;
@@ -230,7 +230,7 @@ struct Fraction { int p, q; }; // numerator, denominator
 
 // Try to express x as p/q with denominator q ≤ max_den (numerator bound is implicit: |p| ≈ |x| * max_den).
 // Callers that need a separate numerator bound must apply it after the call.
-inline std::optional<Fraction> recognize_fraction(double x,
+[[nodiscard]] inline std::optional<Fraction> recognize_fraction(double x,
         int max_den = 12, double tol = 1e-9) {
     if (!std::isfinite(x)) return std::nullopt;
     for (int q = 1; q <= max_den; q++) {
@@ -251,7 +251,7 @@ struct ConstantForm {
 // Common irrational roots and logs that recognize_constant tests against,
 // alongside builtins (pi/e/phi) and any caller-supplied extras. File-scope
 // static so the table is built once at program start, not per call.
-inline const std::array<std::pair<const char*, double>, 6>& sqrt_log_constants() {
+[[nodiscard]] inline const std::array<std::pair<const char*, double>, 6>& sqrt_log_constants() {
     static const std::array<std::pair<const char*, double>, 6> t = {{
         {"sqrt(2)", std::sqrt(2.0)}, {"sqrt(3)", std::sqrt(3.0)}, {"sqrt(5)", std::sqrt(5.0)},
         {"log(2)", std::log(2.0)},  {"log(3)", std::log(3.0)},  {"log(10)", std::log(10.0)},
@@ -266,7 +266,7 @@ inline const std::array<std::pair<const char*, double>, 6>& sqrt_log_constants()
 // Iteration order matters — a value that matches multiple constants returns
 // the first hit, and downstream fingerprint dedup relies on the historical
 // alphabetical order (e < log(*) < phi < pi < sqrt(*)).
-inline const std::map<std::string, double>& base_recognition_constants() {
+[[nodiscard]] inline const std::map<std::string, double>& base_recognition_constants() {
     static const std::map<std::string, double> t = []() {
         std::map<std::string, double> m = builtin_constants();
         for (const auto& [k, v] : sqrt_log_constants()) m[k] = v;
@@ -278,7 +278,7 @@ inline const std::map<std::string, double>& base_recognition_constants() {
 // Try to express x as (p/q) * constant^power
 // Tests against builtin constants plus any additional constants provided.
 // Returns nullopt if x is a simple rational number or not recognizable.
-inline std::optional<ConstantForm> recognize_constant(double x,
+[[nodiscard]] inline std::optional<ConstantForm> recognize_constant(double x,
         const std::map<std::string, double>& extra_constants = {},
         double tol = 1e-9) {
     if (!std::isfinite(x) || std::abs(x) < tol) return std::nullopt;
@@ -321,7 +321,7 @@ inline std::optional<ConstantForm> recognize_constant(double x,
 }
 
 // Build an ExprPtr from a ConstantForm: (p/q) * constant^power
-inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
+[[nodiscard]] inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
     // Build constant expression — handle func(N) names as function calls
     ExprPtr cexpr;
     auto paren = cf.constant.find('(');
@@ -375,7 +375,7 @@ inline ExprPtr constant_form_to_expr(const ConstantForm& cf) {
 // fresh nodes when the leaf functor returns a new value, and short-circuits to
 // the original pointer otherwise. The const_cast at the boundary is the
 // documented bridge — no path inside writes through the pointer.
-inline ExprPtr expr_recognize_constants(const Expr* e,
+[[nodiscard]] inline ExprPtr expr_recognize_constants(const Expr* e,
         const std::map<std::string, double>& extra_constants = {}) {
     return tree_map_leaf(const_cast<ExprPtr>(e), [&](ExprPtr node) -> ExprPtr {
         if (!is_num(node) || is_integer_value(node->num) || is_zero(*node)) return node;
@@ -394,7 +394,7 @@ inline ExprPtr expr_recognize_constants(const Expr* e,
 // extra_constants: user-defined aliases (e.g. {"deg", pi/180}); these are
 // threaded through into recognition so derive/solve output surfaces user
 // names instead of raw decimals.
-inline std::string fmt_exact_double(double v,
+[[nodiscard]] inline std::string fmt_exact_double(double v,
         const std::map<std::string, double>& extra_constants = {}) {
     const auto* e = expr_recognize_constants(Expr::Num(v), extra_constants);
     return (e->type == ExprType::NUM) ? fmt_num(v) : expr_to_string(e);
@@ -406,7 +406,7 @@ inline std::string fmt_exact_double(double v,
 
 // Build an ExprPtr for a single coefficient value.
 // Tries: integer snap → constant recognition → raw number.
-inline ExprPtr coeff_to_expr(double c,
+[[nodiscard]] inline ExprPtr coeff_to_expr(double c,
         const std::map<std::string, double>& extra_constants = {}) {
     // Try integer snap
     double snapped = snap_coeff(c);
@@ -424,7 +424,7 @@ inline ExprPtr coeff_to_expr(double c,
 // Build ExprPtr from polynomial coefficients: c[0] + c[1]*x + c[2]*x² + ...
 // Requires active ExprArena::Scope. Drops near-zero coefficients.
 // Uses constant recognition to express coefficients symbolically where possible.
-inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string& var,
+[[nodiscard]] inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string& var,
         const std::map<std::string, double>& extra_constants = {}) {
     ExprPtr result = nullptr;
 
@@ -473,7 +473,7 @@ inline ExprPtr poly_to_expr(const std::vector<double>& coeffs, const std::string
 
 
 // Power law: y = a * x^b  →  log(y) = log(a) + b*log(x)
-inline FitResult fit_power_law(const std::vector<FitSample>& samples,
+[[nodiscard]] inline FitResult fit_power_law(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     FitResult result;
@@ -507,7 +507,7 @@ inline FitResult fit_power_law(const std::vector<FitSample>& samples,
 
 // Exponential: y = a * e^(b*x)  →  log(y) = log(a) + b*x
 // Also tries quadratic exponent (Gaussian): y = a * e^(b*x² + c*x)
-inline FitResult fit_exponential(const std::vector<FitSample>& samples,
+[[nodiscard]] inline FitResult fit_exponential(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     std::vector<FitSample> log_samples;
@@ -588,7 +588,7 @@ inline FitResult fit_exponential(const std::vector<FitSample>& samples,
 }
 
 // Logarithmic: y = a * log(x) + b
-inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
+[[nodiscard]] inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     FitResult result;
@@ -625,7 +625,7 @@ inline FitResult fit_logarithmic(const std::vector<FitSample>& samples,
 }
 
 // Sinusoidal: y = a * sin(b*x + c) + d
-inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
+[[nodiscard]] inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     FitResult result;
@@ -684,7 +684,7 @@ inline FitResult fit_sinusoidal(const std::vector<FitSample>& samples,
 
 // Reciprocal: y = a / (x + b) + c  →  1/(y-c) = (x+b)/a  →  linear in x
 // Requires y values that aren't all the same sign
-inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
+[[nodiscard]] inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {}) {
     FitResult result;
@@ -769,7 +769,7 @@ inline FitResult fit_reciprocal(const std::vector<FitSample>& samples,
 constexpr int FIT_DEFAULT_DEPTH = 5;
 
 // Sort and deduplicate fit results
-inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
+[[nodiscard]] inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
     std::sort(fits.begin(), fits.end(), [](const FitResult& a, const FitResult& b) {
         if (std::abs(a.r_squared - b.r_squared) > 1e-6)
             return a.r_squared > b.r_squared;
@@ -795,7 +795,7 @@ inline std::vector<FitResult> sort_and_dedup(std::vector<FitResult>& fits) {
 }
 
 // Try all base template forms + polynomial at depth 1.
-inline std::vector<FitResult> fit_base(const std::vector<FitSample>& samples,
+[[nodiscard]] inline std::vector<FitResult> fit_base(const std::vector<FitSample>& samples,
         const std::string& var,
         const std::map<std::string, double>& extra_constants,
         double min_r2) {
@@ -829,7 +829,7 @@ inline std::vector<FitResult> fit_base(const std::vector<FitSample>& samples,
 constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
 
 // One level of composition: wrap each inner in outer templates + builtins
-inline std::vector<FitResult> compose_level(
+[[nodiscard]] inline std::vector<FitResult> compose_level(
         const std::vector<FitSample>& samples,
         const std::vector<FitResult>& inners,
         const std::string& var,
@@ -906,7 +906,7 @@ inline std::vector<FitResult> compose_level(
 }
 
 // Recursive composition: at each depth level, compose previous fits as inners
-inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
+[[nodiscard]] inline std::vector<FitResult> fit_all(const std::vector<FitSample>& samples,
         const std::string& var = "x",
         const std::map<std::string, double>& extra_constants = {},
         double min_r2 = 0.9,

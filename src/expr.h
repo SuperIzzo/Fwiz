@@ -76,12 +76,12 @@ public:
     // cppcheck-suppress noExplicitConstructor
     /*implicit*/ Checked(T v) noexcept : val_(v) {} // NOLINT(google-explicit-constructor)
 
-    bool has_value()         const noexcept { return !std::isnan(val_); }
-    explicit operator bool() const noexcept { return has_value(); }
+    [[nodiscard]] bool has_value()         const noexcept { return !std::isnan(val_); }
+    [[nodiscard]] explicit operator bool() const noexcept { return has_value(); }
 
     // Value access. Asserts in debug on empty; UB in release
     // (assert-postcondition style, matching std::optional::operator*).
-    T value() const noexcept {
+    [[nodiscard]] T value() const noexcept {
         assert(has_value() && "Checked<T>::value() called on empty");
         return val_;
     }
@@ -91,7 +91,7 @@ public:
     // library (find_numeric_roots, adaptive_scan, newton_solve, bisection_solve),
     // which is a pure-double algorithm layer with its own isfinite discipline.
     // Using this operator IS an explicit, reviewable statement of intent.
-    T value_or_nan() const noexcept { return val_; }
+    [[nodiscard]] T value_or_nan() const noexcept { return val_; }
 };
 
 static_assert(sizeof(Checked<double>) == sizeof(double),
@@ -101,7 +101,7 @@ static_assert(sizeof(Checked<double>) == sizeof(double),
 //  Formatting (needed by ValueSet::to_string)
 // ============================================================================
 
-inline std::string fmt_num(double v) {
+[[nodiscard]] inline std::string fmt_num(double v) {
     if (std::abs(v) < 1e12 && v == static_cast<double>(static_cast<long long>(v)))
         return std::to_string(static_cast<long long>(v));
     std::ostringstream os;
@@ -402,23 +402,23 @@ inline Expr* ExprArena::alloc() {
     return &chunks.back()[next_in_chunk++];
 }
 
-inline ExprPtr Expr::Num(double v) {
+[[nodiscard]] inline ExprPtr Expr::Num(double v) {
     assert(ExprArena::current() && "ExprArena::Scope must be active");
     auto e = ExprArena::current()->alloc(); e->type = ExprType::NUM; e->num = v; return e;
 }
-inline ExprPtr Expr::Var(const std::string& n) {
+[[nodiscard]] inline ExprPtr Expr::Var(const std::string& n) {
     assert(ExprArena::current() && "ExprArena::Scope must be active");
     auto e = ExprArena::current()->alloc(); e->type = ExprType::VAR; e->name = n; return e;
 }
-inline ExprPtr Expr::BinOpExpr(BinOp o, ExprPtr l, ExprPtr r) {
+[[nodiscard]] inline ExprPtr Expr::BinOpExpr(BinOp o, ExprPtr l, ExprPtr r) {
     assert(l && r && "BinOp operands must not be null");
     auto e = ExprArena::current()->alloc(); e->type = ExprType::BINOP; e->op = o; e->left = l; e->right = r; return e;
 }
-inline ExprPtr Expr::Neg(ExprPtr c) {
+[[nodiscard]] inline ExprPtr Expr::Neg(ExprPtr c) {
     assert(c && "Neg operand must not be null");
     auto e = ExprArena::current()->alloc(); e->type = ExprType::UNARY_NEG; e->child = c; return e;
 }
-inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) {
+[[nodiscard]] inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) {
     auto e = ExprArena::current()->alloc(); e->type = ExprType::FUNC_CALL; e->name = n; e->args = std::move(a); return e;
 }
 
@@ -427,26 +427,26 @@ inline ExprPtr Expr::Call(const std::string& n, std::vector<ExprPtr> a) {
 // ============================================================================
 
 // Reference versions (no null check needed)
-constexpr bool is_num(const Expr& e)     { return e.type == ExprType::NUM; }
-constexpr bool is_var(const Expr& e)     { return e.type == ExprType::VAR; }
-constexpr bool is_atomic(const Expr& e)  { return is_num(e) || is_var(e); }
-constexpr bool is_zero(const Expr& e)    { return is_num(e) && e.num == 0; }
-constexpr bool is_one(const Expr& e)     { return is_num(e) && e.num == 1; }
-constexpr bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
-constexpr bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
-constexpr bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
+[[nodiscard]] constexpr bool is_num(const Expr& e)     { return e.type == ExprType::NUM; }
+[[nodiscard]] constexpr bool is_var(const Expr& e)     { return e.type == ExprType::VAR; }
+[[nodiscard]] constexpr bool is_atomic(const Expr& e)  { return is_num(e) || is_var(e); }
+[[nodiscard]] constexpr bool is_zero(const Expr& e)    { return is_num(e) && e.num == 0; }
+[[nodiscard]] constexpr bool is_one(const Expr& e)     { return is_num(e) && e.num == 1; }
+[[nodiscard]] constexpr bool is_neg_one(const Expr& e) { return is_num(e) && e.num == -1; }
+[[nodiscard]] constexpr bool is_neg(const Expr& e)     { return e.type == ExprType::UNARY_NEG; }
+[[nodiscard]] constexpr bool is_neg_num(const Expr& e) { return is_num(e) && e.num < 0; }
 // Pointer versions (null-safe, for struct fields)
-inline bool is_num(const Expr* e)     { return e && is_num(*e); }
-inline bool is_var(const Expr* e)     { return e && is_var(*e); }
-inline bool is_atomic(const Expr* e)  { return e && is_atomic(*e); }
-inline bool is_zero(const Expr* e)    { return e && is_zero(*e); }
-inline bool is_one(const Expr* e)     { return e && is_one(*e); }
-inline bool is_neg_one(const Expr* e) { return e && is_neg_one(*e); }
-inline bool is_neg(const Expr* e)     { return e && is_neg(*e); }
-inline bool is_neg_num(const Expr* e) { return e && is_neg_num(*e); }
+[[nodiscard]] inline bool is_num(const Expr* e)     { return e && is_num(*e); }
+[[nodiscard]] inline bool is_var(const Expr* e)     { return e && is_var(*e); }
+[[nodiscard]] inline bool is_atomic(const Expr* e)  { return e && is_atomic(*e); }
+[[nodiscard]] inline bool is_zero(const Expr* e)    { return e && is_zero(*e); }
+[[nodiscard]] inline bool is_one(const Expr* e)     { return e && is_one(*e); }
+[[nodiscard]] inline bool is_neg_one(const Expr* e) { return e && is_neg_one(*e); }
+[[nodiscard]] inline bool is_neg(const Expr* e)     { return e && is_neg(*e); }
+[[nodiscard]] inline bool is_neg_num(const Expr* e) { return e && is_neg_num(*e); }
 
-constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
-constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
+[[nodiscard]] constexpr bool is_additive(BinOp op)       { return op == BinOp::ADD || op == BinOp::SUB; }
+[[nodiscard]] constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == BinOp::DIV; }
 
 // ============================================================================
 //  Rational number helpers (structural fractions)
@@ -455,34 +455,34 @@ constexpr bool is_multiplicative(BinOp op) { return op == BinOp::MUL || op == Bi
 // This avoids adding fields to Expr and preserves sizeof(Expr).
 
 // Is this a double value that's an exact integer?
-inline bool is_integer_value(double v) {
+[[nodiscard]] inline bool is_integer_value(double v) {
     return std::abs(v) < 1e15 && v == std::floor(v);
 }
 
 // Is this a structural fraction: DIV(Num(int), Num(int))?
-inline bool is_int_frac(const Expr& e) {
+[[nodiscard]] inline bool is_int_frac(const Expr& e) {
     return e.type == ExprType::BINOP && e.op == BinOp::DIV
         && is_num(*e.left) && is_num(*e.right)
         && is_integer_value(e.left->num) && is_integer_value(e.right->num)
         && e.right->num != 0;
 }
-inline bool is_int_frac(const ExprPtr e) { return e && is_int_frac(*e); }
+[[nodiscard]] inline bool is_int_frac(const ExprPtr e) { return e && is_int_frac(*e); }
 
 // Extract rational (numer, denom) from a Num or structural fraction.
 // Returns {n, 1} for plain integers, {p, q} for DIV(Num(p), Num(q)).
-inline std::pair<int64_t, int64_t> to_rational(const Expr& e) {
+[[nodiscard]] inline std::pair<int64_t, int64_t> to_rational(const Expr& e) {
     if (is_int_frac(e))
         return {static_cast<int64_t>(e.left->num), static_cast<int64_t>(e.right->num)};
     if (is_num(e) && is_integer_value(e.num))
         return {static_cast<int64_t>(e.num), 1};
     return {0, 0}; // not rational
 }
-inline std::pair<int64_t, int64_t> to_rational(const ExprPtr e) {
+[[nodiscard]] inline std::pair<int64_t, int64_t> to_rational(const ExprPtr e) {
     return e ? to_rational(*e) : std::pair<int64_t, int64_t>{0, 0};
 }
 
 // GCD for normalization
-inline int64_t gcd_abs(int64_t a, int64_t b) {
+[[nodiscard]] inline int64_t gcd_abs(int64_t a, int64_t b) {
     a = std::abs(a); b = std::abs(b);
     while (b) { a %= b; std::swap(a, b); }
     return a;
@@ -490,7 +490,7 @@ inline int64_t gcd_abs(int64_t a, int64_t b) {
 
 // Build a normalized rational expression: GCD-reduced, sign in numerator.
 // Returns Num(n) if denominator is 1 after reduction.
-inline ExprPtr make_rational(int64_t numer, int64_t denom) {
+[[nodiscard]] inline ExprPtr make_rational(int64_t numer, int64_t denom) {
     assert(denom != 0 && "make_rational: zero denominator");
     if (numer == 0) return Expr::Num(0);
     // Sign normalization: negative in numerator only
@@ -591,7 +591,7 @@ inline const std::map<std::string, double>& builtin_constants() {
 
 // "undefined" is represented as Var("undefined") — no parser changes needed.
 // It propagates through arithmetic (like NaN) and throws at evaluation time.
-inline bool is_undefined(const ExprPtr& e) {
+[[nodiscard]] inline bool is_undefined(const ExprPtr& e) {
     return e && e->type == ExprType::VAR && e->name == "undefined";
 }
 
@@ -611,7 +611,7 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
 }
 
 // Direct search — no allocation, returns at first hit
-inline bool contains_var(const Expr& e, const std::string& v) {
+[[nodiscard]] inline bool contains_var(const Expr& e, const std::string& v) {
     switch (e.type) {
         case ExprType::NUM:       return false;
         case ExprType::VAR:       return e.name == v;
@@ -625,7 +625,7 @@ inline bool contains_var(const Expr& e, const std::string& v) {
 }
 
 // Structural equality — no allocation, used for simplifier fixpoint
-inline bool expr_equal(const Expr& a, const Expr& b) {
+[[nodiscard]] inline bool expr_equal(const Expr& a, const Expr& b) {
     if (&a == &b) return true;    // pointer shortcut
     if (a.type != b.type) return false;
     switch (a.type) {
@@ -646,8 +646,8 @@ inline bool expr_equal(const Expr& a, const Expr& b) {
 }
 // Pointer overloads for convenience
 inline void collect_vars(const Expr* e, std::set<std::string>& out) { if (e) collect_vars(*e, out); }
-inline bool contains_var(const Expr* e, const std::string& v) { return e && contains_var(*e, v); }
-inline bool expr_equal(const Expr* a, const Expr* b) {
+[[nodiscard]] inline bool contains_var(const Expr* e, const std::string& v) { return e && contains_var(*e, v); }
+[[nodiscard]] inline bool expr_equal(const Expr* a, const Expr* b) {
     if (a == b) return true;
     if (!a || !b) return false;
     return expr_equal(*a, *b);
@@ -668,16 +668,16 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                                    std::vector<std::pair<ExprPtr, double>>& factors);
 
 // Helper: is this op commutative?
-inline constexpr bool is_commutative(BinOp op) {
+[[nodiscard]] inline constexpr bool is_commutative(BinOp op) {
     return op == BinOp::ADD || op == BinOp::MUL;
 }
 
 // Helper: is this an additive chain (ADD/SUB at top)?
-inline bool is_additive_chain(const ExprPtr& e) {
+[[nodiscard]] inline bool is_additive_chain(const ExprPtr& e) {
     return e && e->type == ExprType::BINOP && is_additive(e->op);
 }
 
-inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
+[[nodiscard]] inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
         const ExprPtr& pattern, const ExprPtr& target) {
     if (!pattern || !target) return std::nullopt;
     std::map<std::string, ExprPtr> bindings;
@@ -908,7 +908,7 @@ inline std::optional<std::map<std::string, ExprPtr>> match_pattern(
 }
 
 // Apply a rewrite: substitute bindings into the replacement template.
-inline ExprPtr apply_rewrite(const ExprPtr& replacement,
+[[nodiscard]] inline ExprPtr apply_rewrite(const ExprPtr& replacement,
         const std::map<std::string, ExprPtr>& bindings) {
     if (!replacement) return nullptr;
 
@@ -933,7 +933,7 @@ inline ExprPtr apply_rewrite(const ExprPtr& replacement,
     return replacement;
 }
 
-inline int precedence(const Expr& e) {
+[[nodiscard]] inline int precedence(const Expr& e) {
     if (e.type == ExprType::BINOP) return binop_info(e.op).precedence;
     if (e.type == ExprType::UNARY_NEG) return 3;
     return 5; // atom
@@ -977,7 +977,7 @@ inline std::string expr_to_string(const Expr& e) {
     return "?";
 }
 // Pointer overloads
-inline int precedence(const Expr* e) { return e ? precedence(*e) : 5; }
+[[nodiscard]] inline int precedence(const Expr* e) { return e ? precedence(*e) : 5; }
 inline std::string expr_to_string(const Expr* e) { return e ? expr_to_string(*e) : "?"; }
 
 // ============================================================================
@@ -999,7 +999,7 @@ inline std::string expr_to_string(const Expr* e) { return e ? expr_to_string(*e)
 // Both templates are function templates (implicitly inline) and forward `Fn`
 // by universal reference so lambdas with captures pass through cleanly.
 template<typename Fn>
-ExprPtr tree_map(ExprPtr e, Fn&& fn) {
+[[nodiscard]] ExprPtr tree_map(ExprPtr e, Fn&& fn) {
     if (!e) return e;
     switch (e->type) {
         case ExprType::NUM:
@@ -1031,7 +1031,7 @@ ExprPtr tree_map(ExprPtr e, Fn&& fn) {
 }
 
 template<typename Fn>
-ExprPtr tree_map_leaf(ExprPtr e, Fn&& fn) {
+[[nodiscard]] ExprPtr tree_map_leaf(ExprPtr e, Fn&& fn) {
     if (!e) return e;
     switch (e->type) {
         case ExprType::NUM:
@@ -1066,7 +1066,7 @@ ExprPtr tree_map_leaf(ExprPtr e, Fn&& fn) {
 //  Substitute
 // ============================================================================
 
-inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
+[[nodiscard]] inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
     return tree_map_leaf(e, [&](ExprPtr node) -> ExprPtr {
         if (is_var(node) && node->name == var) return val;
         return node;
@@ -1090,7 +1090,7 @@ inline ExprPtr substitute(ExprPtr e, const std::string& var, ExprPtr val) {
 // guard a tree with no helper matches still pays O(|tree|) allocations. The
 // guard returns the original `e` when (a) no child changed by pointer identity
 // AND (b) no helper subtree equals the current node.
-inline ExprPtr cse_replace(ExprPtr e,
+[[nodiscard]] inline ExprPtr cse_replace(ExprPtr e,
         const std::vector<std::pair<std::string, ExprPtr>>& helpers) {
     return tree_map(e, [&](ExprPtr node) -> ExprPtr {
         for (auto& [name, sub] : helpers)
@@ -1105,7 +1105,7 @@ inline ExprPtr cse_replace(ExprPtr e,
 // simplification. User-defined defaults (e.g. g = 9.81) are NOT touched —
 // the source of truth is builtin_constants() which holds only the true
 // mathematical constants.
-inline ExprPtr substitute_builtin_constants(ExprPtr e) {
+[[nodiscard]] inline ExprPtr substitute_builtin_constants(ExprPtr e) {
     return tree_map_leaf(e, [](ExprPtr node) -> ExprPtr {
         if (!is_var(node)) return node;
         auto& consts = builtin_constants();
@@ -1118,7 +1118,7 @@ inline ExprPtr substitute_builtin_constants(ExprPtr e) {
 //  Evaluate
 // ============================================================================
 
-inline Checked<double> evaluate(const Expr& e) {
+[[nodiscard]] inline Checked<double> evaluate(const Expr& e) {
     switch (e.type) {
         case ExprType::NUM: return e.num;
         case ExprType::VAR: {
@@ -1152,7 +1152,7 @@ inline Checked<double> evaluate(const Expr& e) {
     }
     return {};
 }
-inline Checked<double> evaluate(const Expr* e) {
+[[nodiscard]] inline Checked<double> evaluate(const Expr* e) {
     if (!e) return {};
     return evaluate(*e);
 }
@@ -1171,7 +1171,7 @@ inline Checked<double> evaluate(const Expr* e) {
 //  (usually by assigning a unique sentinel key).
 // ============================================================================
 
-inline std::vector<double> fingerprint_expr(
+[[nodiscard]] inline std::vector<double> fingerprint_expr(
         ExprPtr e,
         const std::vector<std::string>& free_vars,
         const std::vector<std::map<std::string, double>>& test_points) {
@@ -1203,7 +1203,7 @@ inline std::vector<double> fingerprint_expr(
 //  and to sort the emit list ascending from simple to complex.
 // ============================================================================
 
-inline std::pair<int, int> canonicity_score(ExprPtr e) {
+[[nodiscard]] inline std::pair<int, int> canonicity_score(ExprPtr e) {
     if (!e) return {0, 0};
     switch (e->type) {
         case ExprType::NUM:
@@ -1244,7 +1244,7 @@ inline std::pair<int, int> canonicity_score(ExprPtr e) {
 // verify-mode equality, CLI arg parsing, solve_recursive bindings commit)
 // must keep using `double evaluate()` — they intrinsically need real values
 // with ordering.
-inline ExprPtr evaluate_symbolic(const Expr& e) {
+[[nodiscard]] inline ExprPtr evaluate_symbolic(const Expr& e) {
     if (e.type == ExprType::BINOP && is_num(e.left) && is_num(e.right)) {
         if (e.op == BinOp::DIV && e.right->num != 0
             && is_integer_value(e.left->num)
@@ -1280,7 +1280,7 @@ inline ExprPtr evaluate_symbolic(const Expr& e) {
 // ---- Flattening helpers ----
 
 // Decompose expr into (base, exponent) — e.g. x^3 → (x, 3), x → (x, 1)
-inline std::pair<ExprPtr, double> split_pow(ExprPtr e) {
+[[nodiscard]] inline std::pair<ExprPtr, double> split_pow(ExprPtr e) {
     assert(e && "split_pow: null expression");
     if (e->type == ExprType::BINOP && e->op == BinOp::POW && is_num(e->right))
         return {e->left, e->right->num};
@@ -1315,7 +1315,7 @@ inline void flatten_additive(ExprPtr e, double sign,
 }
 
 // Reconstruct an expression from additive terms
-inline ExprPtr rebuild_additive(const std::vector<std::pair<double, ExprPtr>>& terms) {
+[[nodiscard]] inline ExprPtr rebuild_additive(const std::vector<std::pair<double, ExprPtr>>& terms) {
     if (terms.empty()) return Expr::Num(0);
 
     auto make_term = [](double coeff, const ExprPtr& base) -> ExprPtr {
@@ -1386,7 +1386,7 @@ inline void flatten_multiplicative(ExprPtr e,
 // exponent sign: positive-exp factors form the numerator, negative-exp factors
 // (with sign flipped) form the denominator. Emits `DIV(num, denom)` when any
 // negative-exp factors are present, avoiding `POW(_, Num(-n))` rendering.
-inline ExprPtr rebuild_multiplicative(double coeff,
+[[nodiscard]] inline ExprPtr rebuild_multiplicative(double coeff,
                                       const std::vector<std::pair<ExprPtr, double>>& factors) {
     auto make_factor = [](const ExprPtr& base, double exp) -> ExprPtr {
         if (exp == 1.0) return base;
@@ -1493,7 +1493,7 @@ inline void simplify_assume_nonzero(const ExprPtr& expr,
     simplify_record_assumption(expr, expr_to_string(expr) + " != 0", src);
 }
 
-inline std::vector<SimplifyAssumption> simplify_get_assumptions() {
+[[nodiscard]] inline std::vector<SimplifyAssumption> simplify_get_assumptions() {
     auto result = std::move(simplify_assumptions_());
     simplify_assumptions_().clear();
     return result;
@@ -1510,7 +1510,7 @@ inline void simplify_clear_assumptions() {
 // Forward decl: Condition::to_valueset / check_condition call simplify (defined
 // later in this file). Inline member-function bodies need the name visible at
 // definition; the actual call resolves at the post-parse point of use.
-inline ExprPtr simplify(const ExprPtr& e);
+[[nodiscard]] inline ExprPtr simplify(const ExprPtr& e);
 
 enum class CondOp : uint8_t { GT, GE, LT, LE, EQ, NE, COUNT_ };
 enum class CondLogic : uint8_t { AND, OR };
@@ -1590,7 +1590,7 @@ struct Condition {
 
 // Check if a condition is satisfied given current bindings.
 // Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied.
-inline bool check_condition(const Condition& cond,
+[[nodiscard]] inline bool check_condition(const Condition& cond,
                             const std::map<std::string, double>& bindings) {
     auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
         ExprPtr lhs = c.lhs, rhs = c.rhs;
@@ -1711,7 +1711,7 @@ inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
     simplify_rewrite_exhaustive_() = exhaustive;
 }
 
-inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
+[[nodiscard]] inline const std::vector<RewriteRule>* simplify_get_rewrite_rules() {
     return simplify_rewrite_rules_();
 }
 
@@ -1736,7 +1736,7 @@ struct RewriteRulesGuard {
 
 // ---- Simplify: per-operator helpers ----
 
-inline ExprPtr simplify_additive(const ExprPtr& combined) {
+[[nodiscard]] inline ExprPtr simplify_additive(const ExprPtr& combined) {
     std::vector<std::pair<double, ExprPtr>> terms;
     flatten_additive(combined, 1.0, terms);
     double constant = 0;
@@ -1784,9 +1784,9 @@ inline ExprPtr simplify_additive(const ExprPtr& combined) {
     return rebuild_additive(symbolic);
 }
 
-inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r); // forward decl
+[[nodiscard]] inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r); // forward decl
 
-inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
+[[nodiscard]] inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
     if (is_zero(l) || is_zero(r)) return Expr::Num(0);
     // Rational * Rational: exact arithmetic
     auto [ln, ld] = to_rational(l);
@@ -1811,7 +1811,7 @@ inline ExprPtr simplify_mul(const ExprPtr& l, const ExprPtr& r) {
     return rebuild_multiplicative(coeff, factors);
 }
 
-inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
+[[nodiscard]] inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
     if (is_zero(l) && !is_zero(r)) return Expr::Num(0);
     // a / 0 is undefined — keep structural DIV so later evaluate() yields
     // empty Checked via the NaN sentinel. Do NOT fold to 0 or NaN here.
@@ -1936,7 +1936,7 @@ inline ExprPtr simplify_div(const ExprPtr& l, const ExprPtr& r) {
 // (system.h), once, before re-simplification and string formatting. The subsequent
 // simplify() call collapses like-terms across the now-visible individual quotients
 // (e.g., -b/2 + b/2 → 0), which is the whole point of the pass.
-inline ExprPtr distribute_over_sum(const ExprPtr& e) {
+[[nodiscard]] inline ExprPtr distribute_over_sum(const ExprPtr& e) {
     if (!e) return e;
     switch (e->type) {
         case ExprType::NUM:
@@ -1980,7 +1980,7 @@ inline ExprPtr distribute_over_sum(const ExprPtr& e) {
 
 // ---- Simplify: main entry ----
 
-inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl — impl calls wrapper recursively
+[[nodiscard]] inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl — impl calls wrapper recursively
 
 inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     if (!e) return e;
@@ -2057,7 +2057,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 }
 
 // Apply user-defined rewrite rules to a simplified expression.
-inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
+[[nodiscard]] inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
     auto* rules = simplify_get_rewrite_rules();
     if (!rules) return e;
     auto* exhaustive_flags = simplify_rewrite_exhaustive_();
@@ -2090,11 +2090,11 @@ inline ExprPtr apply_rewrite_rules(const ExprPtr& e) {
     return e;
 }
 
-inline ExprPtr simplify_once(const ExprPtr& e) {
+[[nodiscard]] inline ExprPtr simplify_once(const ExprPtr& e) {
     return apply_rewrite_rules(simplify_once_impl(e));
 }
 
-inline ExprPtr simplify(const ExprPtr& e) {
+[[nodiscard]] inline ExprPtr simplify(const ExprPtr& e) {
     assert(e && "cannot simplify null expression");
     ExprPtr cur = e;
     for (int i = 0; i < SIMPLIFY_MAX_ITER; i++) {
@@ -2126,7 +2126,7 @@ inline ExprPtr simplify(const ExprPtr& e) {
 // `sign(x)` via the `BUILTIN_REWRITE_RULES` (`abs(x)/x = sign(x) iff x != 0`
 // and `abs(x)/x = undefined iff x = 0`). Empirical preflight confirmed the
 // existing `x/x` matcher does NOT fire structurally on `abs(x)/x`.
-inline ExprPtr symbolic_diff(const Expr& e, const std::string& var) {
+[[nodiscard]] inline ExprPtr symbolic_diff(const Expr& e, const std::string& var) {
     using E = Expr;
     switch (e.type) {
         case ExprType::NUM:
@@ -2211,7 +2211,7 @@ inline ExprPtr symbolic_diff(const Expr& e, const std::string& var) {
 
 // Convenience wrapper: differentiate then simplify. Returns nullptr if the
 // underlying `symbolic_diff` returns nullptr (signal for callers).
-inline ExprPtr symbolic_diff_simplified(const Expr& e, const std::string& var) {
+[[nodiscard]] inline ExprPtr symbolic_diff_simplified(const Expr& e, const std::string& var) {
     auto raw = symbolic_diff(e, var);
     return raw ? simplify(raw) : nullptr;
 }
@@ -2222,7 +2222,7 @@ inline ExprPtr symbolic_diff_simplified(const Expr& e, const std::string& var) {
 
 struct LinearForm { ExprPtr coeff, rest; };
 
-inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::string& t) {
+[[nodiscard]] inline std::optional<LinearForm> decompose_linear(const ExprPtr& e, const std::string& t) {
     if (!e) return LinearForm{Expr::Num(0), Expr::Num(0)};
 
     auto ok = [](ExprPtr c, ExprPtr r) -> std::optional<LinearForm> { return LinearForm{c, r}; };
@@ -2303,7 +2303,7 @@ inline void solve_set_func_inverter(FuncInverter fn) {
 
 // Try to isolate target by peeling off invertible functions and operations.
 // Returns ALL solutions (e.g., abs gives two, sqrt gives one).
-inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
+[[nodiscard]] inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
         const std::string& target, int depth = 0) {
     if (depth > 20) return {};
     lhs = simplify(lhs);
@@ -2405,7 +2405,7 @@ inline std::vector<Solution> solve_by_inversion(ExprPtr lhs, ExprPtr rhs,
 
 // Expand products a*(b+c) -> a*b+a*c when target variable spans both factors.
 // Enables quadratic decomposition for substituted expressions like w*(p-2w).
-inline ExprPtr expand_for_var(const ExprPtr& e, const std::string& var) {
+[[nodiscard]] inline ExprPtr expand_for_var(const ExprPtr& e, const std::string& var) {
     if (!e || !contains_var(e, var)) return e;
     if (e->type == ExprType::BINOP) {
         auto l = expand_for_var(e->left, var);
@@ -2440,7 +2440,7 @@ inline ExprPtr expand_for_var(const ExprPtr& e, const std::string& var) {
 }
 
 // Return ALL solutions (multiple for abs, quadratic, etc.)
-inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rhs,
+[[nodiscard]] inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rhs,
         const std::string& target) {
     // First try linear decomposition (fast, single solution)
     auto combined = simplify(Expr::BinOpExpr(BinOp::SUB, lhs, rhs));
@@ -2561,7 +2561,7 @@ inline std::vector<Solution> solve_for_all(const ExprPtr& lhs, const ExprPtr& rh
 }
 
 // Single-solution wrapper (backwards compatible — returns first solution)
-inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::string& target) {
+[[nodiscard]] inline ExprPtr solve_for(const ExprPtr& lhs, const ExprPtr& rhs, const std::string& target) {
     auto sols = solve_for_all(lhs, rhs, target);
     return sols.empty() ? nullptr : sols[0].expr;
 }
@@ -2583,7 +2583,7 @@ static_assert(NUMERIC_TOLERANCE > 0 && NUMERIC_TOLERANCE < 1e-4);
 static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 
 // Snap to nearest integer if within tolerance
-inline double snap_integer(double x, double tol = EPSILON_ZERO) {
+[[nodiscard]] inline double snap_integer(double x, double tol = EPSILON_ZERO) {
     double r = std::round(x);
     return std::abs(x - r) < tol ? r : x;
 }
@@ -2591,7 +2591,7 @@ inline double snap_integer(double x, double tol = EPSILON_ZERO) {
 // Newton's method: solve f(x) = 0 starting from x0.
 // Optional `fp_fn` supplies the analytic derivative; when null, central finite
 // differences are used (default behavior, byte-identical to the pre-M4 path).
-inline std::optional<double> newton_solve(
+[[nodiscard]] inline std::optional<double> newton_solve(
         const std::function<double(double)>& f, double x0,
         int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE,
         const std::function<double(double)>* fp_fn = nullptr) {
@@ -2629,7 +2629,7 @@ inline std::optional<double> newton_solve(
 }
 
 // Bisection: find root of f in [lo, hi] where f(lo) and f(hi) have opposite signs.
-inline std::optional<double> bisection_solve(
+[[nodiscard]] inline std::optional<double> bisection_solve(
         const std::function<double(double)>& f, double lo, double hi,
         int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE) {
     double flo = f(lo), fhi = f(hi);
@@ -2652,7 +2652,7 @@ inline std::optional<double> bisection_solve(
 // Adaptive grid scan: find intervals where f changes sign.
 // Uses coarse pass with jitter, then refines near sign changes and high-gradient regions.
 // Deterministic: uses fixed seed for reproducible jitter.
-inline std::vector<std::pair<double, double>> adaptive_scan(
+[[nodiscard]] inline std::vector<std::pair<double, double>> adaptive_scan(
         const std::function<double(double)>& f, double lo, double hi,
         bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES) {
     struct Sample { double x, fx; };
@@ -2734,7 +2734,7 @@ inline std::vector<std::pair<double, double>> adaptive_scan(
 // Uses adaptive scan to find intervals, then refines with Newton/bisection.
 // Optional `fp_fn` is the analytic derivative passed through to newton_solve;
 // null falls back to central finite differences.
-inline std::vector<double> find_numeric_roots(
+[[nodiscard]] inline std::vector<double> find_numeric_roots(
         const std::function<double(double)>& f, double lo, double hi,
         bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES,
         const std::function<double(double)>* fp_fn = nullptr) {

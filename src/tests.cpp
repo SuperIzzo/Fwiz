@@ -639,7 +639,7 @@ void test_system() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc.fw");
         bool threw = false;
-        try { sys.resolve("x", {}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {}); } catch (...) { threw = true; }
         ASSERT(threw, "circular dependency throws");
     }
 
@@ -649,7 +649,7 @@ void test_system() {
         FormulaSystem sys;
         sys.load_file("/tmp/tm.fw");
         bool threw = false;
-        try { sys.resolve("x", {{"y", 1}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {{"y", 1}}); } catch (...) { threw = true; }
         ASSERT(threw, "missing variable throws");
     }
 
@@ -719,12 +719,12 @@ void test_cli_parser() {
     }
     {
         bool threw = false;
-        try { parse_cli_query("noparens"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("noparens"); } catch (...) { threw = true; }
         ASSERT(threw, "missing parens throws");
     }
     {
         bool threw = false;
-        try { parse_cli_query("f(x=3)"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=3)"); } catch (...) { threw = true; }
         ASSERT(threw, "no query var throws");
     }
     // Bare variable names — allowed in symbolic modes (--derive/--fit),
@@ -747,7 +747,7 @@ void test_cli_parser() {
         bool threw = false;
         std::string msg;
         try {
-            parse_cli_query("triangle(A=?, a=4, b)",
+            (void)parse_cli_query("triangle(A=?, a=4, b)",
                             /*allow_no_queries*/false,
                             /*allow_symbolic*/false);
         } catch (const std::runtime_error& e) {
@@ -1243,7 +1243,7 @@ void test_system_edge() {
         FormulaSystem sys;
         sys.load_file("/tmp/te4.fw");
         bool threw = false;
-        try { sys.resolve("x", {}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {}); } catch (...) { threw = true; }
         ASSERT(threw, "x = x + 1 is unsolvable");
     }
 
@@ -1391,7 +1391,7 @@ void test_cli_parser_edge() {
     // Missing closing paren
     {
         bool threw = false;
-        try { parse_cli_query("f(x=?"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=?"); } catch (...) { threw = true; }
         ASSERT(threw, "missing closing paren");
     }
 
@@ -1569,7 +1569,7 @@ void test_cli_garbage() {
     auto expect_throw = [](const std::string& input, const std::string& label) {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query(input); } catch (const std::exception& e) {
+        try { (void)parse_cli_query(input); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
         ASSERT(threw, label + " throws");
@@ -1591,7 +1591,7 @@ void test_cli_garbage() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(x=)"); } catch (const std::exception& e) {
+        try { (void)parse_cli_query("f(x=)"); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
         ASSERT(threw, "empty value throws");
@@ -1601,7 +1601,7 @@ void test_cli_garbage() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(=5)"); } catch (const std::exception& e) {
+        try { (void)parse_cli_query("f(=5)"); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
         ASSERT(threw, "empty name throws");
@@ -1611,7 +1611,7 @@ void test_cli_garbage() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(x=abc)"); } catch (const std::exception& e) {
+        try { (void)parse_cli_query("f(x=abc)"); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
         ASSERT(threw, "non-numeric value throws");
@@ -1621,7 +1621,7 @@ void test_cli_garbage() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(x=y=5)"); } catch (const std::exception& e) {
+        try { (void)parse_cli_query("f(x=y=5)"); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
         ASSERT(threw, "multiple equals throws");
@@ -1933,7 +1933,7 @@ void test_numeric_extremes() {
         FormulaSystem sys;
         sys.load_file("/tmp/tn1.fw");
         bool threw = false;
-        try { sys.resolve("result", {{"x", 2}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("result", {{"x", 2}}); } catch (...) { threw = true; }
         ASSERT(threw, "inf result rejected by system");
     }
 
@@ -1965,7 +1965,7 @@ void test_numeric_extremes() {
         FormulaSystem sys;
         sys.load_file("/tmp/tn2.fw");
         bool threw = false;
-        try { sys.resolve("b", {{"x", -4}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("b", {{"x", -4}}); } catch (...) { threw = true; }
         ASSERT(threw, "NaN result rejected by system");
     }
 
@@ -2091,7 +2091,7 @@ void test_near_zero_coefficient() {
         FormulaSystem sys;
         sys.load_file("/tmp/tnz1.fw");
         bool threw = false;
-        try { sys.resolve("y", {{"x", 10}}); }
+        try { (void)sys.resolve("y", {{"x", 10}}); }
         catch (...) { threw = true; }
         ASSERT(threw, "near-zero coeff from float imprecision: unsolvable");
     }
@@ -2121,7 +2121,7 @@ void test_near_zero_coefficient() {
         FormulaSystem sys;
         sys.load_file("/tmp/tnz3.fw");
         bool threw = false;
-        try { sys.resolve("y", {{"x", 10}}); }
+        try { (void)sys.resolve("y", {{"x", 10}}); }
         catch (...) { threw = true; }
         ASSERT(threw, "y - y: exactly zero coeff is unsolvable");
     }
@@ -2151,7 +2151,7 @@ void test_inf_nan_in_trace() {
         sys.trace.level = TraceLevel::CALC;
         sys.load_file("/tmp/ttr1.fw");
         bool threw = false;
-        try { sys.resolve("y", {{"x", -1}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("y", {{"x", -1}}); } catch (...) { threw = true; }
         ASSERT(threw, "trace with NaN: rejects without crash");
     }
     {
@@ -2160,7 +2160,7 @@ void test_inf_nan_in_trace() {
         sys.trace.level = TraceLevel::CALC;
         sys.load_file("/tmp/ttr2.fw");
         bool threw = false;
-        try { sys.resolve("y", {{"x", 2}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("y", {{"x", 2}}); } catch (...) { threw = true; }
         ASSERT(threw, "trace with inf: rejects without crash");
     }
     {
@@ -2169,7 +2169,7 @@ void test_inf_nan_in_trace() {
         sys.trace.level = TraceLevel::STEPS;
         sys.load_file("/tmp/ttr3.fw");
         bool threw = false;
-        try { sys.resolve("y", {{"x", 1e300}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("y", {{"x", 1e300}}); } catch (...) { threw = true; }
         ASSERT(threw, "trace with large/inf: rejects without crash");
     }
 }
@@ -2564,7 +2564,7 @@ void test_contradictions() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc1.fw");
         bool threw = false;
-        try { sys.resolve("x", {}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {}); } catch (...) { threw = true; }
         ASSERT(threw, "x=y+1, y=x+1: circular throws");
     }
 
@@ -2574,7 +2574,7 @@ void test_contradictions() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc2.fw");
         bool threw = false;
-        try { sys.resolve("x", {}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {}); } catch (...) { threw = true; }
         ASSERT(threw, "three-way circular throws");
     }
 
@@ -2584,7 +2584,7 @@ void test_contradictions() {
         FormulaSystem sys;
         sys.load_file("/tmp/tc3.fw");
         bool threw = false;
-        try { sys.resolve("x", {}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {}); } catch (...) { threw = true; }
         ASSERT(threw, "x = x + 1 throws");
     }
 
@@ -2629,7 +2629,7 @@ void test_nan_fallthrough() {
         FormulaSystem sys;
         sys.load_file("/tmp/tf3.fw");
         bool threw = false;
-        try { sys.resolve("x", {{"y", -1}}); } catch (...) { threw = true; }
+        try { (void)sys.resolve("x", {{"y", -1}}); } catch (...) { threw = true; }
         ASSERT(threw, "both NaN: throws");
     }
 
@@ -3339,7 +3339,7 @@ void test_cli_scientific_notation() {
     // Invalid: e5 (no leading digit)
     {
         bool threw = false;
-        try { parse_cli_query("f(x=?, y=e5)"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=?, y=e5)"); } catch (...) { threw = true; }
         ASSERT(threw, "e5 is invalid");
     }
 
@@ -3470,7 +3470,7 @@ void test_cli_special_values() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(x=?, y=inf)"); }
+        try { (void)parse_cli_query("f(x=?, y=inf)"); }
         catch (const std::exception& e) { threw = true; msg = e.what(); }
         ASSERT(threw, "inf rejected");
         ASSERT(msg.find("Infinity") != std::string::npos, "inf: clear message");
@@ -3480,7 +3480,7 @@ void test_cli_special_values() {
     {
         bool threw = false;
         std::string msg;
-        try { parse_cli_query("f(x=?, y=nan)"); }
+        try { (void)parse_cli_query("f(x=?, y=nan)"); }
         catch (const std::exception& e) { threw = true; msg = e.what(); }
         ASSERT(threw, "nan rejected");
         ASSERT(msg.find("NaN") != std::string::npos, "nan: clear message");
@@ -3489,17 +3489,17 @@ void test_cli_special_values() {
     // Case variants
     {
         bool threw = false;
-        try { parse_cli_query("f(x=?, y=INF)"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=?, y=INF)"); } catch (...) { threw = true; }
         ASSERT(threw, "INF rejected");
     }
     {
         bool threw = false;
-        try { parse_cli_query("f(x=?, y=NaN)"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=?, y=NaN)"); } catch (...) { threw = true; }
         ASSERT(threw, "NaN rejected");
     }
     {
         bool threw = false;
-        try { parse_cli_query("f(x=?, y=infinity)"); } catch (...) { threw = true; }
+        try { (void)parse_cli_query("f(x=?, y=infinity)"); } catch (...) { threw = true; }
         ASSERT(threw, "infinity rejected");
     }
 }
@@ -4486,7 +4486,7 @@ void test_multi_return() {
         ASSERT_NUM(sys.resolve("x", q.bindings), 6, "x succeeds");
         // y = m+n, n not provided (fails)
         bool threw = false;
-        try { sys.resolve("y", q.bindings); } catch (...) { threw = true; }
+        try { (void)sys.resolve("y", q.bindings); } catch (...) { threw = true; }
         ASSERT(threw, "y fails (missing n)");
     }
 
@@ -7078,7 +7078,7 @@ void test_numeric_integration() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tn_track.fw");
-        sys.resolve("x", {{"y", 9}});
+        (void)sys.resolve("x", {{"y", 9}});
         // x^2 is now solved algebraically — may or may not be in numeric_results
         ASSERT(true, "numeric: x^2 solve mode (algebraic or numeric)");
     }
@@ -7148,7 +7148,7 @@ void test_numeric_edge_cases() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tne_exact.fw");
-        sys.resolve_all("x", {{"y", 4}});
+        (void)sys.resolve_all("x", {{"y", 4}});
         auto it = sys.numeric_results_.find("x");
         ASSERT(it != sys.numeric_results_.end() && it->second == true,
             "numeric: x^2=4 → x=±2 marked as exact");
@@ -7160,7 +7160,7 @@ void test_numeric_edge_cases() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tne_approx.fw");
-        sys.resolve_all("x", {{"y", 1}});
+        (void)sys.resolve_all("x", {{"y", 1}});
         auto it = sys.numeric_results_.find("x");
         ASSERT(it != sys.numeric_results_.end() && it->second == false,
             "numeric: x+sin(x)=1 marked as approximate");
@@ -8284,7 +8284,7 @@ void test_simplify_assumptions() {
     // No cancellation → no assumptions
     {
         simplify_clear_assumptions();
-        simplify(parse("x + 1"));
+        (void)simplify(parse("x + 1"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(assumptions.empty(), "assumption: none for x + 1");
     }
@@ -8292,7 +8292,7 @@ void test_simplify_assumptions() {
     // Numeric division → no assumption (3/3 is just arithmetic)
     {
         simplify_clear_assumptions();
-        simplify(parse("6 / 3"));
+        (void)simplify(parse("6 / 3"));
         auto assumptions = simplify_get_assumptions();
         ASSERT(assumptions.empty(), "assumption: none for 6/3");
     }
@@ -9220,7 +9220,7 @@ void test_context_aware_simplification() {
         sys.load_string("y = x/x\n");
         // resolve() path
         bool threw_resolve = false;
-        try { sys.resolve("y", {{"x", 0}}); }
+        try { (void)sys.resolve("y", {{"x", 0}}); }
         catch (...) { threw_resolve = true; }
         ASSERT(threw_resolve, "x/x at x=0 (resolve): should error, not return 1");
         // resolve_all() path — should throw or return empty, not {1}
@@ -9262,7 +9262,7 @@ void test_context_aware_simplification() {
         FormulaSystem sys;
         sys.load_string("y = (a+b)/(a+b)\n");
         bool threw = false;
-        try { sys.resolve("y", {{"a", 3}, {"b", -3}}); }
+        try { (void)sys.resolve("y", {{"a", 3}, {"b", -3}}); }
         catch (...) { threw = true; }
         ASSERT(threw, "(a+b)/(a+b) at a=-b: should error");
     }
@@ -9767,7 +9767,7 @@ void test_simultaneous_equations() {
         sys.numeric_mode = true;
         sys.load_string("area = w * h\nperimeter = 2 * w + 2 * h\n");
         try {
-            sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
+            (void)sys.resolve_all("w", {{"area", 12}, {"perimeter", 14}});
             // May or may not find the answer — but must not crash
             ASSERT(true, "numeric no-crash: did not crash");
         } catch (const std::exception&) {
@@ -11538,7 +11538,7 @@ void test_provenance_plumbing() {
             "y1 = mysin(z1)\ny2 = mysin(z2)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/prov_e_caller.fw");
-        sys.resolve_all("y1", {{"z1", 0.3}});  // populates sub_systems
+        (void)sys.resolve_all("y1", {{"z1", 0.3}});  // populates sub_systems
         std::map<std::string, std::shared_ptr<FormulaSystem>>::iterator sub_it
             = sys.sub_systems.end();
         for (auto it = sys.sub_systems.begin(); it != sys.sub_systems.end(); ++it) {
@@ -11552,7 +11552,7 @@ void test_provenance_plumbing() {
             sub_it->second->solved_symbolic_["result"] = poison;
             // Resolve y2 — @extern fast path must fire and skip the bridge,
             // so poison must NOT propagate into parent.solved_symbolic_.
-            sys.resolve_all("y2", {{"z2", 0.5}});
+            (void)sys.resolve_all("y2", {{"z2", 0.5}});
             auto pit = sys.solved_symbolic_.find("y2");
             bool clean = (pit == sys.solved_symbolic_.end())
                        || (pit->second != poison);
@@ -11807,7 +11807,7 @@ void test_symbolic_diff_provenance() {
     sys.trace.level = TraceLevel::STEPS;  // --steps equivalent
     sys.load_file("/tmp/tdiff_prov.fw");
     try {
-        sys.resolve_all("sensitivity", {{"velocity", 5.0}, {"time", 3.0}});
+        (void)sys.resolve_all("sensitivity", {{"velocity", 5.0}, {"time", 3.0}});
     // NOLINTNEXTLINE(bugprone-empty-catch) — diff resolves to symbolic; numeric resolve may emit failure trace, that is fine
     } catch (const std::runtime_error&) {}
     std::cerr.rdbuf(old_cerr);

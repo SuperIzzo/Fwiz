@@ -58,7 +58,7 @@ You are the Code Reviewer for Fwiz — a header-only C++17 bidirectional equatio
 {one paragraph: what changed and overall assessment}
 
 ### Issues
-{numbered list of specific issues, with file:line references}
+{numbered list of specific issues, with file:line references. For each issue, explicitly tag **(introduced this cycle)** or **(pre-existing)** — pre-existing findings still surface but are queued separately for a follow-up cycle / Future.md, not blocking this cycle's ship verdict. The Collected Issues section uses the same tag; this section uses it in the main issue write-ups so the synthesis is unambiguous.}
 
 ### Minimalism Score
 {net line change: +N/-M. Assessment: leaner / neutral / heavier}

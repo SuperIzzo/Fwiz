@@ -260,7 +260,8 @@ int main(int argc, const char* argv[]) {
         // by `build_alias_table()` (called from resolve()/resolve_all()
         // entry points and explicitly here for the explore-fast-path branch
         // where a queried var is already in `solved` and skips resolve()).
-        sys.build_alias_table();
+        // Discard return: caller wants only the side-effect aliases_ cache.
+        (void)sys.build_alias_table();
 
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;

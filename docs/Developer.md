@@ -499,6 +499,10 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 - **`inline`** — everything else in headers (required for ODR in header-only code)
 - Prefer function pointers over `std::function` to avoid heap allocation
 
+### `[[nodiscard]]` discipline
+
+Pure factories, predicates, value-returning queries, tree transformers, evaluators, and `Checked<T>` accessors must carry `[[nodiscard]]`. Discarding their return is almost always a logic error, and the annotation turns it into a compile-time `-Wunused-result` (under `-Wextra`). Placement: `[[nodiscard]]` goes BEFORE `inline` / `constexpr` / `static` / template headers and class-member return types. Side-effect-only callers (e.g. `build_alias_table()` invoked just to populate `aliases_`) discard explicitly with `(void)`. The `modernize-use-nodiscard` clang-tidy check (in `analyze-full`) flags new pure functions added without the annotation at the next batch run.
+
 ### Compile-time safety (static_assert)
 
 Use `static_assert` to catch structural mistakes at compile time:
