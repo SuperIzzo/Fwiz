@@ -110,34 +110,39 @@ struct SolveBudgetExceededError : std::exception {
     std::map<std::string, int> counts;
     std::map<std::string, ExprPtr> reps;
 
-    std::function<void(ExprPtr)> walk = [&](ExprPtr e) {
-        if (!e) return;
-        switch (e->type) {
-            case ExprType::NUM:
-            case ExprType::VAR:
-                return;  // atomic — never extracted
-            case ExprType::UNARY_NEG:
-                walk(e->child);
-                break;
-            case ExprType::BINOP:
-                walk(e->left);
-                walk(e->right);
-                break;
-            case ExprType::FUNC_CALL:
-                for (auto& a : e->args) walk(a);
-                break;
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); return;
+    struct Walker {
+        std::map<std::string, int>& counts;
+        std::map<std::string, ExprPtr>& reps;
+        void operator()(ExprPtr e) const {
+            if (!e) return;
+            switch (e->type) {
+                case ExprType::NUM:
+                case ExprType::VAR:
+                    return;  // atomic — never extracted
+                case ExprType::UNARY_NEG:
+                    (*this)(e->child);
+                    break;
+                case ExprType::BINOP:
+                    (*this)(e->left);
+                    (*this)(e->right);
+                    break;
+                case ExprType::FUNC_CALL:
+                    for (auto& a : e->args) (*this)(a);
+                    break;
+                case ExprType::COUNT_: assert(false && "invalid ExprType"); return;
+            }
+            // Eligibility: must contain at least one free Var.
+            std::set<std::string> vars;
+            collect_vars(*e, vars);
+            if (vars.empty()) return;
+            std::string key = expr_to_string(e);
+            auto [it, inserted] = counts.emplace(key, 0);
+            it->second++;
+            if (inserted) reps.emplace(key, e);
         }
-        // Eligibility: must contain at least one free Var.
-        std::set<std::string> vars;
-        collect_vars(*e, vars);
-        if (vars.empty()) return;
-        std::string key = expr_to_string(e);
-        auto [it, inserted] = counts.emplace(key, 0);
-        it->second++;
-        if (inserted) reps.emplace(key, e);
     };
-    for (auto& e : exprs) walk(e);
+    Walker walker{counts, reps};
+    for (auto& e : exprs) walker(e);
 
     // Pre-compute node counts (full tree size) and leaf counts (token count)
     // for every candidate subtree in a single recursive sweep with shared
@@ -153,39 +158,43 @@ struct SolveBudgetExceededError : std::exception {
     // "approximate character savings" intent.
     struct TreeCounts { int nodes; int leaves; };
     std::map<ExprPtr, TreeCounts> count_cache;
-    std::function<TreeCounts(ExprPtr)> tree_counts = [&](ExprPtr e) -> TreeCounts {
-        if (!e) return {0, 0};
-        auto it = count_cache.find(e);
-        if (it != count_cache.end()) return it->second;
-        TreeCounts c{0, 0};
-        switch (e->type) {
-            case ExprType::NUM:
-            case ExprType::VAR:       c = {1, 1}; break;
-            case ExprType::UNARY_NEG: {
-                auto cc = tree_counts(e->child);
-                c = {1 + cc.nodes, cc.leaves};
-                break;
-            }
-            case ExprType::BINOP: {
-                auto lc = tree_counts(e->left);
-                auto rc = tree_counts(e->right);
-                c = {1 + lc.nodes + rc.nodes, lc.leaves + rc.leaves};
-                break;
-            }
-            case ExprType::FUNC_CALL: {
-                c = {1, 1};  // own node + function name token
-                for (auto& a : e->args) {
-                    auto ac = tree_counts(a);
-                    c.nodes += ac.nodes;
-                    c.leaves += ac.leaves;
+    struct TreeCounter {
+        std::map<ExprPtr, TreeCounts>& cache;
+        TreeCounts operator()(ExprPtr e) {
+            if (!e) return {0, 0};
+            auto it = cache.find(e);
+            if (it != cache.end()) return it->second;
+            TreeCounts c{0, 0};
+            switch (e->type) {
+                case ExprType::NUM:
+                case ExprType::VAR:       c = {1, 1}; break;
+                case ExprType::UNARY_NEG: {
+                    auto cc = (*this)(e->child);
+                    c = {1 + cc.nodes, cc.leaves};
+                    break;
                 }
-                break;
+                case ExprType::BINOP: {
+                    auto lc = (*this)(e->left);
+                    auto rc = (*this)(e->right);
+                    c = {1 + lc.nodes + rc.nodes, lc.leaves + rc.leaves};
+                    break;
+                }
+                case ExprType::FUNC_CALL: {
+                    c = {1, 1};  // own node + function name token
+                    for (auto& a : e->args) {
+                        auto ac = (*this)(a);
+                        c.nodes += ac.nodes;
+                        c.leaves += ac.leaves;
+                    }
+                    break;
+                }
+                case ExprType::COUNT_: assert(false && "invalid ExprType"); return {0, 0};
             }
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); return {0, 0};
+            cache[e] = c;
+            return c;
         }
-        count_cache[e] = c;
-        return c;
     };
+    TreeCounter tree_counts{count_cache};
     auto node_count = [&](ExprPtr e) { return tree_counts(e).nodes; };
     auto leaf_count = [&](ExprPtr e) { return tree_counts(e).leaves; };
 
@@ -239,7 +248,9 @@ struct SolveBudgetExceededError : std::exception {
         }
     };
     out.reserve(candidates.size());
+    // not std::transform: fresh_name() mutates the captured next_idx counter; algorithm form would hide the side-effecting lambda
     for (const auto& c : candidates) {
+        // cppcheck-suppress useStlAlgorithm
         out.emplace_back(fresh_name(), c.expr);
     }
     return out;
@@ -461,6 +472,7 @@ public:
             if (line.empty() || line[0] == '#') continue;
             // Strip inline comments (# not inside parentheses)
             { int pd = 0;
+              // justified: token-cursor (offset arithmetic on char stream)
               for (size_t ci = 0; ci < line.size(); ci++) {
                   if (line[ci] == '(') pd++;
                   else if (line[ci] == ')') pd--;
@@ -479,8 +491,9 @@ public:
     // "triangle.right" loads: top-level → [triangle] → [triangle.right]
     void load_section(const std::string& section) {
         // Always load top-level (unnamed section)
-        for (const auto& s : sections_)
-            if (s.name.empty()) { load_lines(s.lines); break; }
+        auto top_it = std::find_if(sections_.begin(), sections_.end(),
+            [](const Section& s) { return s.name.empty(); });
+        if (top_it != sections_.end()) load_lines(top_it->lines);
 
         if (section.empty()) {
             // No specific section requested but file has sections
@@ -501,7 +514,9 @@ public:
         // Load each ancestor section in order
         for (const auto& ancestor : chain) {
             bool found = false;
+            // not std::find_if: body applies return_var sugar transform + load_lines, sets found, breaks
             for (const auto& s : sections_) {
+                // cppcheck-suppress useStlAlgorithm
                 if (s.name == ancestor) {
                     // Apply return_var sugar: lines starting with "=" get return_var prepended
                     if (!s.return_var.empty()) {
@@ -530,9 +545,8 @@ public:
         auto& consts = builtin_constants();
         if (!consts.count(name)) return false;
         if (defaults.count(name)) return false;
-        for (const auto& eq : equations)
-            if (eq.lhs_var == name) return false;
-        return true;
+        return std::none_of(equations.begin(), equations.end(),
+            [&name](const Equation& eq) { return eq.lhs_var == name; });
     }
 
     void trace_loaded() const {
@@ -636,15 +650,17 @@ abs(x) / x = undefined iff x = 0
         rewrite_rule_groups_.clear();
         std::map<std::string, size_t> key_to_group;
 
+        // not std::algorithm: dual-output loop (rule.group_index assigned, group container appended-or-extended); cppcheck did not flag this site
         for (size_t i = 0; i < rewrite_rules.size(); i++) {
-            auto key = expr_to_string(rewrite_rules[i].pattern);
+            auto& rule = rewrite_rules[i];
+            auto key = expr_to_string(rule.pattern);
             auto it = key_to_group.find(key);
             if (it == key_to_group.end()) {
                 key_to_group[key] = rewrite_rule_groups_.size();
-                rewrite_rules[i].group_index = static_cast<int>(rewrite_rule_groups_.size());
+                rule.group_index = static_cast<int>(rewrite_rule_groups_.size());
                 rewrite_rule_groups_.push_back({key, {i}, false});
             } else {
-                rewrite_rules[i].group_index = static_cast<int>(it->second);
+                rule.group_index = static_cast<int>(it->second);
                 rewrite_rule_groups_[it->second].rule_indices.push_back(i);
             }
         }
@@ -695,8 +711,9 @@ abs(x) / x = undefined iff x = 0
 
         // Build flat flags vector for thread-local access
         rewrite_exhaustive_flags_.resize(rewrite_rule_groups_.size());
-        for (size_t i = 0; i < rewrite_rule_groups_.size(); i++)
-            rewrite_exhaustive_flags_[i] = rewrite_rule_groups_[i].exhaustive;
+        std::transform(rewrite_rule_groups_.begin(), rewrite_rule_groups_.end(),
+            rewrite_exhaustive_flags_.begin(),
+            [](const RewriteRuleGroup& g) { return g.exhaustive; });
     }
 
     // Walk an expression, find FUNC_CALL nodes that aren't builtins, and convert them
@@ -727,7 +744,9 @@ abs(x) / x = undefined iff x = 0
                 }
                 // Also check first section with matching args count
                 if (pos_args.empty()) {
+                    // not std::find_if: body assigns 2 captured outputs (pos_args, return_var) and breaks
                     for (const auto& sec : sub.sections_) {
+                        // cppcheck-suppress useStlAlgorithm
                         if (!sec.positional_args.empty()) {
                             pos_args = sec.positional_args;
                             return_var = sec.return_var;
@@ -747,6 +766,7 @@ abs(x) / x = undefined iff x = 0
                 call.output_var = "_fc" + std::to_string(next_call_id_++);
 
                 // Map positional args
+                // justified: parallel iteration with min(e->args.size(), pos_args.size())
                 for (size_t i = 0; i < e->args.size() && i < pos_args.size(); i++) {
                     // Recursively process nested calls in the argument
                     auto arg = extract_positional_calls(e->args[i], eq_lhs, calls);
@@ -771,7 +791,9 @@ abs(x) / x = undefined iff x = 0
         if (e->type == ExprType::FUNC_CALL) {
             std::vector<ExprPtr> args;
             args.reserve(e->args.size());
+            // not std::transform: extract_positional_calls mutates the captured `calls` vector via reference
             for (auto& a : e->args)
+                // cppcheck-suppress useStlAlgorithm
                 args.push_back(extract_positional_calls(a, eq_lhs, calls));
             return Expr::Call(e->name, args);
         }
@@ -783,7 +805,9 @@ abs(x) / x = undefined iff x = 0
         for (auto& eq : equations) {
             std::vector<FormulaCall> new_calls;
             eq.rhs = extract_positional_calls(eq.rhs, eq.lhs_var, new_calls);
+            // not std::transform: move-append into a different container; std::move_iterator is less readable here
             for (auto& c : new_calls)
+                // cppcheck-suppress useStlAlgorithm
                 formula_calls.push_back(std::move(c));
         }
     }
@@ -825,6 +849,7 @@ abs(x) / x = undefined iff x = 0
     // ------------------------------------------------------------------------
     void resolve_diff_in_equations() {
         ExprArena::Scope scope(arena);
+        // justified: starts mid-array at `diff_resolved_up_to_` (incremental)
         for (size_t i = diff_resolved_up_to_; i < equations.size(); ++i)
             equations[i].rhs = resolve_diff_calls(equations[i].rhs);
         diff_resolved_up_to_ = equations.size();
@@ -849,7 +874,9 @@ abs(x) / x = undefined iff x = 0
             // Case 1: target is a Var that names a system equation.
             if (is_var(target_expr)) {
                 const std::string& tname = target_expr->name;
+                // not std::find_if: body invokes symbolic_diff_simplified (allocates) and assigns captured `derived`
                 for (const auto& eq : equations) {
+                    // cppcheck-suppress useStlAlgorithm
                     if (eq.lhs_var == tname) {
                         derived = symbolic_diff_simplified(*eq.rhs, var);
                         break;
@@ -1092,11 +1119,9 @@ abs(x) / x = undefined iff x = 0
         std::map<std::string, double> out;
         for (auto& [name, entries] : grouped) {
             // All agree? → unqualified.
-            bool all_agree = true;
             double first_val = entries.front().value;
-            for (const auto& e : entries) {
-                if (!approx_equal(e.value, first_val)) { all_agree = false; break; }
-            }
+            bool all_agree = std::all_of(entries.begin(), entries.end(),
+                [first_val](const auto& e) { return approx_equal(e.value, first_val); });
             if (all_agree) {
                 out[name] = first_val;
                 continue;
@@ -1223,6 +1248,7 @@ abs(x) / x = undefined iff x = 0
         for (auto& [k, v] : symbolic_bindings) { (void)k; free_vars.push_back(v); }
         static constexpr double primes[3] = {2.0, 3.0, 5.0};
         std::vector<std::map<std::string, double>> test_points(3);
+        // justified: cross-index `(i+j) % 3` arithmetic into `primes`
         for (size_t i = 0; i < 3; i++) {
             for (size_t j = 0; j < free_vars.size(); j++) {
                 test_points[i][free_vars[j]] = primes[(i + j) % 3];
@@ -1287,7 +1313,8 @@ abs(x) / x = undefined iff x = 0
             } else {
                 key.reserve(fp.size() + 1);
                 key.push_back(0);  // real-fingerprint discriminator (sorts first)
-                for (double v : fp) key.push_back(llround(v * FINGERPRINT_SCALE));
+                std::transform(fp.begin(), fp.end(), std::back_inserter(key),
+                    [](double v) { return llround(v * FINGERPRINT_SCALE); });
             }
             auto score = canonicity_score(result);
             auto it = winners.find(key);
@@ -1434,6 +1461,7 @@ abs(x) / x = undefined iff x = 0
             // Format each helper RHS — CSE-replace using earlier helpers so
             // nested helpers compose (D8 invariant: t2 = sin(t1), not
             // t2 = sin(x^2)).
+            // justified: prefix-slice `helpers.begin() + i` for nested-helper composition
             for (size_t i = 0; i < helpers.size(); i++) {
                 std::vector<std::pair<std::string, ExprPtr>> earlier(
                     helpers.begin(), helpers.begin() + static_cast<long>(i));
@@ -1442,7 +1470,8 @@ abs(x) / x = undefined iff x = 0
                     helpers[i].first + " = " + format_derived(rhs, aliases));
             }
             // Substitute helpers into each main equation.
-            for (auto& expr : for_format) expr = cse_replace(expr, helpers);
+            std::transform(for_format.begin(), for_format.end(), for_format.begin(),
+                [&helpers](ExprPtr expr) { return cse_replace(expr, helpers); });
         } else {
             // No-CSE path: format directly from sorted_exprs (zero overhead).
             for_format.reserve(sorted_exprs.size());
@@ -1455,9 +1484,8 @@ abs(x) / x = undefined iff x = 0
         // Now format the (possibly substituted) ExprPtrs.
         std::vector<std::string> results;
         results.reserve(for_format.size());
-        for (auto& expr : for_format) {
-            results.push_back(format_derived(expr, aliases));
-        }
+        std::transform(for_format.begin(), for_format.end(), std::back_inserter(results),
+            [this, &aliases](ExprPtr expr) { return format_derived(expr, aliases); });
 
         // If no equation-based results, check iff conditions for constraint inversion.
         // For piecewise functions: "result = 1 iff x > 0" → "x > 0 if result = 1"
@@ -1583,6 +1611,7 @@ abs(x) / x = undefined iff x = 0
         out.expr = fits[0].expr;
 
         // Include alternative fits
+        // justified: starts at index 1; fits[0] already consumed into `out` above
         for (size_t i = 1; i < fits.size(); i++) {
             FitOutput alt;
             alt.equation = expr_to_string(fits[i].expr);
@@ -1610,7 +1639,9 @@ abs(x) / x = undefined iff x = 0
                     std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
                     // Solve: given return_var = rhs, find input_var
                     // Look through the sub-system's equations for one that has input_var on the LHS
+                    // not std::find_if: body returns from the enclosing function with simplify+substitute result
                     for (auto& eq : sub.equations) {
+                        // cppcheck-suppress useStlAlgorithm
                         if (eq.lhs_var == input_var) {
                             // eq: input_var = f(return_var)
                             // Substitute return_var → rhs
@@ -1676,9 +1707,9 @@ abs(x) / x = undefined iff x = 0
             // then check LHS == evaluated RHS
             // Only cross-validate when there are multiple equations with known LHS values
             // (single-equation multiple roots are already valid by construction)
-            int known_lhs_count = 0;
-            for (const auto& eq : equations)
-                if (prepared.count(eq.lhs_var)) known_lhs_count++;
+            int known_lhs_count = static_cast<int>(std::count_if(
+                equations.begin(), equations.end(),
+                [&prepared](const Equation& eq) { return prepared.count(eq.lhs_var) > 0; }));
             if (exact_results.size() > 1 && known_lhs_count > 1) {
                 std::vector<double> validated;
                 for (double r : exact_results) {
@@ -1706,10 +1737,8 @@ abs(x) / x = undefined iff x = 0
             }
 
             if (numeric_mode && numeric_results_.count(target)) {
-                bool all_exact = true;
-                for (double r : exact_results)
-                    if (std::abs(r - std::round(r)) > EPSILON_ZERO)
-                        { all_exact = false; break; }
+                bool all_exact = std::all_of(exact_results.begin(), exact_results.end(),
+                    [](double r) { return std::abs(r - std::round(r)) <= EPSILON_ZERO; });
                 numeric_results_[target] = all_exact;
             }
         // NOLINTNEXTLINE(bugprone-empty-catch) — solve_all failure → no exact results; fall through to constraints
@@ -1738,7 +1767,10 @@ abs(x) / x = undefined iff x = 0
                 }
             }
         }
+        // not std::accumulate: ValueSet::intersect is non-trivial (allocates) and the
+        // accumulator pattern is clearer in loop form here
         for (const auto& gc : global_conditions)
+            // cppcheck-suppress useStlAlgorithm
             constraints = constraints.intersect(gc.to_valueset(target, prepared));
 
         bool has_constraints = !constraints.empty()
@@ -1747,7 +1779,9 @@ abs(x) / x = undefined iff x = 0
         // Combine results: only unite algebraic + ranges when iff constraints contributed
         if (!exact_results.empty() && has_iff_constraints && has_constraints) {
             auto combined = constraints;
+            // not std::accumulate: ValueSet::unite is non-trivial; accumulator pattern is clearer in loop form
             for (double r : exact_results)
+                // cppcheck-suppress useStlAlgorithm
                 combined = combined.unite(ValueSet::eq(r));
             return combined;
         }
@@ -1838,11 +1872,13 @@ private:
                 // Check equation condition
                 if (cond && !check_condition(*cond, b)) return;
                 // Check global conditions
-                for (const auto& gc : global_conditions)
-                    if (!check_condition(gc, b)) return;
+                if (std::any_of(global_conditions.begin(), global_conditions.end(),
+                        [&b](const Condition& gc) { return !check_condition(gc, b); }))
+                    return;
                 // Deduplicate
-                for (auto r : results)
-                    if (std::abs(r - val) < EPSILON_ZERO) return;
+                if (std::any_of(results.begin(), results.end(),
+                        [val](double r) { return std::abs(r - val) < EPSILON_ZERO; }))
+                    return;
                 results.push_back(val);
             }
             if (nan_inf) had_nan_inf = true;
@@ -1881,12 +1917,14 @@ private:
                     sub_sys.max_formula_depth = max_formula_depth;
                     double val = sub_sys.resolve(c.call->query_var, sub_binds);
                     if (!std::isnan(val) && !std::isinf(val)) {
-                        for (auto r : results)
-                            if (std::abs(r - val) < EPSILON_ZERO) return false;
+                        if (std::any_of(results.begin(), results.end(),
+                                [val](double r) { return std::abs(r - val) < EPSILON_ZERO; }))
+                            return false;
                         // Check global conditions
                         auto b = bindings; b[target] = val;
-                        for (const auto& gc : global_conditions)
-                            if (!check_condition(gc, b)) return false;
+                        if (std::any_of(global_conditions.begin(), global_conditions.end(),
+                                [&b](const Condition& gc) { return !check_condition(gc, b); }))
+                            return false;
                         results.push_back(val);
                     }
                 // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system resolve failure → no result from this candidate
@@ -1917,9 +1955,8 @@ private:
                     visited, depth, c.condition, dead_ends);
                 for (double val : roots) {
                     if (results.size() >= MAX_NUMERIC_RESULTS) break;
-                    bool dup = false;
-                    for (auto r : results)
-                        if (approx_equal(r, val)) { dup = true; break; }
+                    bool dup = std::any_of(results.begin(), results.end(),
+                        [val](double r) { return approx_equal(r, val); });
                     if (!dup) {
                         if (!numeric_results_.count(target))
                             numeric_results_[target] = false;
@@ -1957,6 +1994,7 @@ private:
 
     [[nodiscard]] static size_t find_matching_rparen(const std::vector<Token>& tok, size_t lparen_pos) {
         int depth = 1;
+        // justified: token-cursor — returns the matching offset
         for (size_t i = lparen_pos + 1; i < tok.size(); i++) {
             if (tok[i].type == TokenType::LPAREN) depth++;
             else if (tok[i].type == TokenType::RPAREN) { if (--depth == 0) return i; }
@@ -1965,9 +2003,9 @@ private:
     }
 
     [[nodiscard]] static bool has_question_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
-        for (size_t i = from; i < to; i++)
-            if (tok[i].type == TokenType::QUESTION) return true;
-        return false;
+        return std::any_of(tok.begin() + static_cast<long>(from),
+                           tok.begin() + static_cast<long>(to),
+                           [](const Token& t) { return t.type == TokenType::QUESTION; });
     }
 
     [[nodiscard]] static FormulaCall parse_call_args(const std::vector<Token>& tok, size_t name_pos, size_t rparen_pos) {
@@ -2147,6 +2185,7 @@ private:
         bool is_iff = false;
         {
             int pd = 0;
+            // justified: char-cursor with line[i+N] / line[i-1] / line.substr(0, i)
             for (size_t i = 0; i < line.size(); i++) {
                 char ch = line[i];
                 if (ch == '(') { pd++; continue; }
@@ -2181,6 +2220,7 @@ private:
         // Check for standalone global condition vs equation
         // An equation has "ident = expr" where = is not part of >=, <=, !=
         bool is_equation = false;
+        // justified: char-cursor with eq_part[ci-1] lookahead
         for (size_t ci = 0; ci < eq_part.size(); ci++) {
             if (eq_part[ci] == '=') {
                 bool part_of_cmp = (ci > 0 && (eq_part[ci-1] == '>' || eq_part[ci-1] == '<' || eq_part[ci-1] == '!'));
@@ -2202,6 +2242,8 @@ private:
 
         // Extract formula calls before expression parsing
         auto [mod_tok, calls] = extract_formula_calls(tok);
+        // not std::transform: move-append into a different container; std::move_iterator is less readable here
+        // cppcheck-suppress useStlAlgorithm
         for (auto& c : calls) formula_calls.push_back(std::move(c));
 
         // Standalone formula call: just "output_var END" after extraction
@@ -2209,6 +2251,7 @@ private:
 
         // Find the '=' token (not part of >=, <=, !=, ==)
         size_t eq_pos = 0;
+        // justified: token-cursor — captures position of first EQUALS
         for (size_t i = 0; i < mod_tok.size(); i++) {
             if (mod_tok[i].type == TokenType::EQUALS) { eq_pos = i; break; }
         }
@@ -2478,7 +2521,9 @@ private:
                     return;
 
         // Strategy 4: equate RHS of equations sharing a LHS variable
+        // justified: outer of triangular pair (j = i+1) over equations
         for (size_t i = 0; i < equations.size(); i++)
+            // justified: triangular pair (j = i+1) over equations
             for (size_t j = i + 1; j < equations.size(); j++) {
                 if (equations[i].lhs_var != equations[j].lhs_var) continue;
                 // Skip if both equations have different conditions — their domains
@@ -2527,6 +2572,7 @@ private:
         // For target T in equation E1 with unknown U, find E2 that can express U.
         // Substitute U into E1, then solve for T. If the result still contains
         // another unknown V, try a second elimination from remaining equations.
+        // justified: nested cross-pair search with `j == i` / `k == i` skip-self
         for (size_t i = 0; i < equations.size(); i++) {
             auto& e1 = equations[i];
             if (!contains_var(e1.rhs, target)) continue;
@@ -2536,6 +2582,7 @@ private:
                 if (u == target) continue;
                 if (sub_bindings && sub_bindings->count(u)) continue;
                 if (is_active_builtin(u)) continue;
+                // justified: cross-pair scan with j == i skip-self
                 for (size_t j = 0; j < equations.size(); j++) {
                     if (j == i) continue;
                     auto& e2 = equations[j];
@@ -2583,6 +2630,7 @@ private:
                         }
                         // Second-level elimination for each remaining unknown V
                         for (auto& v : remaining) {
+                            // justified: second-level cross-pair scan with k == i skip-self
                             for (size_t k = 0; k < equations.size(); k++) {
                                 if (k == i) continue;
                                 auto& e3 = equations[k];
@@ -2774,10 +2822,11 @@ private:
                         // resolution and may cause infinite expansion)
                         std::set<std::string> remaining;
                         collect_vars(unfolded, remaining);
-                        bool has_formula_output = false;
-                        for (const auto& fc : sub_sys.formula_calls)
-                            if (remaining.count(fc.output_var))
-                                { has_formula_output = true; break; }
+                        bool has_formula_output = std::any_of(
+                            sub_sys.formula_calls.begin(), sub_sys.formula_calls.end(),
+                            [&remaining](const FormulaCall& fc) {
+                                return remaining.count(fc.output_var) > 0;
+                            });
                         if (!has_formula_output) {
                             bindings[target] = unfolded;
                             found = unfolded;
@@ -3026,8 +3075,8 @@ private:
             // If symbolic_diff_simplified returns null (unknown function, etc.),
             // fp_ptr stays null and Newton uses central finite differences.
             ExprPtr d_expr = symbolic_diff_simplified(*expr, target);
-            std::function<double(double)> fp_fn;
-            const std::function<double(double)>* fp_ptr = nullptr;
+            std::function<double(double)> fp_fn;  // std::function: storage for optional derivative; pointer is taken below and passed to newton_solve
+            const std::function<double(double)>* fp_ptr = nullptr;  // std::function: pointer-to-optional pattern paired with fp_fn above
             if (d_expr) {
                 fp_fn = [&, d_expr](double x) -> double {
                     ExprPtr subst = substitute(d_expr, target, Expr::Num(x));
@@ -3061,8 +3110,8 @@ private:
             // Also check: any variable in bindings that could be computed from target
             for (auto& [bvar, bval] : bindings) {
                 if (bvar == target) continue;
-                bool found = false;
-                for (const auto& pv : probe_vars) if (pv == bvar) { found = true; break; }
+                bool found = std::any_of(probe_vars.begin(), probe_vars.end(),
+                    [&bvar](const std::string& pv) { return pv == bvar; });
                 if (!found) probe_vars.push_back(bvar);
             }
 
@@ -3267,7 +3316,9 @@ private:
                     return false;
                 }
                 // Check global conditions
+                // not std::any_of: body emits trace.step + bindings.erase before returning; multi-action
                 for (const auto& gc : global_conditions) {
+                    // cppcheck-suppress useStlAlgorithm
                     if (!check_condition(gc, bindings)) {
                         trace.step("  global condition failed, trying next", depth + 1);
                         bindings.erase(target);
@@ -3449,6 +3500,7 @@ struct CLIQuery {
     // Find matching closing paren (respecting nesting)
     size_t rparen = std::string::npos;
     { int depth = 1;
+      // justified: char-cursor — captures matching offset
       for (size_t i = lparen + 1; i < input.size(); i++) {
           if (input[i] == '(') depth++;
           else if (input[i] == ')') { if (--depth == 0) { rparen = i; break; } }
@@ -3475,6 +3527,7 @@ struct CLIQuery {
     // Split arguments by comma (respecting nested parens)
     std::vector<std::string> args;
     { int depth = 0; size_t start = lparen + 1;
+      // justified: char-cursor with substr(start, i - start) and start = i+1
       for (size_t i = start; i <= rparen; i++) {
           if (input[i] == '(') depth++;
           else if (input[i] == ')') depth--;
@@ -3519,6 +3572,7 @@ struct CLIQuery {
             && name.back() == ')') {
             std::string inner = name.substr(5, name.size() - 6);
             int pd = 0; size_t comma_pos = std::string::npos;
+            // justified: char-cursor — captures comma offset for substr split
             for (size_t i = 0; i < inner.size(); i++) {
                 if (inner[i] == '(') pd++;
                 else if (inner[i] == ')') pd--;

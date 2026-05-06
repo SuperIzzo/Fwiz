@@ -141,7 +141,7 @@ int main(int argc, const char* argv[]) {
             if (!query.inline_source.empty()) {
                 // Replace semicolons with newlines for compact inline format
                 std::string source = query.inline_source;
-                for (auto& c : source) if (c == ';') c = '\n';
+                std::replace(source.begin(), source.end(), ';', '\n');
                 sys.load_string(source, "<inline>", query.section);
             } else {
                 // Read from stdin
@@ -266,8 +266,9 @@ int main(int argc, const char* argv[]) {
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;
             if (explore_full) {
-                for (auto& v : sys.all_variables())
-                    vars.push_back({v, v});
+                auto all_vars = sys.all_variables();
+                std::transform(all_vars.begin(), all_vars.end(), std::back_inserter(vars),
+                    [](const std::string& v) { return std::make_pair(v, v); });
             } else {
                 for (auto& [k, v] : query.bindings)
                     vars.push_back({k, k});
@@ -362,7 +363,9 @@ int main(int argc, const char* argv[]) {
                     // a number (free variables remain), we emit the symbolic
                     // tree directly so users still get an answer.
                     bool emitted = false;
+                    // not std::find_if: body emits to stdout (side effect) and sets emitted before break
                     for (const auto& eq : sys.equations) {
+                        // cppcheck-suppress useStlAlgorithm
                         if (eq.lhs_var == dq.alias) {
                             std::cout << dq.alias << " = "
                                       << expr_to_string(eq.rhs) << '\n';

@@ -21,6 +21,12 @@ Confirm the brief carries the four pieces below before spawning researchers. If 
 
 Fires ONLY for cleanup cycles; feature cycles stay open-ended. (Validated in the warnings-cleanup cycle — see `750fe35`, `0da63ea`.)
 
+### Brief grep-assertion self-consistency check
+
+Trigger: brief (master-plan or freshly authored) contains both a count assertion AND a `grep -v <annotation_token>` filter aiming at zero, AND a stated annotation placement ("immediately preceding declaration", "trailing comment on the declaration line", etc.).
+
+Before locking the brief (or as part of the master-plan-execution intake when reusing a pre-written brief), simulate the chosen annotation shape against the filter on a single example. If the declaration line itself contains the filter token (e.g. `std::function`), an annotation placed on the **preceding line** leaves the declaration line unfiltered — count and filter become mutually unsatisfiable, forcing the implementer to choose one constraint and silently violate another. The satisfiable shapes are: (a) trailing comment on the declaration line itself (filter scrubs the same line), or (b) different filter token (`// keep:` instead of `// std::function:`). Pick at brief-author time, not at implementer time. Canonical miss: Cycle 5 S3 std::function triage 2026-05-06 — brief stipulated "annotation immediately preceding declaration" + `grep -v '// std::function:'` returns 0 + count ≤ 8; the three-way contradiction was un-resolvable under the stated annotation placement; implementer recognized it and silently chose trailing-comment style. Outcome shipped clean but the brief carried an unresolved spec contradiction.
+
 ### Stale-diagnostic protocol — when reusing prior-cycle data instead of fresh research
 
 Trigger: brief proposes "skip RESEARCH because D{N} from the prior cycle answers the question."

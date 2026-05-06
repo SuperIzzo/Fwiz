@@ -22,6 +22,9 @@ Changes to hot paths (expr.h simplify/evaluate/solve_for, system.h resolver) can
 
 When given a list of changed files:
 
+### 0. Anchor on the cycle being audited
+Read the first heading of `.fwiz-workflow/implementation-log.md` (or use the cycle slug the orchestrator passed in your spawn brief) and quote it verbatim at the top of your report (e.g. "Cycle 3 — L1 ranged-for sweep"). The audit must judge ONLY this cycle's diff. If the diff or log mentions changes from a prior cycle (e.g. `[[nodiscard]]` annotations from Cycle 2 still visible in the diff context), do NOT attribute them to the current cycle — they are pre-existing context, not subject of this audit. Canonical miss: Cycle 3 L1 ranged-for sweep 2026-05-05 — perf-auditor's closing summary mentioned `[[nodiscard]]` annotations as if they were Cycle 3 substance; verdict was correct (PASS) but prose blended Cycle 2 and Cycle 3 attributes.
+
 ### 1. Data Locality Check
 - Read the changed code in expr.h / system.h
 - Verify expression traversals still walk arena-allocated memory sequentially

@@ -38,7 +38,7 @@ After implementation changes, update the project documentation to reflect what w
 
 ## How to Work
 
-1. Read `.fwiz-workflow/implementation-log.md` to understand what changed
+1. Read `.fwiz-workflow/implementation-log.md` to understand what changed. **Quote the cycle slug verbatim at the top of your report** (e.g. "Cycle 3 — L1 ranged-for sweep") and treat ONLY that cycle's deltas as documentable substance. If the diff context surfaces edits from a prior cycle (e.g. `[[nodiscard]]` annotations still visible in `git diff` view), do NOT attribute them to the current cycle in your update — they are pre-existing context. Canonical miss: Cycle 3 L1 ranged-for sweep 2026-05-05 — doc-updater's report referenced `[[nodiscard]]` work as if it were this cycle's substance (it was Cycle 2's). Audit-tracker row was correct, but the surrounding prose blended cycles.
 2. Read `.fwiz-workflow/review-notes.md` if available, for reviewer findings
 3. **Read `.fwiz-workflow/design-proposal.md` or `design-*.md` if present** — look for explicit DROP / REJECT / EXCLUDE instructions in the Final Design, the Final Design AMENDMENT, and the critic's Accepted/Rejected list. Any Future.md entry you are tempted to add that appears on the DROP or REJECT list is a design-fidelity failure. If the design's explicit Future.md deltas list (`docs/Future.md` delta section) prescribes which slots get which entries, follow that prescription exactly — do NOT substitute content of your own inference.
 4. Read each document that might need updating

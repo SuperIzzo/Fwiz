@@ -205,11 +205,10 @@ public:
     bool empty() const { return intervals_.empty() && discrete_.empty(); }
 
     bool contains(double v) const {
-        for (const auto& iv : intervals_)
-            if (iv.contains(v)) return true;
-        for (const auto& d : discrete_)
-            if (std::abs(d - v) < EPSILON_ZERO) return true;
-        return false;
+        if (std::any_of(intervals_.begin(), intervals_.end(),
+                [v](const Interval& iv) { return iv.contains(v); })) return true;
+        return std::any_of(discrete_.begin(), discrete_.end(),
+            [v](double d) { return std::abs(d - v) < EPSILON_ZERO; });
     }
 
     const std::vector<Interval>& intervals() const { return intervals_; }
@@ -239,9 +238,8 @@ public:
         for (const auto& d : other.discrete_)
             if (this->contains(d)) {
                 // Avoid duplicates
-                bool dup = false;
-                for (const auto& rd : result.discrete_)
-                    if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
+                bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
+                    [d](double rd) { return std::abs(rd - d) < EPSILON_ZERO; });
                 if (!dup) result.discrete_.push_back(d);
             }
 
@@ -255,9 +253,8 @@ public:
             other.intervals_.begin(), other.intervals_.end());
         result.discrete_ = discrete_;
         for (const auto& d : other.discrete_) {
-            bool dup = false;
-            for (const auto& rd : result.discrete_)
-                if (std::abs(rd - d) < EPSILON_ZERO) { dup = true; break; }
+            bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
+                [d](double rd) { return std::abs(rd - d) < EPSILON_ZERO; });
             if (!dup) result.discrete_.push_back(d);
         }
         return result;
@@ -266,8 +263,8 @@ public:
     // Filter a list of values through this set
     std::vector<double> filter(const std::vector<double>& values) const {
         std::vector<double> result;
-        for (auto v : values)
-            if (contains(v)) result.push_back(v);
+        std::copy_if(values.begin(), values.end(), std::back_inserter(result),
+            [this](double v) { return contains(v); });
         return result;
     }
 
@@ -280,8 +277,8 @@ public:
         if (intervals_.empty() && discrete_.empty()) return false;
         // Merge all coverage into sorted intervals (discrete points become [v,v])
         std::vector<Interval> all_intervals = intervals_;
-        for (double d : discrete_)
-            all_intervals.push_back({d, d, true, true});
+        std::transform(discrete_.begin(), discrete_.end(), std::back_inserter(all_intervals),
+            [](double d) { return Interval{d, d, true, true}; });
         std::sort(all_intervals.begin(), all_intervals.end(),
             [](const auto& a, const auto& b) {
                 return a.low < b.low || (a.low == b.low && a.low_inclusive > b.low_inclusive);
@@ -325,16 +322,24 @@ public:
 
         if (!discrete_.empty()) {
             std::string s = "{";
-            for (size_t i = 0; i < discrete_.size(); i++)
-                s += (i ? ", " : "") + fmt_num(discrete_[i]);
+            bool first = true;
+            for (double d : discrete_) {
+                if (!first) s += ", ";
+                s += fmt_num(d);
+                first = false;
+            }
             s += "}";
             parts.push_back(s);
         }
 
         if (parts.size() == 1) return parts[0];
         std::string result;
-        for (size_t i = 0; i < parts.size(); i++)
-            result += (i ? " | " : "") + parts[i];
+        bool first = true;
+        for (const auto& p : parts) {
+            if (!first) result += " | ";
+            result += p;
+            first = false;
+        }
         return result;
     }
 };
@@ -617,8 +622,9 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
         case ExprType::VAR:       return e.name == v;
         case ExprType::BINOP:     return contains_var(*e.left, v) || contains_var(*e.right, v);
         case ExprType::UNARY_NEG: return contains_var(*e.child, v);
-        case ExprType::FUNC_CALL: for (const auto* a : e.args) if (contains_var(*a, v)) return true;
-                                  return false;
+        case ExprType::FUNC_CALL:
+            return std::any_of(e.args.begin(), e.args.end(),
+                [&v](const Expr* a) { return contains_var(*a, v); });
         case ExprType::COUNT_: assert(false && "invalid ExprType"); return false;
     }
     return false;
@@ -637,6 +643,7 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
                                       && expr_equal(*a.right, *b.right);
         case ExprType::FUNC_CALL:
             if (a.name != b.name || a.args.size() != b.args.size()) return false;
+            // justified: parallel iteration over a.args and b.args
             for (size_t i = 0; i < a.args.size(); i++)
                 if (!expr_equal(*a.args[i], *b.args[i])) return false;
             return true;
@@ -689,87 +696,178 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
         std::vector<std::pair<ExprPtr, double>> factors; // base^exp pairs
     };
 
-    auto decompose_term = [](double additive_coeff, const ExprPtr& base) -> TermFactors {
-        TermFactors tf;
-        tf.coeff = additive_coeff;
-        if (!base) return tf;  // pure constant
-        double mul_coeff = 1.0;
-        flatten_multiplicative(base, mul_coeff, tf.factors);
-        tf.coeff *= mul_coeff;
-        return tf;
-    };
+    // Recursive matcher state: holds a reference to the `bindings` map that
+    // accumulates wildcard bindings across the recursion. Per-call working
+    // state (factor-permutation cursors etc.) is passed as parameters.
+    struct PatternMatcher {
+        std::map<std::string, ExprPtr>& bindings;
 
-    std::function<bool(const ExprPtr&, const ExprPtr&)> match;
-
-    // Match a pattern term's multiplicative factors against a target term's factors.
-    // Pattern wildcards that don't match any target factor bind to 1.
-    auto match_factors = [&](const TermFactors& p, const TermFactors& t) -> bool {
-        // Separate pattern factors into wildcards (plain vars) and structural
-        std::vector<size_t> p_wildcards, p_structural;
-        for (size_t i = 0; i < p.factors.size(); i++) {
-            auto& [base, exp] = p.factors[i];
-            if (base->type == ExprType::VAR && !builtin_constants().count(base->name)
-                && std::abs(exp - 1.0) < EPSILON_ZERO)
-                p_wildcards.push_back(i);
-            else
-                p_structural.push_back(i);
+        static TermFactors decompose_term(double additive_coeff, const ExprPtr& base) {
+            TermFactors tf;
+            tf.coeff = additive_coeff;
+            if (!base) return tf;  // pure constant
+            double mul_coeff = 1.0;
+            flatten_multiplicative(base, mul_coeff, tf.factors);
+            tf.coeff *= mul_coeff;
+            return tf;
         }
 
-        // Match structural pattern factors against target factors
-        std::vector<bool> t_used(t.factors.size(), false);
-        for (size_t si : p_structural) {
-            auto& [p_base, p_exp] = p.factors[si];
-            bool found = false;
+        bool match(const ExprPtr& p, const ExprPtr& t) {
+            if (!p || !t) return p == t;
+
+            // Variable in pattern: builtin constants match literally, others are wildcards
+            if (p->type == ExprType::VAR) {
+                if (builtin_constants().count(p->name))
+                    return t->type == ExprType::VAR && t->name == p->name;
+                auto it = bindings.find(p->name);
+                if (it != bindings.end())
+                    return expr_equal(it->second, t); // already bound — must match
+                bindings[p->name] = t;
+                return true;
+            }
+
+            // Number must match exactly
+            if (p->type == ExprType::NUM)
+                return t->type == ExprType::NUM && std::abs(p->num - t->num) < EPSILON_ZERO;
+
+            // Negation
+            if (p->type == ExprType::UNARY_NEG)
+                return t->type == ExprType::UNARY_NEG && match(p->child, t->child);
+
+            // Binary op — with commutativity and flattened matching
+            if (p->type == ExprType::BINOP) {
+                if (t->type != ExprType::BINOP) return false;
+
+                // Flattened additive matching: when both are additive chains,
+                // flatten into term lists and match by permutation
+                if (is_additive(p->op) && is_additive(t->op)
+                    && (is_additive_chain(p->left) || is_additive_chain(p->right)
+                        || is_additive_chain(t->left) || is_additive_chain(t->right))) {
+                    std::vector<std::pair<double, ExprPtr>> p_terms, t_terms;
+                    flatten_additive(p, 1.0, p_terms);
+                    flatten_additive(t, 1.0, t_terms);
+                    if (p_terms.size() == t_terms.size() && p_terms.size() > 1) {
+                        // Decompose each term into multiplicative factors
+                        std::vector<TermFactors> p_tf, t_tf;
+                        for (auto& [c, b] : p_terms) p_tf.push_back(decompose_term(c, b));
+                        for (auto& [c, b] : t_terms) t_tf.push_back(decompose_term(c, b));
+
+                        // Backtracking permutation search over additive terms
+                        std::vector<bool> used(t_tf.size(), false);
+                        return backtrack(0, p_tf, t_tf, used);
+                    }
+                }
+
+                // Standard binary match with commutativity
+                if (p->op != t->op && !(is_additive(p->op) && is_additive(t->op)))
+                    return false;
+                // For ADD/SUB: both are additive, handled above for chains.
+                // For same-op: try direct, then swapped for commutative ops.
+                if (p->op == t->op) {
+                    auto saved = bindings;
+                    if (match(p->left, t->left) && match(p->right, t->right))
+                        return true;
+                    bindings = saved;
+                    if (is_commutative(p->op))
+                        return match(p->left, t->right) && match(p->right, t->left);
+                    return false;
+                }
+                return false;
+            }
+
+            // Function call — name and all args must match
+            if (p->type == ExprType::FUNC_CALL) {
+                if (t->type != ExprType::FUNC_CALL || p->name != t->name) return false;
+                if (p->args.size() != t->args.size()) return false;
+                // justified: parallel iteration over p->args and t->args
+                for (size_t i = 0; i < p->args.size(); i++)
+                    if (!match(p->args[i], t->args[i])) return false;
+                return true;
+            }
+
+            return false;
+        }
+
+        // Match a pattern term's multiplicative factors against a target term's factors.
+        // Pattern wildcards that don't match any target factor bind to 1.
+        bool match_factors(const TermFactors& p, const TermFactors& t) {
+            // Separate pattern factors into wildcards (plain vars) and structural
+            std::vector<size_t> p_wildcards, p_structural;
+            // justified: pattern-matcher dual-cursor — i/ti/ri cross-indexed into t_used / t_remaining / t_rem_used
+            for (size_t i = 0; i < p.factors.size(); i++) {
+                auto& [base, exp] = p.factors[i];
+                if (base->type == ExprType::VAR && !builtin_constants().count(base->name)
+                    && std::abs(exp - 1.0) < EPSILON_ZERO)
+                    p_wildcards.push_back(i);
+                else
+                    p_structural.push_back(i);
+            }
+
+            // Match structural pattern factors against target factors
+            std::vector<bool> t_used(t.factors.size(), false);
+            for (size_t si : p_structural) {
+                auto& [p_base, p_exp] = p.factors[si];
+                bool found = false;
+                // justified: dual-cursor (ti indexes t_used skip-mask)
+                for (size_t ti = 0; ti < t.factors.size(); ti++) {
+                    if (t_used[ti]) continue;
+                    auto& [t_base, t_exp] = t.factors[ti];
+                    if (std::abs(p_exp - t_exp) > EPSILON_ZERO) continue;
+                    auto saved = bindings;
+                    if (match(p_base, t_base)) {
+                        t_used[ti] = true;
+                        found = true;
+                        break;
+                    }
+                    bindings = saved;
+                }
+                if (!found) return false;
+            }
+
+            // Collect remaining target factors into a product
+            double remaining_coeff = (std::abs(p.coeff) < EPSILON_ZERO) ? 0.0 : t.coeff / p.coeff;
+            ExprPtr remaining = nullptr;
+            // justified: dual-cursor (ti indexes t_used skip-mask)
             for (size_t ti = 0; ti < t.factors.size(); ti++) {
                 if (t_used[ti]) continue;
                 auto& [t_base, t_exp] = t.factors[ti];
-                if (std::abs(p_exp - t_exp) > EPSILON_ZERO) continue;
-                auto saved = bindings;
-                if (match(p_base, t_base)) {
-                    t_used[ti] = true;
-                    found = true;
-                    break;
-                }
-                bindings = saved;
+                auto factor = (std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
+                    : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp));
+                remaining = remaining ? Expr::BinOpExpr(BinOp::MUL, remaining, factor) : factor;
             }
-            if (!found) return false;
+
+            if (p_wildcards.empty())
+                return !remaining && std::abs(remaining_coeff - 1.0) < EPSILON_ZERO;
+
+            // Collect remaining target factors as individual expressions
+            std::vector<ExprPtr> t_remaining;
+            // justified: dual-cursor (ti indexes t_used skip-mask)
+            for (size_t ti = 0; ti < t.factors.size(); ti++) {
+                if (t_used[ti]) continue;
+                auto& [t_base, t_exp] = t.factors[ti];
+                t_remaining.push_back((std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
+                    : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp)));
+            }
+
+            // Try to assign remaining target factors to wildcards via backtracking
+            // Unassigned wildcards get the numeric coefficient (or 1)
+            std::vector<bool> t_rem_used(t_remaining.size(), false);
+            return assign_wildcards(0, p, p_wildcards, t_remaining, t_rem_used, remaining_coeff);
         }
 
-        // Collect remaining target factors into a product
-        double remaining_coeff = (std::abs(p.coeff) < EPSILON_ZERO) ? 0.0 : t.coeff / p.coeff;
-        ExprPtr remaining = nullptr;
-        for (size_t ti = 0; ti < t.factors.size(); ti++) {
-            if (t_used[ti]) continue;
-            auto& [t_base, t_exp] = t.factors[ti];
-            auto factor = (std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
-                : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp));
-            remaining = remaining ? Expr::BinOpExpr(BinOp::MUL, remaining, factor) : factor;
-        }
-
-        if (p_wildcards.empty())
-            return !remaining && std::abs(remaining_coeff - 1.0) < EPSILON_ZERO;
-
-        // Collect remaining target factors as individual expressions
-        std::vector<ExprPtr> t_remaining;
-        for (size_t ti = 0; ti < t.factors.size(); ti++) {
-            if (t_used[ti]) continue;
-            auto& [t_base, t_exp] = t.factors[ti];
-            t_remaining.push_back((std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
-                : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp)));
-        }
-
-        // Try to assign remaining target factors to wildcards via backtracking
-        // Unassigned wildcards get the numeric coefficient (or 1)
-        std::vector<bool> t_rem_used(t_remaining.size(), false);
-        std::function<bool(size_t)> assign_wildcards = [&](size_t wi) -> bool {
+        bool assign_wildcards(size_t wi,
+                const TermFactors& p, const std::vector<size_t>& p_wildcards,
+                const std::vector<ExprPtr>& t_remaining, std::vector<bool>& t_rem_used,
+                double& remaining_coeff) {
             if (wi == p_wildcards.size()) {
                 // All wildcards assigned; check no unmatched target factors
-                for (bool u : t_rem_used) if (!u) return false;
-                return true;
+                return std::all_of(t_rem_used.begin(), t_rem_used.end(),
+                    [](bool u) { return u; });
             }
             auto& var_name = p.factors[p_wildcards[wi]].first->name;
 
             // Try matching this wildcard against each remaining target factor
+            // justified: dual-cursor (ri indexes t_rem_used skip-mask)
             for (size_t ri = 0; ri < t_remaining.size(); ri++) {
                 if (t_rem_used[ri]) continue;
                 auto saved = bindings;
@@ -783,7 +881,7 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                 }
                 if (ok) {
                     t_rem_used[ri] = true;
-                    if (assign_wildcards(wi + 1)) return true;
+                    if (assign_wildcards(wi + 1, p, p_wildcards, t_remaining, t_rem_used, remaining_coeff)) return true;
                     t_rem_used[ri] = false;
                 }
                 bindings = saved;
@@ -803,107 +901,37 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                 if (ok) {
                     double saved_coeff = remaining_coeff;
                     remaining_coeff = 1.0;  // consumed
-                    if (assign_wildcards(wi + 1)) return true;
+                    if (assign_wildcards(wi + 1, p, p_wildcards, t_remaining, t_rem_used, remaining_coeff)) return true;
                     remaining_coeff = saved_coeff;
                 }
                 bindings = saved;
             }
 
             return false;
-        };
-        return assign_wildcards(0);
-    };
-
-    match = [&](const ExprPtr& p, const ExprPtr& t) -> bool {
-        if (!p || !t) return p == t;
-
-        // Variable in pattern: builtin constants match literally, others are wildcards
-        if (p->type == ExprType::VAR) {
-            if (builtin_constants().count(p->name))
-                return t->type == ExprType::VAR && t->name == p->name;
-            auto it = bindings.find(p->name);
-            if (it != bindings.end())
-                return expr_equal(it->second, t); // already bound — must match
-            bindings[p->name] = t;
-            return true;
         }
 
-        // Number must match exactly
-        if (p->type == ExprType::NUM)
-            return t->type == ExprType::NUM && std::abs(p->num - t->num) < EPSILON_ZERO;
-
-        // Negation
-        if (p->type == ExprType::UNARY_NEG)
-            return t->type == ExprType::UNARY_NEG && match(p->child, t->child);
-
-        // Binary op — with commutativity and flattened matching
-        if (p->type == ExprType::BINOP) {
-            if (t->type != ExprType::BINOP) return false;
-
-            // Flattened additive matching: when both are additive chains,
-            // flatten into term lists and match by permutation
-            if (is_additive(p->op) && is_additive(t->op)
-                && (is_additive_chain(p->left) || is_additive_chain(p->right)
-                    || is_additive_chain(t->left) || is_additive_chain(t->right))) {
-                std::vector<std::pair<double, ExprPtr>> p_terms, t_terms;
-                flatten_additive(p, 1.0, p_terms);
-                flatten_additive(t, 1.0, t_terms);
-                if (p_terms.size() == t_terms.size() && p_terms.size() > 1) {
-                    // Decompose each term into multiplicative factors
-                    std::vector<TermFactors> p_tf, t_tf;
-                    for (auto& [c, b] : p_terms) p_tf.push_back(decompose_term(c, b));
-                    for (auto& [c, b] : t_terms) t_tf.push_back(decompose_term(c, b));
-
-                    // Backtracking permutation search over additive terms
-                    std::vector<bool> used(t_tf.size(), false);
-                    std::function<bool(size_t)> backtrack = [&](size_t pi) -> bool {
-                        if (pi == p_tf.size()) return true;
-                        for (size_t ti = 0; ti < t_tf.size(); ti++) {
-                            if (used[ti]) continue;
-                            auto saved = bindings;
-                            if (match_factors(p_tf[pi], t_tf[ti])) {
-                                used[ti] = true;
-                                if (backtrack(pi + 1)) return true;
-                                used[ti] = false;
-                            }
-                            bindings = saved;
-                        }
-                        return false;
-                    };
-                    return backtrack(0);
-                }
-            }
-
-            // Standard binary match with commutativity
-            if (p->op != t->op && !(is_additive(p->op) && is_additive(t->op)))
-                return false;
-            // For ADD/SUB: both are additive, handled above for chains.
-            // For same-op: try direct, then swapped for commutative ops.
-            if (p->op == t->op) {
+        bool backtrack(size_t pi,
+                const std::vector<TermFactors>& p_tf,
+                const std::vector<TermFactors>& t_tf,
+                std::vector<bool>& used) {
+            if (pi == p_tf.size()) return true;
+            // justified: dual-cursor (ti indexes used skip-mask)
+            for (size_t ti = 0; ti < t_tf.size(); ti++) {
+                if (used[ti]) continue;
                 auto saved = bindings;
-                if (match(p->left, t->left) && match(p->right, t->right))
-                    return true;
+                if (match_factors(p_tf[pi], t_tf[ti])) {
+                    used[ti] = true;
+                    if (backtrack(pi + 1, p_tf, t_tf, used)) return true;
+                    used[ti] = false;
+                }
                 bindings = saved;
-                if (is_commutative(p->op))
-                    return match(p->left, t->right) && match(p->right, t->left);
-                return false;
             }
             return false;
         }
-
-        // Function call — name and all args must match
-        if (p->type == ExprType::FUNC_CALL) {
-            if (t->type != ExprType::FUNC_CALL || p->name != t->name) return false;
-            if (p->args.size() != t->args.size()) return false;
-            for (size_t i = 0; i < p->args.size(); i++)
-                if (!match(p->args[i], t->args[i])) return false;
-            return true;
-        }
-
-        return false;
     };
 
-    if (match(pattern, target)) return bindings;
+    PatternMatcher matcher{bindings};
+    if (matcher.match(pattern, target)) return bindings;
     return std::nullopt;
 }
 
@@ -926,8 +954,9 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
     if (replacement->type == ExprType::FUNC_CALL) {
         std::vector<ExprPtr> args;
         args.reserve(replacement->args.size());
-        for (auto& a : replacement->args)
-            args.push_back(apply_rewrite(a, bindings));
+        std::transform(replacement->args.begin(), replacement->args.end(),
+            std::back_inserter(args),
+            [&bindings](ExprPtr a) { return apply_rewrite(a, bindings); });
         return Expr::Call(replacement->name, args);
     }
     return replacement;
@@ -968,8 +997,12 @@ inline std::string expr_to_string(const Expr& e) {
 
         case ExprType::FUNC_CALL: {
             std::string s = e.name + "(";
-            for (size_t i = 0; i < e.args.size(); i++)
-                s += (i ? ", " : "") + expr_to_string(*e.args[i]);
+            bool first = true;
+            for (const auto* arg : e.args) {
+                if (!first) s += ", ";
+                s += expr_to_string(*arg);
+                first = false;
+            }
             return s + ")";
         }
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
@@ -1255,8 +1288,8 @@ template<typename Fn>
         return Expr::Num(binop_info(e.op).eval(e.left->num, e.right->num));
     }
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
-        bool all_num = true;
-        for (const auto* a : e.args) if (!is_num(a)) { all_num = false; break; }
+        bool all_num = std::all_of(e.args.begin(), e.args.end(),
+            [](const Expr* a) { return is_num(a); });
         // evaluate() can still return empty here (e.g. multi-arg function
         // with args.size() != 1) — fall through to tree-as-is on failure.
         if (all_num) {
@@ -1407,6 +1440,8 @@ inline void flatten_multiplicative(ExprPtr e,
     // Build numerator: coeff (if not 1) * positive-exp factors
     ExprPtr num = nullptr;
     if (abs_coeff != 1.0 || (num_parts.empty() && denom_parts.empty())) num = Expr::Num(abs_coeff);
+    // not std::accumulate: conditional first-element seeding (num is null until first non-empty assignment)
+    // cppcheck-suppress useStlAlgorithm
     for (auto& f : num_parts) num = num ? Expr::BinOpExpr(BinOp::MUL, num, f) : f;
     if (!num) num = Expr::Num(1);
 
@@ -1414,7 +1449,9 @@ inline void flatten_multiplicative(ExprPtr e,
     ExprPtr result = num;
     if (!denom_parts.empty()) {
         ExprPtr denom = denom_parts.front();
+        // not std::accumulate: skip-first; rewriting via std::next(begin, 1) is less readable than the indexed form
         for (size_t i = 1; i < denom_parts.size(); i++)
+            // cppcheck-suppress useStlAlgorithm
             denom = Expr::BinOpExpr(BinOp::MUL, denom, denom_parts[i]);
         result = Expr::BinOpExpr(BinOp::DIV, num, denom);
     }
@@ -1428,8 +1465,10 @@ inline void flatten_multiplicative(ExprPtr e,
 // Nullify marks an entry as consumed.
 template<typename Vec, typename GetKey, typename GetVal, typename Nullify>
 inline void group_like(Vec& items, GetKey key, GetVal val, Nullify nullify) {
+    // justified: outer of triangular pair (j = i+1) over `items`
     for (size_t i = 0; i < items.size(); i++) {
         if (!key(items[i])) continue;
+        // justified: triangular pair (j = i+1) over `items`
         for (size_t j = i + 1; j < items.size(); j++) {
             if (!key(items[j])) continue;
             if (expr_equal(key(items[i]), key(items[j]))) {
@@ -1481,8 +1520,9 @@ inline std::vector<SimplifyAssumption>& simplify_assumptions_() {
 inline void simplify_record_assumption(const ExprPtr& expr, const std::string& desc,
                                        AssumptionSource src = AssumptionSource::Derived) {
     auto& a = simplify_assumptions_();
-    for (auto& existing : a)
-        if (existing.desc == desc) return;  // dedup by string
+    if (std::any_of(a.begin(), a.end(),
+            [&desc](const SimplifyAssumption& existing) { return existing.desc == desc; }))
+        return;  // dedup by string
     a.push_back({expr, desc, src});
 }
 
@@ -1532,6 +1572,7 @@ struct Condition {
     ValueSet to_valueset(const std::string& var,
                          const std::map<std::string, double>& bindings = {}) const {
         ValueSet result = ValueSet::all();
+        // justified: index needed to look up parallel `connectors[i-1]`
         for (size_t i = 0; i < clauses.size(); i++) {
             const auto& c = clauses[i];
             // Check if this clause constrains `var`
@@ -1626,6 +1667,7 @@ struct Condition {
     };
 
     bool result = true;
+    // justified: index needed to look up parallel `cond.connectors[i-1]`
     for (size_t i = 0; i < cond.clauses.size(); i++) {
         auto val = eval_clause(cond.clauses[i]);
         bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
@@ -1659,6 +1701,7 @@ inline std::string cond_op_to_string(CondOp op) {
 inline std::string condition_to_string(const Condition& cond,
         const std::map<std::string, ExprPtr>& bindings) {
     std::string out;
+    // justified: index needed to look up parallel `cond.connectors[i-1]`
     for (size_t i = 0; i < cond.clauses.size(); i++) {
         if (i > 0) out += (cond.connectors[i-1] == CondLogic::AND) ? " && " : " || ";
         const auto& c = cond.clauses[i];
@@ -1884,7 +1927,9 @@ struct RewriteRulesGuard {
         }
         if (all_cancel && !divided.empty()) {
             ExprPtr result = divided[0];
+            // not std::accumulate: skip-first; rewriting via std::next(begin, 1) is less readable than the indexed form
             for (size_t i = 1; i < divided.size(); i++)
+                // cppcheck-suppress useStlAlgorithm
                 result = Expr::BinOpExpr(BinOp::ADD, result, divided[i]);
             return result;
         }
@@ -2290,7 +2335,7 @@ struct Solution {
 // Function inverter: given f(inner) = rhs, produce inner = f⁻¹(rhs).
 // Returns the inverted RHS expression, or nullptr if no inverse is known.
 // Set by FormulaSystem to resolve via .fw sub-system definitions.
-using FuncInverter = std::function<ExprPtr(const std::string& func_name, const ExprPtr& rhs)>;
+using FuncInverter = std::function<ExprPtr(const std::string& func_name, const ExprPtr& rhs)>;  // std::function: boundary erasure — typed thread_local registered from system.h, must be storable in a typed variable
 
 inline FuncInverter& solve_func_inverter_() {
     static thread_local FuncInverter inverter;
@@ -2591,10 +2636,11 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 // Newton's method: solve f(x) = 0 starting from x0.
 // Optional `fp_fn` supplies the analytic derivative; when null, central finite
 // differences are used (default behavior, byte-identical to the pre-M4 path).
+template<class F>
 [[nodiscard]] inline std::optional<double> newton_solve(
-        const std::function<double(double)>& f, double x0,
+        F&& f, double x0,
         int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE,
-        const std::function<double(double)>* fp_fn = nullptr) {
+        const std::function<double(double)>* fp_fn = nullptr) {  // std::function: optional derivative callback; nullable pointer pattern is the right shape for "derivative may not be available"
     double x = x0;
     for (int i = 0; i < max_iter; i++) {
         double fx = f(x);
@@ -2629,8 +2675,9 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 }
 
 // Bisection: find root of f in [lo, hi] where f(lo) and f(hi) have opposite signs.
+template<class F>
 [[nodiscard]] inline std::optional<double> bisection_solve(
-        const std::function<double(double)>& f, double lo, double hi,
+        F&& f, double lo, double hi,
         int max_iter = NUMERIC_MAX_ITER, double tol = NUMERIC_TOLERANCE) {
     double flo = f(lo), fhi = f(hi);
     if (std::isnan(flo) || std::isnan(fhi)) return std::nullopt;
@@ -2652,8 +2699,9 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 // Adaptive grid scan: find intervals where f changes sign.
 // Uses coarse pass with jitter, then refines near sign changes and high-gradient regions.
 // Deterministic: uses fixed seed for reproducible jitter.
+template<class F>
 [[nodiscard]] inline std::vector<std::pair<double, double>> adaptive_scan(
-        const std::function<double(double)>& f, double lo, double hi,
+        F&& f, double lo, double hi,
         bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES) {
     struct Sample { double x, fx; };
     std::vector<Sample> samples;
@@ -2682,6 +2730,7 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 
         // Find regions of interest: sign changes and high gradient
         std::vector<std::pair<double, double>> refine_regions;
+        // justified: window comparison samples[i-1] vs samples[i]
         for (size_t i = 1; i < samples.size(); i++) {
             bool sign_change = samples[i-1].fx * samples[i].fx < 0;
             double gradient = std::abs(samples[i].fx - samples[i-1].fx)
@@ -2718,6 +2767,7 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 
     // Collect sign-change intervals and exact zeros
     std::vector<std::pair<double, double>> intervals;
+    // justified: window comparison samples[i-1] vs samples[i]
     for (size_t i = 0; i < samples.size(); i++) {
         if (std::abs(samples[i].fx) < NUMERIC_TOLERANCE) {
             // Exact zero — return degenerate interval [x, x]
@@ -2734,10 +2784,11 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 // Uses adaptive scan to find intervals, then refines with Newton/bisection.
 // Optional `fp_fn` is the analytic derivative passed through to newton_solve;
 // null falls back to central finite differences.
+template<class F>
 [[nodiscard]] inline std::vector<double> find_numeric_roots(
-        const std::function<double(double)>& f, double lo, double hi,
+        F&& f, double lo, double hi,
         bool integer_only = false, int n_samples = NUMERIC_DEFAULT_SAMPLES,
-        const std::function<double(double)>* fp_fn = nullptr) {
+        const std::function<double(double)>* fp_fn = nullptr) {  // std::function: optional derivative callback passed through to newton_solve; nullable pointer matches "derivative may not be available"
     auto intervals = adaptive_scan(f, lo, hi, integer_only, n_samples);
     std::vector<double> roots;
 
@@ -2772,9 +2823,8 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
             if (std::isnan(fr) || std::abs(fr) > NUMERIC_TOLERANCE * 1000) continue;
 
             // Deduplicate
-            bool dup = false;
-            for (double r : roots)
-                if (std::abs(r - *root) < EPSILON_ZERO) { dup = true; break; }
+            bool dup = std::any_of(roots.begin(), roots.end(),
+                [&root](double r) { return std::abs(r - *root) < EPSILON_ZERO; });
             if (!dup) roots.push_back(*root);
         }
     }

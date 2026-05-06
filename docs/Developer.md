@@ -499,6 +499,24 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 - **`inline`** — everything else in headers (required for ODR in header-only code)
 - Prefer function pointers over `std::function` to avoid heap allocation
 
+### STL algorithms
+
+Prefer `<algorithm>` over hand-rolled loops where the algorithm form is at least as clear: `std::any_of`, `std::all_of`, `std::none_of`, `std::find_if`, `std::count_if`, `std::transform`, `std::accumulate`, `std::copy_if`, `std::replace_if`. The cppcheck `useStlAlgorithm` check (un-suppressed in `make analyze-fast` since Cycle 4) enforces this automatically — any new raw loop that a standard algorithm can express will be caught at the per-cycle gate.
+
+Keep manual loops when: the body has multiple side effects (assigns two captured outputs and breaks, emits a trace step, or early-returns from the enclosing function); when a readable algorithm form requires obscure lambda gymnastics (e.g. `std::move_iterator + back_inserter` for move-append into a different container); or when the loop is a numerical inner loop in `fit.h` where the arithmetic structure matters for readability and performance. When keeping a manual loop in a header file that cppcheck would otherwise flag, annotate inline with `// not std::algorithm: <reason>` immediately above the loop body's first statement, followed by `// cppcheck-suppress useStlAlgorithm` on the same position (cppcheck reports the warning at the body line, not the `for` line).
+
+### `std::function` policy
+
+Prefer template callable parameters and named structs over `std::function` (Turner ch 40). `std::function` carries type-erasure overhead (virtual dispatch, possible heap allocation for large captures) that is avoidable in most fwiz call sites.
+
+- **Template `F&&` parameters** — for functions that accept a callable but do not store it beyond the call. Applied in Cycle 5 to `newton_solve`, `bisection_solve`, `adaptive_scan`, `find_numeric_roots` (expr.h) and `sample_function`, `compute_fit_stats` (fit.h).
+- **Named structs with `operator()`** — for recursive lambdas that C++17 cannot express without `std::function`. The struct holds shared state by reference; recursive calls become `(*this)(child)`. Applied in Cycle 5 to `Walker`, `TreeCounter` (system.h, `cse_extract`) and `PatternMatcher` (expr.h, `match_pattern`).
+- **`std::function` justified keeps** — three categories where type erasure is genuinely required: (a) boundary erasure into a typed `thread_local` or across an ABI boundary (e.g. `FuncInverter`), (b) optional callbacks stored as a nullable `const std::function*` parameter when the callable is conditionally provided (e.g. the analytic-derivative `fp_fn` in Newton's method), (c) heterogeneous lambda storage in `std::vector<T>` where each row holds a different concrete lambda type (e.g. `OuterBuiltin::fn`, `BuiltinInner::fn` in fit.h).
+
+Every surviving `std::function` declaration carries a trailing `// std::function: <reason>` annotation on the same line. Any new site without one is a reviewer finding. Lock: `grep -nE 'std::function' src/expr.h src/system.h src/fit.h | grep -v '// std::function:'` must return 0 lines.
+
+**`vector<ExprPtr>` iteration forms:** `ExprPtr` is `Expr*`; treat it as a raw pointer everywhere. For range-for: `for (const auto* x : c)`, not `for (const auto& x : c)` — the latter deduces `Expr* const&` and triggers cppcheck `constVariableReference`. For std::algorithm lambdas over `vector<ExprPtr>`: `[](ExprPtr x)` (by-value) is the house style; `[](const Expr* x)` is correct when the called function accepts `const Expr&` via dereference. Do NOT write `[](const ExprPtr& x)` — it compiles and is semantically equivalent but violates the "ExprPtr = raw pointer, not a reference type" convention and will be flagged at review.
+
 ### `[[nodiscard]]` discipline
 
 Pure factories, predicates, value-returning queries, tree transformers, evaluators, and `Checked<T>` accessors must carry `[[nodiscard]]`. Discarding their return is almost always a logic error, and the annotation turns it into a compile-time `-Wunused-result` (under `-Wextra`). Placement: `[[nodiscard]]` goes BEFORE `inline` / `constexpr` / `static` / template headers and class-member return types. Side-effect-only callers (e.g. `build_alias_table()` invoked just to populate `aliases_`) discard explicitly with `(void)`. The `modernize-use-nodiscard` clang-tidy check (in `analyze-full`) flags new pure functions added without the annotation at the next batch run.

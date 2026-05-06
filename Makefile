@@ -39,15 +39,18 @@ sanitize: asan ubsan
 # User-triggered batch (run during PC idle windows): `make analyze-full`
 # (clang-tidy, ~1-2h on this header-heavy codebase). `make analyze` runs both.
 
+# tests.cpp uses inline test loops where readability is local; file-level skip
+# for syntaxError / containerOutOfBounds / useStlAlgorithm — same pattern.
 analyze-fast:
 	@which cppcheck > /dev/null 2>&1 && ( \
 		echo "=== cppcheck ===" && \
 		cppcheck --enable=warning,style,performance --std=c++17 \
 			--inline-suppr \
-			--suppress=passedByValue --suppress=useStlAlgorithm \
+			--suppress=passedByValue \
 			--suppress=throwInEntryPoint \
 			--suppress=syntaxError:src/tests.cpp \
 			--suppress=containerOutOfBounds:src/tests.cpp \
+			--suppress=useStlAlgorithm:src/tests.cpp \
 			--error-exitcode=1 src/main.cpp src/tests.cpp 2>&1 \
 	) || echo "cppcheck not installed, skipping"
 	@echo "Fast static analysis complete (cppcheck)."

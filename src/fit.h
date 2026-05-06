@@ -35,8 +35,9 @@ struct FitSample { double x, y; };
 
 // Evenly spaced samples of f over [lo, hi] with deterministic jitter.
 // Skips NaN/Inf results.
+template<class F>
 [[nodiscard]] inline std::vector<FitSample> sample_function(
-        const std::function<double(double)>& f,
+        F&& f,
         double lo, double hi, int n_points = FIT_DEFAULT_SAMPLES) {
     std::vector<FitSample> samples;
     if (n_points < 2 || lo >= hi) return samples;
@@ -66,6 +67,7 @@ using FitMatrix = std::vector<std::vector<double>>;
 // Build Vandermonde matrix A[i][j] = x_i^j for j = 0..degree
 [[nodiscard]] inline FitMatrix vandermonde(const std::vector<FitSample>& samples, int degree) {
     FitMatrix A(samples.size(), std::vector<double>(degree + 1));
+    // justified: matrix-row index `A[i][j]` paired with `samples[i].x`
     for (size_t i = 0; i < samples.size(); i++) {
         double xp = 1.0;
         for (int j = 0; j <= degree; j++) {
@@ -146,21 +148,24 @@ struct FitResult {
 // Evaluate polynomial at x
 [[nodiscard]] inline double poly_eval(const std::vector<double>& c, double x) {
     double result = 0, xp = 1.0;
-    for (size_t i = 0; i < c.size(); i++) {
-        result += c[i] * xp;
+    for (double ci : c) {
+        result += ci * xp;
         xp *= x;
     }
     return result;
 }
 
 // Compute R² and max error for any prediction function
+template<class Pred>
 inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& samples,
-        const std::function<double(double)>& predict) {
-    double y_mean = 0;
-    for (const auto& s : samples) y_mean += s.y;
+        Pred&& predict) {
+    double y_mean = std::accumulate(samples.begin(), samples.end(), 0.0,
+        [](double acc, const FitSample& s) { return acc + s.y; });
     y_mean /= static_cast<double>(samples.size());
     double ss_res = 0, ss_tot = 0;
     result.max_error = 0;
+    // not std::accumulate: 3-stat accumulator (ss_res, ss_tot, max_error) with early-exit on non-finite predict
+    // cppcheck-suppress useStlAlgorithm
     for (const auto& s : samples) {
         double predicted = predict(s.x);
         if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
@@ -192,12 +197,14 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
     auto A = vandermonde(samples, degree);
     std::vector<double> b;
     b.reserve(samples.size());
-    for (const auto& s : samples) b.push_back(s.y);
+    std::transform(samples.begin(), samples.end(), std::back_inserter(b),
+        [](const FitSample& s) { return s.y; });
 
     result.coefficients = least_squares_solve(A, b);
 
     // Snap coefficients to integers
-    for (auto& c : result.coefficients) c = snap_coeff(c);
+    std::transform(result.coefficients.begin(), result.coefficients.end(),
+        result.coefficients.begin(), snap_coeff);
 
     compute_fit_stats(result, samples, [&result](double x) {
         return poly_eval(result.coefficients, x);
@@ -428,6 +435,7 @@ struct ConstantForm {
         const std::map<std::string, double>& extra_constants = {}) {
     ExprPtr result = nullptr;
 
+    // justified: index `i` is the polynomial degree (x^i with i==0/i==1 specials)
     for (size_t i = 0; i < coeffs.size(); i++) {
         if (std::abs(coeffs[i]) < EPSILON_ZERO) continue;
 
@@ -489,7 +497,8 @@ struct ConstantForm {
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
     b.reserve(log_samples.size());
-    for (const auto& s : log_samples) b.push_back(s.y);
+    std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
+        [](const FitSample& s) { return s.y; });
     auto coeffs = least_squares_solve(A, b);
     double a = std::exp(coeffs[0]), power = coeffs[1];
 
@@ -524,7 +533,8 @@ struct ConstantForm {
         auto A = vandermonde(log_samples, 1);
         std::vector<double> b;
         b.reserve(log_samples.size());
-        for (const auto& s : log_samples) b.push_back(s.y);
+        std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
+        [](const FitSample& s) { return s.y; });
         auto coeffs = least_squares_solve(A, b);
         double a = std::exp(coeffs[0]), rate = coeffs[1];
 
@@ -550,7 +560,8 @@ struct ConstantForm {
         auto A = vandermonde(log_samples, 2);
         std::vector<double> b;
         b.reserve(log_samples.size());
-        for (const auto& s : log_samples) b.push_back(s.y);
+        std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
+        [](const FitSample& s) { return s.y; });
         auto coeffs = least_squares_solve(A, b);
         double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2];
         double a = std::exp(c0);
@@ -603,7 +614,8 @@ struct ConstantForm {
     auto A = vandermonde(log_samples, 1);
     std::vector<double> b;
     b.reserve(log_samples.size());
-    for (const auto& s : log_samples) b.push_back(s.y);
+    std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
+        [](const FitSample& s) { return s.y; });
     auto coeffs = least_squares_solve(A, b);
     double intercept = coeffs[0], slope = coeffs[1];
 
@@ -633,10 +645,11 @@ struct ConstantForm {
     if (samples.size() < 10) return result;
 
     // Estimate frequency via zero-crossing count
-    double y_mean = 0;
-    for (const auto& s : samples) y_mean += s.y;
+    double y_mean = std::accumulate(samples.begin(), samples.end(), 0.0,
+        [](double acc, const FitSample& s) { return acc + s.y; });
     y_mean /= static_cast<double>(samples.size());
     int zero_crossings = 0;
+    // justified: window comparison samples[i-1] vs samples[i]
     for (size_t i = 1; i < samples.size(); i++)
         if ((samples[i-1].y - y_mean) * (samples[i].y - y_mean) < 0)
             zero_crossings++;
@@ -648,6 +661,7 @@ struct ConstantForm {
     // Linear regression: y = A*sin(freq*x) + B*cos(freq*x) + D
     FitMatrix A(samples.size(), std::vector<double>(3));
     std::vector<double> b;
+    // justified: matrix-row index `A[i][...]` paired with samples[i]
     for (size_t i = 0; i < samples.size(); i++) {
         double wx = freq * samples[i].x;
         A[i][0] = std::sin(wx);
@@ -693,10 +707,9 @@ struct ConstantForm {
 
     // Try different offsets c by estimating from the asymptotic value
     // As x → ∞, y → c. Use the last few samples to estimate c.
-    double c_est = 0;
     int tail = std::min(5, static_cast<int>(samples.size()));
-    for (int i = static_cast<int>(samples.size()) - tail; i < static_cast<int>(samples.size()); i++)
-        c_est += samples[i].y;
+    double c_est = std::accumulate(samples.end() - tail, samples.end(), 0.0,
+        [](double acc, const FitSample& s) { return acc + s.y; });
     c_est /= tail;
 
     // Transform: 1/(y - c) should be linear in x
@@ -717,7 +730,8 @@ struct ConstantForm {
         auto A = vandermonde(inv_samples, 1);
         std::vector<double> bv;
         bv.reserve(inv_samples.size());
-        for (const auto& s : inv_samples) bv.push_back(s.y);
+        std::transform(inv_samples.begin(), inv_samples.end(), std::back_inserter(bv),
+            [](const FitSample& s) { return s.y; });
         auto coeffs = least_squares_solve(A, bv);
         // 1/(y-c) = coeffs[0] + coeffs[1]*x = (x + coeffs[0]/coeffs[1]) / (1/coeffs[1])
         // So a = 1/coeffs[1], b = coeffs[0]/coeffs[1]
@@ -726,8 +740,8 @@ struct ConstantForm {
         double b = coeffs[0] / coeffs[1];
 
         // Compute R²
-        double y_mean = 0;
-        for (const auto& s : samples) y_mean += s.y;
+        double y_mean = std::accumulate(samples.begin(), samples.end(), 0.0,
+            [](double acc, const FitSample& s) { return acc + s.y; });
         y_mean /= static_cast<double>(samples.size());
         double ss_res = 0, ss_tot = 0, max_err = 0;
         for (const auto& s : samples) {
@@ -874,7 +888,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
         }
 
         // Also try builtins as outer wrappers: builtin(inner(x))
-        struct OuterBuiltin { std::string name; std::function<double(double)> fn; };
+        struct OuterBuiltin { std::string name; std::function<double(double)> fn; };  // std::function: stored heterogeneously in std::vector<OuterBuiltin> with different lambda types per row
         static const std::vector<OuterBuiltin> outer_builtins = {
             {"sin",  [](double v) { return std::sin(v); }},
             {"cos",  [](double v) { return std::cos(v); }},
@@ -917,7 +931,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
     if (depth <= 1) return sort_and_dedup(fits);
 
     // Seed inners: builtin functions as simple wrappers
-    struct BuiltinInner { std::string name; std::function<double(double)> fn; };
+    struct BuiltinInner { std::string name; std::function<double(double)> fn; };  // std::function: stored heterogeneously in std::vector<BuiltinInner> with different lambda types per row
     std::vector<BuiltinInner> builtins = {
         {"sin",  [](double x) { return std::sin(x); }},
         {"cos",  [](double x) { return std::cos(x); }},
@@ -945,13 +959,13 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
         });
         level_inners.push_back(pr);
     }
-    for (const auto& f : fits)
-        if (f.r_squared > 0.5 && f.expr) level_inners.push_back(f);
+    std::copy_if(fits.begin(), fits.end(), std::back_inserter(level_inners),
+        [](const FitResult& f) { return f.r_squared > 0.5 && f.expr; });
 
     // Iterate composition levels
     for (int lvl = 2; lvl <= depth; lvl++) {
-        double best_so_far = 0;
-        for (const auto& f : fits) best_so_far = std::max(best_so_far, f.r_squared);
+        double best_so_far = std::accumulate(fits.begin(), fits.end(), 0.0,
+            [](double acc, const FitResult& f) { return std::max(acc, f.r_squared); });
 
         auto new_fits = compose_level(samples, level_inners, var,
             extra_constants, min_r2, best_so_far);
@@ -960,6 +974,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
         // Prune: keep top N from new fits as inners for next level
         auto pruned = sort_and_dedup(new_fits);
         level_inners.clear();
+        // justified: capped iteration with FIT_MAX_INNERS_PER_LEVEL bound
         for (size_t i = 0; i < pruned.size() && static_cast<int>(i) < FIT_MAX_INNERS_PER_LEVEL; i++)
             if (pruned[i].expr) level_inners.push_back(pruned[i]);
 
