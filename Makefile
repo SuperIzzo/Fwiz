@@ -1,4 +1,5 @@
 CXX = g++
+CXX_CLANG = clang++
 CXXFLAGS = -std=c++17 -Wall -Wextra -Wpedantic -Wshadow -Wuninitialized -Wnull-dereference -Wimplicit-fallthrough -Wdouble-promotion -O2
 TARGET = bin/fwiz
 TEST = bin/fwiz_tests
@@ -14,6 +15,17 @@ $(TEST): src/tests.cpp $(HEADERS) | bin
 
 test: $(TARGET) $(TEST)
 	./$(TEST)
+
+# Compiles + runs the test suite under clang++ with the same warning flag set
+# as GCC. Catches Clang-specific issues (e.g. stricter [[nodiscard]] handling,
+# C++20 extension warnings). Soft-skip if clang++ is not on PATH.
+test-clang: src/tests.cpp $(HEADERS) | bin
+	@if which $(CXX_CLANG) > /dev/null 2>&1; then \
+		$(CXX_CLANG) $(CXXFLAGS) -o bin/fwiz_clang_tests src/tests.cpp && \
+		./bin/fwiz_clang_tests; \
+	else \
+		echo "clang++ not found, skipping test-clang"; \
+	fi
 
 # --- Sanitizer targets ---
 # AddressSanitizer + LeakSanitizer: catches memory leaks, use-after-free,
@@ -59,7 +71,7 @@ analyze-full:
 	@which clang-tidy > /dev/null 2>&1 && ( \
 		echo "=== clang-tidy ===" && \
 		clang-tidy src/main.cpp \
-			--checks='bugprone-*,performance-*,clang-analyzer-*,modernize-use-nodiscard,-bugprone-easily-swappable-parameters,-performance-inefficient-string-concatenation' \
+			--checks='bugprone-*,performance-*,clang-analyzer-*,modernize-use-nodiscard,misc-const-correctness,-bugprone-easily-swappable-parameters,-performance-inefficient-string-concatenation' \
 			-- -std=c++17 -I src 2>&1 \
 	) || echo "clang-tidy not installed, skipping"
 	@echo "Full static analysis complete (clang-tidy)."
@@ -71,4 +83,4 @@ bin:
 	mkdir -p bin
 
 clean:
-	rm -f $(TARGET) $(TEST) bin/fwiz_asan bin/fwiz_ubsan
+	rm -f $(TARGET) $(TEST) bin/fwiz_asan bin/fwiz_ubsan bin/fwiz_clang_tests

@@ -3620,7 +3620,7 @@ void test_errmsg_missing_variable() {
         write_fw("/tmp/tem1.fw", "x = y + z\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tem1.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", 5}}); });
         ASSERT(msg.find("'z'") != std::string::npos,
             "missing z: error mentions 'z'");
         ASSERT(msg.find("no value") != std::string::npos,
@@ -3632,7 +3632,7 @@ void test_errmsg_missing_variable() {
         write_fw("/tmp/tem2.fw", "x = y + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tem2.fw");
-        auto msg = get_error([&]() { sys.resolve("w", {{"y", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("w", {{"y", 5}}); });
         ASSERT(msg.find("No equation found") != std::string::npos,
             "unknown target: 'No equation found'");
         ASSERT(msg.find("'w'") != std::string::npos,
@@ -3644,7 +3644,7 @@ void test_errmsg_missing_variable() {
         write_fw("/tmp/tem3.fw", "a = b + 1\nb = c + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tem3.fw");
-        auto msg = get_error([&]() { sys.resolve("a", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("a", {}); });
         ASSERT(!msg.empty(), "deep chain missing: throws");
         ASSERT(msg.find("no value") != std::string::npos,
             "deep chain: says 'no value'");
@@ -3655,7 +3655,7 @@ void test_errmsg_missing_variable() {
         write_fw("/tmp/tem4.fw", "# nothing here\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tem4.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {}); });
         ASSERT(msg.find("No equation found") != std::string::npos,
             "empty system: 'No equation found'");
     }
@@ -3669,7 +3669,7 @@ void test_errmsg_nan_inf() {
         write_fw("/tmp/tei1.fw", "x = sqrt(y)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tei1.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", -1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", -1}}); });
         ASSERT(msg.find("NaN") != std::string::npos || msg.find("invalid") != std::string::npos,
             "NaN result: mentions NaN or invalid");
     }
@@ -3679,7 +3679,7 @@ void test_errmsg_nan_inf() {
         write_fw("/tmp/tei2.fw", "x = y ^ 1024\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tei2.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", 2}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", 2}}); });
         ASSERT(msg.find("infinity") != std::string::npos || msg.find("invalid") != std::string::npos,
             "inf result: mentions infinity or invalid");
     }
@@ -3689,7 +3689,7 @@ void test_errmsg_nan_inf() {
         write_fw("/tmp/tei3.fw", "x = sqrt(y)\nx = log(y)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tei3.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", -1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", -1}}); });
         ASSERT(msg.find("all equations") != std::string::npos,
             "all NaN: says 'all equations'");
     }
@@ -3703,7 +3703,7 @@ void test_errmsg_circular() {
         write_fw("/tmp/tec1.fw", "x = y + 1\ny = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tec1.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {}); });
         ASSERT(!msg.empty(), "circular: throws");
         // The circular dep is caught internally; error reports the missing variable
         ASSERT(msg.find("'x'") != std::string::npos || msg.find("'y'") != std::string::npos,
@@ -3715,7 +3715,7 @@ void test_errmsg_circular() {
         write_fw("/tmp/tec2.fw", "x = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tec2.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {}); });
         ASSERT(!msg.empty(), "self-ref: throws");
         ASSERT(msg.find("'x'") != std::string::npos,
             "self-ref: mentions 'x'");
@@ -3727,7 +3727,7 @@ void test_errmsg_circular() {
         FormulaSystem sys;
         sys.trace.level = TraceLevel::STEPS;
         sys.load_file("/tmp/tec3.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {}); });
         ASSERT(!msg.empty(), "circular with trace: throws without crash");
     }
 }
@@ -3777,31 +3777,31 @@ void test_errmsg_cli() {
 
     // Each CLI error should tell the user what to fix
     {
-        auto msg = get_error([&]() { parse_cli_query("hello"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("hello"); });
         ASSERT(msg.find("Expected format") != std::string::npos,
             "no parens: shows expected format");
         ASSERT(msg.find("var=?") != std::string::npos,
             "no parens: shows example syntax");
     }
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=5)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=5)"); });
         ASSERT(msg.find("var=?") != std::string::npos,
             "no query: hints to use var=?");
     }
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=?, y=)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, y=)"); });
         ASSERT(msg.find("'y'") != std::string::npos,
             "empty value: names the variable");
     }
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=?, y=abc)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, y=abc)"); });
         ASSERT(msg.find("'abc'") != std::string::npos,
             "bad number: shows the bad value");
         ASSERT(msg.find("'y'") != std::string::npos,
             "bad number: names the variable");
     }
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=?, y=inf)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, y=inf)"); });
         ASSERT(msg.find("'y'") != std::string::npos,
             "inf: names the variable");
     }
@@ -3816,11 +3816,11 @@ void test_errmsg_consistency() {
         FormulaSystem sys;
         sys.load_file("/tmp/tmc1.fw");
 
-        auto msg1 = get_error([&]() { sys.resolve("x", {}); });
+        auto msg1 = get_error([&]() { (void)sys.resolve("x", {}); });
         ASSERT(msg1.find("'x'") != std::string::npos || msg1.find("'y'") != std::string::npos,
             "missing var: mentions a variable name");
 
-        auto msg2 = get_error([&]() { sys.resolve("nonexistent", {}); });
+        auto msg2 = get_error([&]() { (void)sys.resolve("nonexistent", {}); });
         ASSERT(msg2.find("'nonexistent'") != std::string::npos,
             "no equation: mentions target name");
     }
@@ -3837,7 +3837,7 @@ void test_errmsg_consistency() {
 
     // CLI errors always mention the problematic element
     {
-        auto msg = get_error([&]() { parse_cli_query("f(=?, bad=xyz)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(=?, bad=xyz)"); });
         ASSERT(!msg.empty(), "CLI errors are never empty");
     }
 }
@@ -4571,7 +4571,7 @@ void test_free_variable_resolution() {
     {
         FormulaSystem sys;
         sys.load_file("/tmp/tfv1.fw");
-        auto msg = get_error([&]() { sys.resolve("ay", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("ay", {}); });
         ASSERT(msg.find("'ax'") != std::string::npos,
             "underdetermined: error names missing var 'ax'");
     }
@@ -4585,7 +4585,7 @@ void test_underdetermined_systems() {
         write_fw("/tmp/tud1.fw", "z = x + y\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tud1.fw");
-        auto msg = get_error([&]() { sys.resolve("z", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("z", {}); });
         ASSERT(!msg.empty(), "two unknowns: throws");
         ASSERT(msg.find("no value") != std::string::npos, "two unknowns: says 'no value'");
     }
@@ -4595,7 +4595,7 @@ void test_underdetermined_systems() {
         FormulaSystem sys;
         sys.load_file("/tmp/tud1.fw");
         ASSERT_NUM(sys.resolve("z", {{"x", 3}, {"y", 4}}), 7, "both provided: z=7");
-        auto msg = get_error([&]() { sys.resolve("z", {{"x", 3}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("z", {{"x", 3}}); });
         ASSERT(msg.find("'y'") != std::string::npos, "x only: still missing y");
     }
 
@@ -4604,7 +4604,7 @@ void test_underdetermined_systems() {
         FormulaSystem sys;
         sys.load_file("/tmp/tud1.fw");
         ASSERT_NUM(sys.resolve("x", {{"z", 10}, {"y", 4}}), 6, "inverse: x=z-y=6");
-        auto msg = get_error([&]() { sys.resolve("x", {{"z", 10}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"z", 10}}); });
         ASSERT(msg.find("no value") != std::string::npos, "inverse missing y: error");
     }
 
@@ -4617,7 +4617,7 @@ void test_underdetermined_systems() {
         FormulaSystem sys;
         sys.load_file("/tmp/tud_factor.fw");
         // a=5, b=5 makes both area equations identical — underdetermined for c
-        auto msg = get_error([&]() { sys.resolve("c", {{"a", 5}, {"b", 5}, {"k", 1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("c", {{"a", 5}, {"b", 5}, {"k", 1}}); });
         ASSERT(!msg.empty(), "shared factor underdetermined: throws");
     }
 
@@ -4665,7 +4665,7 @@ void test_free_var_chains() {
     {
         FormulaSystem sys;
         sys.load_file("/tmp/tfc1.fw");
-        auto msg = get_error([&]() { sys.resolve("c", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("c", {}); });
         ASSERT(!msg.empty(), "missing chain base: throws");
     }
 
@@ -4696,7 +4696,7 @@ void test_multi_query_free_vars() {
     {
         FormulaSystem sys;
         sys.load_file("/tmp/tmqf.fw");
-        auto msg = get_error([&]() { sys.resolve("out1", {{"in2", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("out1", {{"in2", 5}}); });
         ASSERT(msg.find("'in1'") != std::string::npos, "missing in1: error names it");
         ASSERT_NUM(sys.resolve("out2", {{"in2", 5}}), 10, "out2 still works independently");
     }
@@ -4726,7 +4726,7 @@ void test_interface_error_messages() {
         sys.load_file("/tmp/tier1.fw");
 
         // input not provided → error names 'input'
-        auto msg = get_error([&]() { sys.resolve("result", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("result", {}); });
         ASSERT(msg.find("'input'") != std::string::npos,
             "missing input: error names 'input'");
 
@@ -4743,7 +4743,7 @@ void test_interface_error_messages() {
         write_fw("/tmp/tier2.fw", "z = x + y\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tier2.fw");
-        auto msg = get_error([&]() { sys.resolve("z", {}); });
+        auto msg = get_error([&]() { (void)sys.resolve("z", {}); });
         ASSERT(msg.find("no value") != std::string::npos, "two missing: says 'no value'");
         // Should name at least x or y
         ASSERT(msg.find("'x'") != std::string::npos || msg.find("'y'") != std::string::npos,
@@ -4755,7 +4755,7 @@ void test_interface_error_messages() {
         write_fw("/tmp/tier3.fw", "y = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tier3.fw");
-        auto msg = get_error([&]() { sys.resolve("w", {{"x", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("w", {{"x", 5}}); });
         ASSERT(msg.find("No equation found") != std::string::npos,
             "unknown var: 'No equation found'");
         ASSERT(msg.find("'w'") != std::string::npos, "unknown var: names 'w'");
@@ -4963,7 +4963,7 @@ void test_formula_call_errors() {
         write_fw("/tmp/fce1.fw", "nonexistent_file(x=?, y=y)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fce1.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", 5}}); });
         ASSERT(!msg.empty(), "missing file: throws");
         // The file error propagates through the solver
         ASSERT(!msg.empty(), "missing file: error message not empty");
@@ -4975,7 +4975,7 @@ void test_formula_call_errors() {
         write_fw("/tmp/fce2.fw", "fce_rect(area=?floor, width=w)\n"); // no height binding
         FormulaSystem sys;
         sys.load_file("/tmp/fce2.fw");
-        auto msg = get_error([&]() { sys.resolve("floor", {{"w", 4}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("floor", {{"w", 4}}); });
         ASSERT(!msg.empty(), "missing sub-binding: throws");
     }
 
@@ -5204,7 +5204,7 @@ void test_condition_solving() {
             "y = -1 if x <0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tcs5.fw");
-        auto msg = get_error([&]() { sys.resolve("y", {{"x", 0}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("y", {{"x", 0}}); });
         ASSERT(!msg.empty(), "x=0: no condition matches, throws");
     }
 
@@ -5291,7 +5291,7 @@ void test_condition_errors() {
         ASSERT(sys.equations[0].condition.has_value(), "OR condition: parsed");
         ASSERT_NUM(sys.resolve("y", {{"x", 20}}), 1, "OR condition: x=20 passes");
         ASSERT_NUM(sys.resolve("y", {{"x", -20}}), 1, "OR condition: x=-20 passes");
-        auto msg = get_error([&]() { sys.resolve("y", {{"x", 0}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("y", {{"x", 0}}); });
         ASSERT(!msg.empty(), "OR condition: x=0 fails");
     }
 }
@@ -5409,7 +5409,7 @@ void test_multiple_returns() {
         write_fw("/tmp/tmr_strict.fw", "y = x^2 + 2*x - 3\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tmr_strict.fw");
-        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 0}}); });
+        auto msg = get_error([&]() { (void)sys.resolve_one("x", {{"y", 0}}); });
         ASSERT(!msg.empty(), "resolve_one: multiple results throws");
         ASSERT(msg.find("Multiple") != std::string::npos, "resolve_one: says Multiple");
     }
@@ -5481,7 +5481,7 @@ void test_conditional_branching() {
         FormulaSystem sys;
         sys.load_file("/tmp/tcb_global.fw");
         ASSERT_NUM(sys.resolve("y", {{"x", 9}}), 3, "global + branch: sqrt works");
-        auto msg = get_error([&]() { sys.resolve("y", {{"x", -1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("y", {{"x", -1}}); });
         ASSERT(!msg.empty(), "global + branch: negative x fails");
     }
 
@@ -5522,7 +5522,7 @@ void test_recursion_depth_guard() {
         FormulaSystem sys;
         sys.max_formula_depth = 20;
         sys.load_file("/tmp/trdg_a2.fw");
-        auto msg = get_error([&]() { sys.resolve("result", {{"n", 5}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("result", {{"n", 5}}); });
         ASSERT(!msg.empty(), "mutual recursion: throws");
         ASSERT(msg.find("depth") != std::string::npos || msg.find("recursion") != std::string::npos,
             "mutual recursion: mentions depth/recursion");
@@ -5832,7 +5832,7 @@ void test_formula_call_additional() {
 
     // parse_cli_query without allow_no_queries: throws
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=5, y=10)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=5, y=10)"); });
         ASSERT(msg.find("No query") != std::string::npos, "no queries: throws");
     }
 
@@ -6673,7 +6673,7 @@ void test_derive_errors() {
         write_fw("/tmp/tde1.fw", "y = x + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tde1.fw");
-        auto msg = get_error([&]() { sys.derive("z", {}, {{"x", "x"}}); });
+        auto msg = get_error([&]() { (void)sys.derive("z", {}, {{"x", "x"}}); });
         ASSERT(msg.find("Cannot derive") != std::string::npos, "derive: unknown var throws");
     }
 }
@@ -6692,7 +6692,7 @@ void test_derive_cli_parsing() {
 
     // Without allow_symbolic, non-numeric throws
     {
-        auto msg = get_error([&]() { parse_cli_query("f(x=?, a=side)"); });
+        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, a=side)"); });
         ASSERT(msg.find("Invalid") != std::string::npos || msg.find("unresolved") != std::string::npos,
             "no symbolic: throws");
     }
@@ -7138,7 +7138,7 @@ void test_numeric_edge_cases() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tne_nope.fw");
-        auto msg = get_error([&]() { sys.resolve("x", {{"y", 1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("x", {{"y", 1}}); });
         ASSERT(!msg.empty(), "numeric: no roots in [10,20] for x^2=1");
     }
 
@@ -7172,7 +7172,7 @@ void test_numeric_edge_cases() {
         FormulaSystem sys;
         sys.numeric_mode = true;
         sys.load_file("/tmp/tne_strict.fw");
-        auto msg = get_error([&]() { sys.resolve_one("x", {{"y", 9}}); });
+        auto msg = get_error([&]() { (void)sys.resolve_one("x", {{"y", 9}}); });
         ASSERT(msg.find("Multiple") != std::string::npos,
             "numeric: ?! with x^2=9 → multiple solutions error");
     }
@@ -8161,7 +8161,7 @@ void test_sections() {
         FormulaSystem sys;
         sys.load_string("shared = 42\n[a]\ny = shared + x\n", "<test>", "");
         // Only top-level loaded — "y" should not be available
-        auto msg = get_error([&]() { sys.resolve("y", {{"x", 1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve("y", {{"x", 1}}); });
         ASSERT(!msg.empty(), "section: module-level only, subsystem eq not available");
     }
 
@@ -8634,7 +8634,7 @@ void test_iff_semantics() {
             "result = -1 if x < 0\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tiff4.fw");
-        auto msg = get_error([&]() { sys.resolve_all("x", {{"result", 1}}); });
+        auto msg = get_error([&]() { (void)sys.resolve_all("x", {{"result", 1}}); });
         ASSERT(!msg.empty(), "if: non-iff conditions don't produce range inverse");
     }
 

@@ -109,6 +109,15 @@ static_assert(sizeof(Checked<double>) == sizeof(double),
     return os.str();
 }
 
+// Generic separator-join over any range. Replaces the verbose `bool first`
+// flag pattern at multiple print sites (ValueSet::to_string, expr_to_string).
+template<class Range, class Sep, class Fn>
+[[nodiscard]] inline std::string join_with_sep(const Range& r, const Sep& sep, Fn fn) {
+    std::string s; bool first = true;
+    for (const auto& x : r) { if (!first) s += sep; s += fn(x); first = false; }
+    return s;
+}
+
 // ============================================================================
 //  ValueSet — unified representation for conditions, ranges, and solutions
 // ============================================================================
@@ -321,26 +330,13 @@ public:
         }
 
         if (!discrete_.empty()) {
-            std::string s = "{";
-            bool first = true;
-            for (double d : discrete_) {
-                if (!first) s += ", ";
-                s += fmt_num(d);
-                first = false;
-            }
-            s += "}";
+            std::string s = "{" + join_with_sep(discrete_, ", ",
+                [](double d) { return fmt_num(d); }) + "}";
             parts.push_back(s);
         }
 
         if (parts.size() == 1) return parts[0];
-        std::string result;
-        bool first = true;
-        for (const auto& p : parts) {
-            if (!first) result += " | ";
-            result += p;
-            first = false;
-        }
-        return result;
+        return join_with_sep(parts, " | ", [](const std::string& p) { return p; });
     }
 };
 
@@ -524,6 +520,11 @@ inline double eval_div(double l, double r) {
 }
 
 inline const BinOpInfo& binop_info(BinOp op) {
+    // C17-constexpr-eligible: requires constexpr BinOpInfo ctor (Future.md #58).
+    // The eval field is a plain function pointer (non-capturing lambdas decay
+    // cleanly), but BinOpInfo is an aggregate with no constexpr constructor —
+    // the brace-init list above is not a constant expression in C++17 because
+    // of the aggregate-init rules. C++20 fixes this with constexpr aggregate.
     static const BinOpInfo table[] = {
         {" + ", 1, [](double l, double r) { return l + r; }},   // ADD
         {" - ", 1, [](double l, double r) { return l - r; }},   // SUB
@@ -551,6 +552,7 @@ inline double sign_eval(double x) {
 }
 
 inline const std::map<std::string, double(*)(double)>& builtin_functions() {
+    // static const: std::map runtime-init, not constexpr-able in C++17
     static const std::map<std::string, double(*)(double)> registry = {
         {"sqrt", std::sqrt}, {"abs", std::fabs}, {"sin",  std::sin},
         {"cos",  std::cos},  {"tan", std::tan},  {"log",  std::log},
@@ -582,6 +584,7 @@ inline double(*lookup_function(const std::string& name))(double) {
 // ============================================================================
 
 inline const std::map<std::string, double>& builtin_constants() {
+    // static const: std::map runtime-init, not constexpr-able in C++17
     static const std::map<std::string, double> registry = {
         {"pi",  M_PI},
         {"e",   M_E},
@@ -824,22 +827,11 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                 if (!found) return false;
             }
 
-            // Collect remaining target factors into a product
+            // Collect remaining target factors as individual expressions.
+            // The wildcard branch (common case) consumes t_remaining directly;
+            // the no-wildcard early-exit only needs to know whether the
+            // collection is empty (formerly an unused product-ExprPtr build).
             double remaining_coeff = (std::abs(p.coeff) < EPSILON_ZERO) ? 0.0 : t.coeff / p.coeff;
-            ExprPtr remaining = nullptr;
-            // justified: dual-cursor (ti indexes t_used skip-mask)
-            for (size_t ti = 0; ti < t.factors.size(); ti++) {
-                if (t_used[ti]) continue;
-                auto& [t_base, t_exp] = t.factors[ti];
-                auto factor = (std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
-                    : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp));
-                remaining = remaining ? Expr::BinOpExpr(BinOp::MUL, remaining, factor) : factor;
-            }
-
-            if (p_wildcards.empty())
-                return !remaining && std::abs(remaining_coeff - 1.0) < EPSILON_ZERO;
-
-            // Collect remaining target factors as individual expressions
             std::vector<ExprPtr> t_remaining;
             // justified: dual-cursor (ti indexes t_used skip-mask)
             for (size_t ti = 0; ti < t.factors.size(); ti++) {
@@ -848,6 +840,9 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                 t_remaining.push_back((std::abs(t_exp - 1.0) < EPSILON_ZERO) ? t_base
                     : Expr::BinOpExpr(BinOp::POW, t_base, Expr::Num(t_exp)));
             }
+
+            if (p_wildcards.empty())
+                return t_remaining.empty() && std::abs(remaining_coeff - 1.0) < EPSILON_ZERO;
 
             // Try to assign remaining target factors to wildcards via backtracking
             // Unassigned wildcards get the numeric coefficient (or 1)
@@ -982,28 +977,22 @@ inline std::string expr_to_string(const Expr& e) {
                 : "-(" + expr_to_string(*e.child) + ")";
 
         case ExprType::BINOP: {
-            auto& info = binop_info(e.op);
-            int prec = info.precedence;
+            const auto& info = binop_info(e.op);
+            const int prec = info.precedence;
 
             auto wrap = [&](const Expr& child, bool rhs) {
-                int cp = precedence(child);
-                bool need = (cp < prec) ||
+                const int cp = precedence(child);
+                const bool need = (cp < prec) ||
                     (cp == prec && rhs && (e.op == BinOp::SUB || e.op == BinOp::DIV));
-                auto s = expr_to_string(child);
+                const auto s = expr_to_string(child);
                 return need ? "(" + s + ")" : s;
             };
             return wrap(*e.left, false) + info.symbol + wrap(*e.right, true);
         }
 
         case ExprType::FUNC_CALL: {
-            std::string s = e.name + "(";
-            bool first = true;
-            for (const auto* arg : e.args) {
-                if (!first) s += ", ";
-                s += expr_to_string(*arg);
-                first = false;
-            }
-            return s + ")";
+            return e.name + "(" + join_with_sep(e.args, ", ",
+                [](const Expr* arg) { return expr_to_string(*arg); }) + ")";
         }
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }

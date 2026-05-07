@@ -113,6 +113,7 @@ struct SolveBudgetExceededError : std::exception {
     struct Walker {
         std::map<std::string, int>& counts;
         std::map<std::string, ExprPtr>& reps;
+        // const: mutates through reference members (counts, reps), not the struct itself
         void operator()(ExprPtr e) const {
             if (!e) return;
             switch (e->type) {
@@ -563,6 +564,7 @@ public:
     [[nodiscard]] static std::vector<std::string> read_all_lines(std::istream& in) {
         std::vector<std::string> lines;
         std::string line;
+        // bool first: not separator-join shape — guards a one-shot BOM strip on the first line
         bool first = true;
         while (std::getline(in, line)) {
             if (first) { first = false; strip_bom(line); }
@@ -617,6 +619,7 @@ abs(x) / x = undefined iff x = 0
     // Built-in function definitions — loaded as sub-systems when called.
     // Each maps a function name to its .fw section content.
     static const std::map<std::string, std::string>& builtin_function_defs() {
+        // static const: std::map runtime-init, not constexpr-able in C++17
         static const std::map<std::string, std::string> defs = {
             {"sin",  "[sin(x) -> result] @extern sin; x = asin(result)"},
             {"cos",  "[cos(x) -> result] @extern cos; x = acos(result)"},
@@ -1097,7 +1100,13 @@ abs(x) / x = undefined iff x = 0
     // The stem is the FormulaSystem's source_label_ (file stem from load_file,
     // or the label argument from load_string). Called at format_derived time
     // (after enumerate_candidates has populated sub_systems).
-    [[nodiscard]] std::map<std::string, double> build_alias_table() const {
+    //
+    // Two entry points:
+    //   - populate_aliases_() — side-effect-only (writes the `aliases_` cache);
+    //     used by resolve/resolve_all and the explore-fast-path branch in main.
+    //   - build_alias_table() — pure query (returns a copy of the freshly
+    //     populated cache); used by format_derived and derive_all.
+    void populate_aliases_() const {
         auto& builtins = builtin_constants();
         // Raw (name, value, stem) tuples.
         struct Entry { double value; std::string stem; };
@@ -1119,8 +1128,8 @@ abs(x) / x = undefined iff x = 0
         std::map<std::string, double> out;
         for (auto& [name, entries] : grouped) {
             // All agree? → unqualified.
-            double first_val = entries.front().value;
-            bool all_agree = std::all_of(entries.begin(), entries.end(),
+            const double first_val = entries.front().value;
+            const bool all_agree = std::all_of(entries.begin(), entries.end(),
                 [first_val](const auto& e) { return approx_equal(e.value, first_val); });
             if (all_agree) {
                 out[name] = first_val;
@@ -1132,15 +1141,19 @@ abs(x) / x = undefined iff x = 0
             std::set<std::string> seen_qualified;
             for (const auto& e : entries) {
                 if (e.stem.empty()) continue;
-                std::string qname = e.stem + "." + name;
+                const std::string qname = e.stem + "." + name;
                 if (seen_qualified.insert(qname).second)
                     out[qname] = e.value;
             }
         }
         // Cache as a side effect so fmt_trace's alias-table fallback can read
         // without rebuilding (called from every resolve/resolve_all entry).
-        aliases_ = out;
-        return out;
+        aliases_ = std::move(out);
+    }
+
+    [[nodiscard]] std::map<std::string, double> build_alias_table() const {
+        populate_aliases_();
+        return aliases_;
     }
 
     // Format a derived ExprPtr as a string.
@@ -1675,7 +1688,7 @@ abs(x) / x = undefined iff x = 0
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
-        (void)build_alias_table(); // populates aliases_ for fmt_trace fallback
+        populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -1689,7 +1702,7 @@ abs(x) / x = undefined iff x = 0
         ExprArena::Scope scope(arena);
         BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
-        (void)build_alias_table(); // populates aliases_ for fmt_trace fallback
+        populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
         RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
         FuncInverterGuard fi_guard(make_func_inverter());
@@ -3108,9 +3121,10 @@ private:
                     probe_vars.push_back(eq.lhs_var);
             }
             // Also check: any variable in bindings that could be computed from target
-            for (auto& [bvar, bval] : bindings) {
+            for (const auto& binding : bindings) {
+                const std::string& bvar = binding.first;
                 if (bvar == target) continue;
-                bool found = std::any_of(probe_vars.begin(), probe_vars.end(),
+                const bool found = std::any_of(probe_vars.begin(), probe_vars.end(),
                     [&bvar](const std::string& pv) { return pv == bvar; });
                 if (!found) probe_vars.push_back(bvar);
             }

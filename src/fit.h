@@ -240,8 +240,14 @@ struct Fraction { int p, q; }; // numerator, denominator
 [[nodiscard]] inline std::optional<Fraction> recognize_fraction(double x,
         int max_den = 12, double tol = 1e-9) {
     if (!std::isfinite(x)) return std::nullopt;
+    constexpr double INT_MAX_D = static_cast<double>(std::numeric_limits<int>::max());
+    constexpr double INT_MIN_D = static_cast<double>(std::numeric_limits<int>::min());
     for (int q = 1; q <= max_den; q++) {
         double p_exact = x * q;
+        // Guard double-to-int conversion: out-of-range double-to-int is UB
+        // (clang -O2 surfaces it as a crash; gcc happens to clamp). Caller
+        // semantics are unchanged — huge |x| simply cannot be a small fraction.
+        if (p_exact > INT_MAX_D || p_exact < INT_MIN_D) continue;
         int p = static_cast<int>(std::round(p_exact));
         if (std::abs(p_exact - p) < tol * q)
             return Fraction{p, q};
@@ -259,6 +265,7 @@ struct ConstantForm {
 // alongside builtins (pi/e/phi) and any caller-supplied extras. File-scope
 // static so the table is built once at program start, not per call.
 [[nodiscard]] inline const std::array<std::pair<const char*, double>, 6>& sqrt_log_constants() {
+    // static const: std::sqrt/std::log not constexpr in C++17
     static const std::array<std::pair<const char*, double>, 6> t = {{
         {"sqrt(2)", std::sqrt(2.0)}, {"sqrt(3)", std::sqrt(3.0)}, {"sqrt(5)", std::sqrt(5.0)},
         {"log(2)", std::log(2.0)},  {"log(3)", std::log(3.0)},  {"log(10)", std::log(10.0)},
@@ -274,6 +281,7 @@ struct ConstantForm {
 // the first hit, and downstream fingerprint dedup relies on the historical
 // alphabetical order (e < log(*) < phi < pi < sqrt(*)).
 [[nodiscard]] inline const std::map<std::string, double>& base_recognition_constants() {
+    // static const: std::map runtime-init via lambda, not constexpr-able in C++17
     static const std::map<std::string, double> t = []() {
         std::map<std::string, double> m = builtin_constants();
         for (const auto& [k, v] : sqrt_log_constants()) m[k] = v;
@@ -294,7 +302,7 @@ struct ConstantForm {
     if (recognize_fraction(x, RECOGNIZE_FRACTION_MAX_DEN, tol)) return std::nullopt;
 
     // Try a (name, val) pair at powers {1, 2, -1}; return on first match.
-    static const int powers[] = {1, 2, -1};
+    static constexpr int powers[] = {1, 2, -1};
     auto try_constant = [&](const std::string& name, double val) -> std::optional<ConstantForm> {
         for (int pw : powers) {
             double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
@@ -889,6 +897,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
 
         // Also try builtins as outer wrappers: builtin(inner(x))
         struct OuterBuiltin { std::string name; std::function<double(double)> fn; };  // std::function: stored heterogeneously in std::vector<OuterBuiltin> with different lambda types per row
+        // static const: std::vector runtime-init with lambda fn ptrs, not constexpr-able in C++17
         static const std::vector<OuterBuiltin> outer_builtins = {
             {"sin",  [](double v) { return std::sin(v); }},
             {"cos",  [](double v) { return std::cos(v); }},

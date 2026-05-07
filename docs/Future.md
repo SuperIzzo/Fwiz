@@ -673,3 +673,21 @@ The T2+T3 M1 fix drops parse-failed rewrite rules at load time with a stderr war
 - **--derive**: output conditions alongside derived equations
 - **--explore**: show which conditions are satisfiable with given inputs
 - **Cross-file calls**: conditions in sub-systems are checked when resolving through formula calls
+
+## 58. `BinOpInfo` constexpr constructor (C2 carry-over)
+
+`static const BinOpInfo table[]` in `expr.h` cannot become `static constexpr` because `BinOpInfo` stores lambda function pointers, which are not constexpr-constructible in C++17. The array is annotated `// static const: runtime-init lambda fn ptrs, not constexpr-able in C++17`. A constexpr constructor becomes feasible in C++20 (where `consteval` / `constinit` and designated initializers give better compile-time init stories for struct literals with function members). Shipping this conversion requires either a C++20 toolchain upgrade or demonstrated hot-path benefit from a `constinit` variant.
+
+**Reopen trigger:** C++20 upgrade decision, OR a perf-auditor run (`make analyze-full` + disassembly) identifies `BinOpInfo` table initialization as a measurable startup cost.
+
+## 60. Promote `make test-clang` to per-cycle gate
+
+`make test-clang` (added in Cycle 7) is currently an optional cross-compiler sanity check — not part of the required `make test && make sanitize && make analyze-fast` gate. The cycle validated the target's value on first run (surfaced a latent UB in `recognize_fraction` that GCC -O2 masked). Promoting it to the per-cycle gate requires: (1) confirming `clang++` is available on all dev machines that close cycles, (2) updating CLAUDE.md's "Quality bar" line, and (3) updating the orchestrator's per-cycle gate protocol in `.claude/agents/fwiz-orchestrator-protocols.md`.
+
+**Reopen trigger:** any clang-only warning or codegen divergence surfaces after a future cycle — i.e. the target has found a real issue in a cycle where it was optional.
+
+## 59. Periodic C1 follow-up (`misc-const-correctness`)
+
+Cycle 6's `const`-locals sweep was intentionally conservative: only functions touched in Cycle 6's steps were audited manually. The full codebase enumeration is owned by clang-tidy's `misc-const-correctness` check (enabled in `analyze-full`). When the user runs `make analyze-full`, accept all `misc-const-correctness` findings on touched files. No dedicated cycle needed — fold into the batch review pass.
+
+**Reopen trigger:** `make analyze-full` surfaces any `misc-const-correctness` finding on a file not already swept.

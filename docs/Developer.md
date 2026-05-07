@@ -239,7 +239,7 @@ Conditions are checked before solving (if vars known) and after (to validate). G
 
 `mutable bool approximate_mode` on `FormulaSystem` (mirrors `--approximate` CLI flag). `format_derived` reads it: exact path uses `fmt_exact_double` (fit.h) on collapsed-numeric branches; approximate path runs `substitute_builtin_constants` (expr.h) — a tree walk replacing `pi`/`e`/`phi` Var nodes with their Num values — then re-simplifies so adjacent numerics fold.
 
-`std::string source_label_` on `FormulaSystem` — set to the file stem on `load_file` and to the explicit label on `load_string`. `build_alias_table()` walks `this->defaults` and each sub-system's `defaults`, groups constants by name, emits them unqualified when all files agree on the value (within `EPSILON_REL`), and emits `stem.name` qualified forms when the same name carries different values across files. Built-in constants (`pi`, `e`, `phi`) are never entered into the user alias table. `fmt_solve_result` (main.cpp) and `format_derived` (system.h) both thread the table into `fmt_exact_double`.
+`std::string source_label_` on `FormulaSystem` — set to the file stem on `load_file` and to the explicit label on `load_string`. Two entry points for alias resolution: `populate_aliases_()` (side-effect mutator, `void` return — called at `resolve()` / `resolve_all()` entry and from `main.cpp` to prime the table before output) writes the computed map into `aliases_`; `build_alias_table()` (pure query, `[[nodiscard]] std::map<string,double>` return — called by `format_derived` / `derive_all` when the table is needed as a value) calls `populate_aliases_()` then returns a copy. Both walk `this->defaults` and each sub-system's `defaults`, group constants by name, emit them unqualified when all files agree on the value (within `EPSILON_REL`), and emit `stem.name` qualified forms when the same name carries different values across files. Built-in constants (`pi`, `e`, `phi`) are never entered into the user alias table. `fmt_solve_result` (main.cpp) and `format_derived` (system.h) both thread the table into `fmt_exact_double`. Side-effect-only call sites use `populate_aliases_()` directly rather than `(void)build_alias_table()` — the trailing underscore convention marks it as an internal mutator.
 
 `derive_all` dedup pipeline — after collecting raw candidates, a streaming `std::map<fp_key, {score, ExprPtr}> winners` retains at most one candidate per semantic fingerprint. Two semantic primitives in `expr.h` drive this:
 
@@ -274,7 +274,7 @@ Curve fitting: `sample_function`, `fit_base`, `fit_all`, template functions, `re
 
 - **`mutable std::map<std::string, ExprPtr> solved_symbolic_`** — stores the recognized symbolic ExprPtr for each bound variable. Written at T10 (`try_resolve`, `src/system.h`) when a result is committed: `expr_recognize_constants(simplified, aliases_)` is applied once to the solver's `simplified` ExprPtr and the result is stored here. Also populated from the sub-system bridge at T7 (cross-formula results). Cleared at the top of `resolve()` and `resolve_all()` to reset per-query, matching the per-query lifecycle of the numeric `bindings` parameter.
 
-- **`mutable std::map<std::string, double> aliases_`** — the universal alias-resolution table, populated as a side effect of `build_alias_table()`. Read by `fmt_trace` and `fmt_exact_double` to resolve user-defined constants (e.g. `deg`) by name. Named `aliases_` rather than `display_aliases_` to signal its role as a general primitive, not a display-only concern.
+- **`mutable std::map<std::string, double> aliases_`** — the universal alias-resolution table, populated as a side effect of `populate_aliases_()` (and therefore also by `build_alias_table()`, which calls it). Read by `fmt_trace` and `fmt_exact_double` to resolve user-defined constants (e.g. `deg`) by name. Named `aliases_` rather than `display_aliases_` to signal its role as a general primitive, not a display-only concern.
 
 **Invariant:** for any successfully solved variable `k`, `bindings[k]` (the numeric result) and `solved_symbolic_[k]` (the symbolic form) are written together at T10. Both are cleared together at the start of each `resolve()` call.
 
@@ -497,6 +497,7 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 
 - **`constexpr`** — type predicates (`is_num`, `is_zero`, etc.), enum queries (`is_additive`), compile-time constants
 - **`inline`** — everything else in headers (required for ODR in header-only code)
+- **`static constexpr`** — all compile-time-constant statics. Runtime `static const` (lambdas, `std::map`, `std::sqrt` initializers — none constexpr-able in C++17) carry a one-line `// static const: <reason>` comment on the line immediately above the declaration. Lock: `grep -nE 'static const ' src/*.h | grep -v '// static const:'` must return 0 lines.
 - Prefer function pointers over `std::function` to avoid heap allocation
 
 ### STL algorithms
@@ -504,6 +505,8 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 Prefer `<algorithm>` over hand-rolled loops where the algorithm form is at least as clear: `std::any_of`, `std::all_of`, `std::none_of`, `std::find_if`, `std::count_if`, `std::transform`, `std::accumulate`, `std::copy_if`, `std::replace_if`. The cppcheck `useStlAlgorithm` check (un-suppressed in `make analyze-fast` since Cycle 4) enforces this automatically — any new raw loop that a standard algorithm can express will be caught at the per-cycle gate.
 
 Keep manual loops when: the body has multiple side effects (assigns two captured outputs and breaks, emits a trace step, or early-returns from the enclosing function); when a readable algorithm form requires obscure lambda gymnastics (e.g. `std::move_iterator + back_inserter` for move-append into a different container); or when the loop is a numerical inner loop in `fit.h` where the arithmetic structure matters for readability and performance. When keeping a manual loop in a header file that cppcheck would otherwise flag, annotate inline with `// not std::algorithm: <reason>` immediately above the loop body's first statement, followed by `// cppcheck-suppress useStlAlgorithm` on the same position (cppcheck reports the warning at the body line, not the `for` line).
+
+For separator-join formatting, prefer the `join_with_sep(range, sep, fn)` helper in `expr.h` over ad-hoc `bool first` flag patterns. `bool first` flags that guard a one-shot action (e.g., BOM strip on the first line) are NOT separator-join shapes and should stay as-is with a `// bool first: not separator-join shape — <reason>` annotation.
 
 ### `std::function` policy
 
@@ -563,6 +566,7 @@ Prefer data tables and registries over switch statements and if-else chains:
 - **Semantic tests for output flexibility** — when simplifier output order may vary, test by evaluating with specific values rather than string comparison
 - **Accept either ordering** for commutative operations: `ASSERT(r == "x * y" || r == "y * x", ...)`
 - **Per-cycle gate** before committing: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). `make analyze-full` (clang-tidy — ~1-2h) is a user-triggered idle-batch task; the orchestrator tracks debt and surfaces it in `next-priorities.md`. `make analyze` runs both tiers.
+- **Optional cross-compiler sanity** — `make test-clang` rebuilds and runs the test suite under `clang++` with the same warning flag set as the GCC build. Catches Clang-specific issues (stricter `[[nodiscard]]` handling, C++20 extension warnings, divergent codegen on undefined behavior). Soft-skips if `clang++` is not on PATH; not part of the per-cycle gate.
 - **cppcheck inline suppressions** require the `--inline-suppr` flag, which is included in the Makefile's `analyze-fast` target. A `// cppcheck-suppress <id>` comment has no effect unless the tool is invoked with `--inline-suppr`.
 
 ### Test organization

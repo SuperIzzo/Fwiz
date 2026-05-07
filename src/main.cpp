@@ -257,11 +257,10 @@ int main(int argc, const char* argv[]) {
         ExprArena::Scope solve_fmt_scope(sys.arena);
 
         // User-defined aliases surface in exact-mode solve output. Populated
-        // by `build_alias_table()` (called from resolve()/resolve_all()
-        // entry points and explicitly here for the explore-fast-path branch
-        // where a queried var is already in `solved` and skips resolve()).
-        // Discard return: caller wants only the side-effect aliases_ cache.
-        (void)sys.build_alias_table();
+        // by `populate_aliases_()` (called from resolve()/resolve_all() entry
+        // points and explicitly here for the explore-fast-path branch where a
+        // queried var is already in `solved` and skips resolve()).
+        sys.populate_aliases_();
 
         if (explore) {
             std::vector<std::pair<std::string, std::string>> vars;
