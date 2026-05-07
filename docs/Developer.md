@@ -489,6 +489,12 @@ Expression nodes are allocated from an **arena allocator** (`ExprArena`), not in
 - **`ExprPtr` (`Expr*`)** — for return types, struct fields, and functions that may return or accept nullptr (substitute, simplify, solve_for).
 - **Pointer overloads** — thin null-checking wrappers that dereference and delegate to the reference version.
 
+### Const correctness
+
+Local variables that are never mutated after construction must be declared `const`. This is enforced by the `misc-const-correctness` clang-tidy check (baseline zero as of Cycle 7.5, 2026-05-07; 245 findings were fixed in that cycle). New code that introduces a non-const local the checker would flag will surface at the next `make analyze-full` run.
+
+**Const placement: prefer west-const** (`const T name`, `const auto& x`) for consistency with codebase convention. The codebase is 100% west-const; avoid east-const (`T const name`). When `clang-tidy --fix` is applied (it defaults to east-const), normalize the output to west-const before committing.
+
 ### Pointer const deduction
 
 `const auto` on a pointer deduces `T* const` (pointer itself is const, pointee is mutable) — cppcheck's `constVariablePointer` check still fires. The correct idiom is `const auto* sol = fn(...)`, which deduces `const T*` (pointee const). Empirically verified: `const auto` does NOT silence `constVariablePointer`. Use `const auto*` at every local pointer declaration site where the pointee is not mutated.

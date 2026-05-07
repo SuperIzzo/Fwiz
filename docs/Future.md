@@ -686,8 +686,6 @@ The T2+T3 M1 fix drops parse-failed rewrite rules at load time with a stderr war
 
 **Reopen trigger:** any clang-only warning or codegen divergence surfaces after a future cycle — i.e. the target has found a real issue in a cycle where it was optional.
 
-## 59. Periodic C1 follow-up (`misc-const-correctness`)
+## 59. Periodic C1 follow-up (`misc-const-correctness`) — RESOLVED 2026-05-07
 
-Cycle 6's `const`-locals sweep was intentionally conservative: only functions touched in Cycle 6's steps were audited manually. The full codebase enumeration is owned by clang-tidy's `misc-const-correctness` check (enabled in `analyze-full`). When the user runs `make analyze-full`, accept all `misc-const-correctness` findings on touched files. No dedicated cycle needed — fold into the batch review pass.
-
-**Reopen trigger:** `make analyze-full` surfaces any `misc-const-correctness` finding on a file not already swept.
+Cycle 7.5 drove the `misc-const-correctness` + `modernize-use-nodiscard` baseline to 0 via a one-shot `clang-tidy --fix` pass over the full codebase (245 findings fixed; 7 files, +251/-245 LOC). Local-variable `const` is now enforced by clang-tidy rather than being aspirational. Future `make analyze-full` runs start from a clean baseline; any new findings will surface incrementally at the next batch run.

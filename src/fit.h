@@ -46,13 +46,13 @@ template<class F>
     // NOLINTNEXTLINE(bugprone-random-generator-seed)
     std::mt19937_64 rng(NUMERIC_SEED);
     std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
-    double step = (hi - lo) / n_points;
+    const double step = (hi - lo) / n_points;
 
     for (int i = 0; i <= n_points; i++) {
         double x = lo + i * step;
         if (i > 0 && i < n_points)
             x += jitter(rng) * step;
-        double y = f(x);
+        const double y = f(x);
         if (std::isfinite(y)) samples.push_back({x, y});
     }
     return samples;
@@ -83,8 +83,8 @@ using FitMatrix = std::vector<std::vector<double>>;
 // Uses Gaussian elimination with partial pivoting on the normal equations.
 // Stable enough for Vandermonde systems up to degree ~10.
 [[nodiscard]] inline std::vector<double> least_squares_solve(const FitMatrix& A, const std::vector<double>& b) {
-    int m = static_cast<int>(A.size());
-    int n = static_cast<int>(A[0].size());
+    const int m = static_cast<int>(A.size());
+    const int n = static_cast<int>(A[0].size());
     assert(m >= n);
     assert(static_cast<int>(b.size()) == m);
 
@@ -114,7 +114,7 @@ using FitMatrix = std::vector<std::vector<double>>;
 
         // Eliminate below
         for (int row = col + 1; row < n; row++) {
-            double factor = AtA[row][col] / AtA[col][col];
+            const double factor = AtA[row][col] / AtA[col][col];
             for (int j = col; j < n; j++)
                 AtA[row][j] -= factor * AtA[col][j];
             Atb[row] -= factor * Atb[col];
@@ -148,7 +148,7 @@ struct FitResult {
 // Evaluate polynomial at x
 [[nodiscard]] inline double poly_eval(const std::vector<double>& c, double x) {
     double result = 0, xp = 1.0;
-    for (double ci : c) {
+    for (const double ci : c) {
         result += ci * xp;
         xp *= x;
     }
@@ -167,9 +167,9 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
     // not std::accumulate: 3-stat accumulator (ss_res, ss_tot, max_error) with early-exit on non-finite predict
     // cppcheck-suppress useStlAlgorithm
     for (const auto& s : samples) {
-        double predicted = predict(s.x);
+        const double predicted = predict(s.x);
         if (!std::isfinite(predicted)) { result.r_squared = -1; return; }
-        double residual = s.y - predicted;
+        const double residual = s.y - predicted;
         ss_res += residual * residual;
         ss_tot += (s.y - y_mean) * (s.y - y_mean);
         result.max_error = std::max(result.max_error, std::abs(residual));
@@ -180,7 +180,7 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
 
 // Snap coefficient to nearest integer if within tolerance
 [[nodiscard]] inline double snap_coeff(double c) {
-    double r = std::round(c);
+    const double r = std::round(c);
     return std::abs(c - r) < FIT_COEFF_SNAP_TOL ? r : c;
 }
 
@@ -243,12 +243,12 @@ struct Fraction { int p, q; }; // numerator, denominator
     constexpr double INT_MAX_D = static_cast<double>(std::numeric_limits<int>::max());
     constexpr double INT_MIN_D = static_cast<double>(std::numeric_limits<int>::min());
     for (int q = 1; q <= max_den; q++) {
-        double p_exact = x * q;
+        const double p_exact = x * q;
         // Guard double-to-int conversion: out-of-range double-to-int is UB
         // (clang -O2 surfaces it as a crash; gcc happens to clamp). Caller
         // semantics are unchanged — huge |x| simply cannot be a small fraction.
         if (p_exact > INT_MAX_D || p_exact < INT_MIN_D) continue;
-        int p = static_cast<int>(std::round(p_exact));
+        const int p = static_cast<int>(std::round(p_exact));
         if (std::abs(p_exact - p) < tol * q)
             return Fraction{p, q};
     }
@@ -304,9 +304,9 @@ struct ConstantForm {
     // Try a (name, val) pair at powers {1, 2, -1}; return on first match.
     static constexpr int powers[] = {1, 2, -1};
     auto try_constant = [&](const std::string& name, double val) -> std::optional<ConstantForm> {
-        for (int pw : powers) {
-            double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
-            double quotient = x / cv;
+        for (const int pw : powers) {
+            const double cv = (pw == 1) ? val : (pw == 2) ? val * val : 1.0 / val;
+            const double quotient = x / cv;
             auto frac = recognize_fraction(quotient, RECOGNIZE_FRACTION_MAX_DEN, tol);
             if (frac) return ConstantForm{frac->p, frac->q, name, pw};
         }
@@ -342,8 +342,8 @@ struct ConstantForm {
     auto paren = cf.constant.find('(');
     if (paren != std::string::npos && cf.constant.back() == ')') {
         // Parse "func(N)" → Expr::Call("func", {Expr::Num(N)})
-        std::string func = cf.constant.substr(0, paren);
-        double n = std::stod(cf.constant.substr(paren + 1, cf.constant.size() - paren - 2));
+        const std::string func = cf.constant.substr(0, paren);
+        const double n = std::stod(cf.constant.substr(paren + 1, cf.constant.size() - paren - 2));
         cexpr = Expr::Call(func, {Expr::Num(n)});
     } else {
         cexpr = Expr::Var(cf.constant);
@@ -424,7 +424,7 @@ struct ConstantForm {
 [[nodiscard]] inline ExprPtr coeff_to_expr(double c,
         const std::map<std::string, double>& extra_constants = {}) {
     // Try integer snap
-    double snapped = snap_coeff(c);
+    const double snapped = snap_coeff(c);
     if (snapped == std::round(snapped) && std::abs(snapped) < 1e15)
         return Expr::Num(snapped);
 
@@ -458,7 +458,7 @@ struct ConstantForm {
                 x_part = Expr::BinOpExpr(BinOp::POW, Expr::Var(var), Expr::Num(static_cast<double>(i)));
             }
 
-            double c = snap_coeff(coeffs[i]);
+            const double c = snap_coeff(coeffs[i]);
             if (c == 1.0) {
                 term = x_part;
             } else if (c == -1.0) {
@@ -508,7 +508,8 @@ struct ConstantForm {
     std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
         [](const FitSample& s) { return s.y; });
     auto coeffs = least_squares_solve(A, b);
-    double a = std::exp(coeffs[0]), power = coeffs[1];
+    const double a = std::exp(coeffs[0]);
+    const double power = coeffs[1];
 
     result.coefficients = {a, power};
     compute_fit_stats(result, samples, [a, power](double x) {
@@ -544,7 +545,8 @@ struct ConstantForm {
         std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
         [](const FitSample& s) { return s.y; });
         auto coeffs = least_squares_solve(A, b);
-        double a = std::exp(coeffs[0]), rate = coeffs[1];
+        const double a = std::exp(coeffs[0]);
+        const double rate = coeffs[1];
 
         FitResult result;
         result.degree = -1;
@@ -571,8 +573,10 @@ struct ConstantForm {
         std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
         [](const FitSample& s) { return s.y; });
         auto coeffs = least_squares_solve(A, b);
-        double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2];
-        double a = std::exp(c0);
+        const double c0 = coeffs[0];
+        const double c1 = coeffs[1];
+        const double c2 = coeffs[2];
+        const double a = std::exp(c0);
 
         FitResult result;
         result.degree = -1;
@@ -625,7 +629,8 @@ struct ConstantForm {
     std::transform(log_samples.begin(), log_samples.end(), std::back_inserter(b),
         [](const FitSample& s) { return s.y; });
     auto coeffs = least_squares_solve(A, b);
-    double intercept = coeffs[0], slope = coeffs[1];
+    const double intercept = coeffs[0];
+    const double slope = coeffs[1];
 
     result.coefficients = {intercept, slope};
     compute_fit_stats(result, samples, [intercept, slope](double x) {
@@ -662,25 +667,25 @@ struct ConstantForm {
         if ((samples[i-1].y - y_mean) * (samples[i].y - y_mean) < 0)
             zero_crossings++;
 
-    double x_range = samples.back().x - samples[0].x;
+    const double x_range = samples.back().x - samples[0].x;
     if (x_range < 1e-15 || zero_crossings < 2) return result;
-    double freq = M_PI * zero_crossings / x_range;
+    const double freq = M_PI * zero_crossings / x_range;
 
     // Linear regression: y = A*sin(freq*x) + B*cos(freq*x) + D
     FitMatrix A(samples.size(), std::vector<double>(3));
     std::vector<double> b;
     // justified: matrix-row index `A[i][...]` paired with samples[i]
     for (size_t i = 0; i < samples.size(); i++) {
-        double wx = freq * samples[i].x;
+        const double wx = freq * samples[i].x;
         A[i][0] = std::sin(wx);
         A[i][1] = std::cos(wx);
         A[i][2] = 1.0;
         b.push_back(samples[i].y);
     }
     auto coeffs = least_squares_solve(A, b);
-    double amplitude = std::sqrt(coeffs[0]*coeffs[0] + coeffs[1]*coeffs[1]);
-    double phase = std::atan2(coeffs[1], coeffs[0]);
-    double offset = coeffs[2];
+    const double amplitude = std::sqrt(coeffs[0]*coeffs[0] + coeffs[1]*coeffs[1]);
+    const double phase = std::atan2(coeffs[1], coeffs[0]);
+    const double offset = coeffs[2];
 
     result.coefficients = {amplitude, freq, phase, offset};
     compute_fit_stats(result, samples, [amplitude, freq, phase, offset](double x) {
@@ -715,7 +720,7 @@ struct ConstantForm {
 
     // Try different offsets c by estimating from the asymptotic value
     // As x → ∞, y → c. Use the last few samples to estimate c.
-    int tail = std::min(5, static_cast<int>(samples.size()));
+    const int tail = std::min(5, static_cast<int>(samples.size()));
     double c_est = std::accumulate(samples.end() - tail, samples.end(), 0.0,
         [](double acc, const FitSample& s) { return acc + s.y; });
     c_est /= tail;
@@ -725,11 +730,11 @@ struct ConstantForm {
     double best_r2 = -1;
     double best_a = 0, best_b = 0, best_c = 0;
 
-    for (double c_try : {c_est, 0.0}) {
+    for (const double c_try : {c_est, 0.0}) {
         std::vector<FitSample> inv_samples;
         inv_samples.reserve(samples.size());
         for (auto& s : samples) {
-            double ym = s.y - c_try;
+            const double ym = s.y - c_try;
             if (std::abs(ym) < 1e-15) continue;
             inv_samples.push_back({s.x, 1.0 / ym});
         }
@@ -744,8 +749,8 @@ struct ConstantForm {
         // 1/(y-c) = coeffs[0] + coeffs[1]*x = (x + coeffs[0]/coeffs[1]) / (1/coeffs[1])
         // So a = 1/coeffs[1], b = coeffs[0]/coeffs[1]
         if (std::abs(coeffs[1]) < 1e-15) continue;
-        double a = 1.0 / coeffs[1];
-        double b = coeffs[0] / coeffs[1];
+        const double a = 1.0 / coeffs[1];
+        const double b = coeffs[0] / coeffs[1];
 
         // Compute R²
         double y_mean = std::accumulate(samples.begin(), samples.end(), 0.0,
@@ -753,14 +758,14 @@ struct ConstantForm {
         y_mean /= static_cast<double>(samples.size());
         double ss_res = 0, ss_tot = 0, max_err = 0;
         for (const auto& s : samples) {
-            double predicted = a / (s.x + b) + c_try;
+            const double predicted = a / (s.x + b) + c_try;
             if (!std::isfinite(predicted)) { ss_res = 1e30; break; }
-            double residual = s.y - predicted;
+            const double residual = s.y - predicted;
             ss_res += residual * residual;
             ss_tot += (s.y - y_mean) * (s.y - y_mean);
             max_err = std::max(max_err, std::abs(residual));
         }
-        double r2 = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
+        const double r2 = (ss_tot < 1e-30) ? 1.0 : (1.0 - ss_res / ss_tot);
         if (r2 > best_r2) {
             best_r2 = r2;
             best_a = a; best_b = b; best_c = c_try;
@@ -801,7 +806,7 @@ constexpr int FIT_DEFAULT_DEPTH = 5;
     std::set<std::string> seen;
     for (const auto& f : fits) {
         if (!f.expr) continue;
-        std::string s = expr_to_string(f.expr);
+        const std::string s = expr_to_string(f.expr);
         if (!seen.insert(s).second) continue;
 
         // Skip redundant abs() wrapping: unwrap all abs() layers and check
@@ -869,7 +874,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
 
         std::vector<FitSample> transformed;
         for (auto& s : samples) {
-            double ix = eval_inner(s.x);
+            const double ix = eval_inner(s.x);
             if (std::isfinite(ix)) transformed.push_back({ix, s.y});
         }
         if (transformed.size() < 5) continue;
@@ -881,14 +886,14 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
             ExprPtr composed = substitute(of.expr, "__inner__", inner.expr);
             composed = simplify(composed);
 
-            std::string cstr = expr_to_string(composed);
+            const std::string cstr = expr_to_string(composed);
             if (!seen.insert(cstr).second) continue;
 
             FitResult cr;
             cr.degree = -1;
             cr.expr = composed;
             compute_fit_stats(cr, samples, [&eval_inner, &of](double x) {
-                double ix = eval_inner(x);
+                const double ix = eval_inner(x);
                 if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
                 return evaluate(*substitute(of.expr, "__inner__", Expr::Num(ix))).value_or_nan();
             });
@@ -903,7 +908,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
             {"cos",  [](double v) { return std::cos(v); }},
             {"sqrt", [](double v) { return v > 0 ? std::sqrt(v) : std::numeric_limits<double>::quiet_NaN(); }},
             {"log",  [](double v) { return v > 0 ? std::log(v) : std::numeric_limits<double>::quiet_NaN(); }},
-            {"exp",  [](double v) { double r = std::exp(v); return std::isfinite(r) ? r : std::numeric_limits<double>::quiet_NaN(); }},
+            {"exp",  [](double v) { const double r = std::exp(v); return std::isfinite(r) ? r : std::numeric_limits<double>::quiet_NaN(); }},
         };
         for (auto& ob : outer_builtins) {
             ExprPtr composed;
@@ -911,14 +916,14 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
                 composed = Expr::BinOpExpr(BinOp::POW, Expr::Var("e"), inner.expr);
             else
                 composed = Expr::Call(ob.name, {inner.expr});
-            std::string cstr = expr_to_string(composed);
+            const std::string cstr = expr_to_string(composed);
             if (!seen.insert(cstr).second) continue;
 
             FitResult cr;
             cr.degree = -1;
             cr.expr = composed;
             compute_fit_stats(cr, samples, [&eval_inner, &ob](double x) {
-                double ix = eval_inner(x);
+                const double ix = eval_inner(x);
                 if (!std::isfinite(ix)) return std::numeric_limits<double>::quiet_NaN();
                 return ob.fn(ix);
             });
@@ -973,7 +978,7 @@ constexpr int FIT_MAX_INNERS_PER_LEVEL = 10;
 
     // Iterate composition levels
     for (int lvl = 2; lvl <= depth; lvl++) {
-        double best_so_far = std::accumulate(fits.begin(), fits.end(), 0.0,
+        const double best_so_far = std::accumulate(fits.begin(), fits.end(), 0.0,
             [](double acc, const FitResult& f) { return std::max(acc, f.r_squared); });
 
         auto new_fits = compose_level(samples, level_inners, var,

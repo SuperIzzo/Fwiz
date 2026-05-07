@@ -21,7 +21,7 @@
 // ============================================================================
 
 [[nodiscard]] inline std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
+    const size_t a = s.find_first_not_of(" \t\r\n");
     if (a == std::string::npos) return "";
     return s.substr(a, s.find_last_not_of(" \t\r\n") - a + 1);
 }
@@ -66,7 +66,7 @@ using DeadEndSet = std::set<std::pair<std::string, std::set<std::string>>>;
 // `catch (const std::runtime_error&)` sites in the solver don't swallow it —
 // a budget breach must propagate to the top-level caller to signal the bug.
 struct SolveBudgetExceededError : std::exception {
-    const char* what() const noexcept override { return "TIMEOUT: solve budget exceeded"; }
+    [[nodiscard]] const char* what() const noexcept override { return "TIMEOUT: solve budget exceeded"; }
 };
 
 // ============================================================================
@@ -142,7 +142,7 @@ struct SolveBudgetExceededError : std::exception {
             if (inserted) reps.emplace(key, e);
         }
     };
-    Walker walker{counts, reps};
+    const Walker walker{counts, reps};
     for (auto& e : exprs) walker(e);
 
     // Pre-compute node counts (full tree size) and leaf counts (token count)
@@ -212,8 +212,8 @@ struct SolveBudgetExceededError : std::exception {
     for (auto& [key, count] : counts) {
         if (count < 2) continue;
         auto rep = reps[key];
-        int leaves = leaf_count(rep);
-        int value = (count - 1) * (leaves - 1);
+        const int leaves = leaf_count(rep);
+        const int value = (count - 1) * (leaves - 1);
         if (value <= 0) continue;  // 1-leaf subtree saves nothing
         candidates.push_back({key, rep, count, leaves, value});
     }
@@ -223,8 +223,8 @@ struct SolveBudgetExceededError : std::exception {
     std::sort(candidates.begin(), candidates.end(),
               [&](const Cand& a, const Cand& b) {
                   if (a.value != b.value) return a.value > b.value;
-                  int na = node_count(a.expr);
-                  int nb = node_count(b.expr);
+                  const int na = node_count(a.expr);
+                  const int nb = node_count(b.expr);
                   if (na != nb) return na < nb;
                   return a.key < b.key;
               });
@@ -234,8 +234,8 @@ struct SolveBudgetExceededError : std::exception {
     // so dependent helpers see their deps already named (D8 invariant).
     std::sort(candidates.begin(), candidates.end(),
               [&](const Cand& a, const Cand& b) {
-                  int na = node_count(a.expr);
-                  int nb = node_count(b.expr);
+                  const int na = node_count(a.expr);
+                  const int nb = node_count(b.expr);
                   if (na != nb) return na < nb;
                   return a.key < b.key;
               });
@@ -406,7 +406,7 @@ public:
         if (lparen != std::string::npos) {
             auto rparen = inner.find(')', lparen);
             if (rparen != std::string::npos) {
-                std::string args_str = inner.substr(lparen + 1, rparen - lparen - 1);
+                const std::string args_str = inner.substr(lparen + 1, rparen - lparen - 1);
                 // Split by comma
                 std::istringstream ss(args_str);
                 std::string arg;
@@ -453,8 +453,8 @@ public:
             // Annotation: @name value
             if (!trimmed.empty() && trimmed[0] == '@') {
                 auto space = trimmed.find(' ');
-                std::string tag = trimmed.substr(1, space == std::string::npos ? std::string::npos : space - 1);
-                std::string val = (space != std::string::npos) ? trim(trimmed.substr(space + 1)) : "";
+                const std::string tag = trimmed.substr(1, space == std::string::npos ? std::string::npos : space - 1);
+                const std::string val = (space != std::string::npos) ? trim(trimmed.substr(space + 1)) : "";
                 if (tag == "extern") result.back().extern_func = val;
                 // Future annotations handled here
                 continue; // don't add to lines
@@ -571,7 +571,7 @@ public:
             // Split on semicolons (as line separator)
             size_t pos = 0;
             while (pos < line.size()) {
-                size_t semi = line.find(';', pos);
+                const size_t semi = line.find(';', pos);
                 if (semi == std::string::npos) {
                     lines.push_back(line.substr(pos));
                     break;
@@ -675,7 +675,7 @@ abs(x) / x = undefined iff x = 0
             // Collect all condition variables and their ValueSets
             std::map<std::string, ValueSet> var_coverage;
 
-            for (size_t idx : group.rule_indices) {
+            for (const size_t idx : group.rule_indices) {
                 const auto& rule = rewrite_rules[idx];
                 if (!rule.condition.has_value()) {
                     // Unconditional rule → covers everything
@@ -729,7 +729,7 @@ abs(x) / x = undefined iff x = 0
             && !builtin_functions().count(e->name)
             && !custom_functions_.count(e->name)) {
             // Not a builtin — try loading as sub-system formula
-            std::string file_stem = e->name;
+            const std::string file_stem = e->name;
             try {
                 auto& sub = load_sub_system(file_stem);
                 // Find section metadata with positional args
@@ -851,7 +851,7 @@ abs(x) / x = undefined iff x = 0
     // unknown as constant" behavior, surfaced via trace).
     // ------------------------------------------------------------------------
     void resolve_diff_in_equations() {
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
         // justified: starts mid-array at `diff_resolved_up_to_` (incremental)
         for (size_t i = diff_resolved_up_to_; i < equations.size(); ++i)
             equations[i].rhs = resolve_diff_calls(equations[i].rhs);
@@ -949,7 +949,7 @@ abs(x) / x = undefined iff x = 0
 
     void load_string(const std::string& source, const std::string& label = "<inline>",
                      const std::string& section = "") {
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
         if (base_dir.empty()) base_dir = ".";
         if (rewrite_rules.empty()) load_builtins();
         if (source_label_.empty()) source_label_ = label;
@@ -969,7 +969,7 @@ abs(x) / x = undefined iff x = 0
     }
 
     void load_file(const std::string& path, const std::string& section = "") {
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
         if (path.empty())
             throw std::runtime_error("No file path provided");
         std::error_code ec;
@@ -1002,7 +1002,7 @@ abs(x) / x = undefined iff x = 0
     [[nodiscard]] static bool approx_equal(double a, double b) {
         if (std::isnan(a) || std::isnan(b)) return false;
         if (std::isinf(a) || std::isinf(b)) return a == b;
-        double eps = std::max(EPSILON_REL, EPSILON_REL * std::max(std::abs(a), std::abs(b)));
+        const double eps = std::max(EPSILON_REL, EPSILON_REL * std::max(std::abs(a), std::abs(b)));
         return std::abs(a - b) < eps;
     }
 
@@ -1010,8 +1010,8 @@ abs(x) / x = undefined iff x = 0
         const std::string& target, double known_value,
         std::map<std::string, double> bindings) const
     {
-        ExprArena::Scope scope(arena);
-        BudgetGuard budget_guard; // Part C
+        const ExprArena::Scope scope(arena);
+        const BudgetGuard budget_guard; // Part C
         std::vector<VerifyResult> results;
         bindings.erase(target);
         for (auto& [k, v] : defaults)
@@ -1029,14 +1029,14 @@ abs(x) / x = undefined iff x = 0
                     try {
                         auto b2 = bindings;
                         DeadEndSet de;
-                        double val = solve_recursive(v, b2, {target}, 0, de);
+                        const double val = solve_recursive(v, b2, {target}, 0, de);
                         resolved = substitute(resolved, v, Expr::Num(val));
                     } catch (const std::runtime_error&) { return; }
                 }
             }
             auto computed_opt = evaluate(simplify(resolved));
             if (!computed_opt) return;
-            double computed = computed_opt.value();
+            const double computed = computed_opt.value();
             if (std::isnan(computed) || std::isinf(computed)) return;
             results.push_back({desc, computed, approx_equal(computed, known_value)});
         };
@@ -1046,7 +1046,7 @@ abs(x) / x = undefined iff x = 0
             try {
                 auto sub_binds = prepare_sub_bindings(call, bindings, {}, 0, target, false);
                 auto& sub_sys = load_sub_system(call.file_stem);
-                double computed = sub_sys.resolve(resolve_var, sub_binds);
+                const double computed = sub_sys.resolve(resolve_var, sub_binds);
                 if (!std::isnan(computed) && !std::isinf(computed))
                     results.push_back({desc, computed, approx_equal(computed, known_value)});
             } catch (const std::runtime_error&) { return; }
@@ -1182,7 +1182,7 @@ abs(x) / x = undefined iff x = 0
         // Num nodes; substitute_builtin_constants rewrites the tree). Open
         // our own scope so callers don't have to — scopes nest, and the
         // cost of an extra stack frame is negligible for a one-shot format.
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
         // Distribute division over addition when the denominator is a numeric
         // literal, then re-simplify. This exposes like-terms hidden inside
         // (a + b) / k nodes so the simplifier can cancel them — e.g.
@@ -1212,7 +1212,7 @@ abs(x) / x = undefined iff x = 0
     [[nodiscard]] std::string derive(const std::string& target,
                        const std::map<std::string, double>& numeric_bindings,
                        const std::map<std::string, std::string>& symbolic_bindings) const {
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
         DeadEndSet dead_ends; // Fix 1: per-top-level-query dead-end set
         auto result = derive_recursive(target, bindings, {}, 0, dead_ends);
@@ -1236,9 +1236,9 @@ abs(x) / x = undefined iff x = 0
                        std::vector<std::string>* out_helpers = nullptr,
                        int cse_threshold = 0,
                        int output_cap = 0) const {
-        ExprArena::Scope scope(arena);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_);
-        FuncInverterGuard fi_guard(make_func_inverter());
+        const ExprArena::Scope scope(arena);
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_);
+        const FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Alias table is stable across the whole call; build once and reuse
@@ -1290,7 +1290,7 @@ abs(x) / x = undefined iff x = 0
         // preventing the merge we want.
         auto subst_for_fingerprint = [&](ExprPtr e) {
             if (!e) return e;
-            std::set<std::string> free_set(free_vars.begin(), free_vars.end());
+            std::set<std::string> const free_set(free_vars.begin(), free_vars.end());
             for (auto& [name, val] : bindings) {
                 if (free_set.count(name)) continue;
                 if (name == target) continue;
@@ -1359,7 +1359,7 @@ abs(x) / x = undefined iff x = 0
                     std::map<std::string, ExprPtr> parent_map;
                     for (auto& [sv, expr] : c.call->bindings)
                         parent_map[sv] = expr;
-                    std::string sub_target = c.sub_var;
+                    const std::string sub_target = c.sub_var;
                     ExprPtr binding_expr = parent_map[sub_target];
 
                     for (const auto& eq : sub_sys.equations) {
@@ -1476,7 +1476,7 @@ abs(x) / x = undefined iff x = 0
             // t2 = sin(x^2)).
             // justified: prefix-slice `helpers.begin() + i` for nested-helper composition
             for (size_t i = 0; i < helpers.size(); i++) {
-                std::vector<std::pair<std::string, ExprPtr>> earlier(
+                std::vector<std::pair<std::string, ExprPtr>> const earlier(
                     helpers.begin(), helpers.begin() + static_cast<long>(i));
                 auto rhs = cse_replace(helpers[i].second, earlier);
                 out_helpers->push_back(
@@ -1526,7 +1526,7 @@ abs(x) / x = undefined iff x = 0
                 }
                 if (!matches) continue;
 
-                std::string cond_str = eq.condition
+                const std::string cond_str = eq.condition
                     ? eq.condition->to_valueset(target, {}).to_string()
                     : std::string{};
                 bool body_is_known = false;
@@ -1552,9 +1552,9 @@ abs(x) / x = undefined iff x = 0
                     if (a && b && approx_equal(a.value(), b.value())) { exclusive = false; break; }
                 }
 
-                std::string link = exclusive ? " iff " : " if ";
-                std::string eq_str = eq.lhs_var + " = " + expr_to_string(rhs_val);
-                std::string inverted = body_is_known
+                const std::string link = exclusive ? " iff " : " if ";
+                const std::string eq_str = eq.lhs_var + " = " + expr_to_string(rhs_val);
+                const std::string inverted = body_is_known
                     ? cond_str
                     : cond_str + link + eq_str;
                 if (seen.insert(inverted).second) results.push_back(inverted);
@@ -1578,7 +1578,7 @@ abs(x) / x = undefined iff x = 0
     FitOutput fit(const std::string& target,
                   const std::map<std::string, double>& numeric_bindings,
                   const std::map<std::string, std::string>& symbolic_bindings) const {
-        ExprArena::Scope scope(arena);
+        const ExprArena::Scope scope(arena);
 
         // Identify the free variable (exactly one symbolic binding expected)
         std::string free_var;
@@ -1648,8 +1648,8 @@ abs(x) / x = undefined iff x = 0
                     if (sec.positional_args.empty()) continue;
                     // The input variable is the first positional arg
                     // The return variable is sec.return_var (or "result")
-                    std::string input_var = sec.positional_args[0];
-                    std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
+                    const std::string input_var = sec.positional_args[0];
+                    const std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
                     // Solve: given return_var = rhs, find input_var
                     // Look through the sub-system's equations for one that has input_var on the LHS
                     // not std::find_if: body returns from the enclosing function with simplify+substitute result
@@ -1685,13 +1685,13 @@ abs(x) / x = undefined iff x = 0
 
     [[nodiscard]] double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
-        ExprArena::Scope scope(arena);
-        BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
+        const ExprArena::Scope scope(arena);
+        const BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
         populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
-        FuncInverterGuard fi_guard(make_func_inverter());
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
+        const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
         return solve_recursive(target, prepared, {}, 0, dead_ends);
@@ -1699,13 +1699,13 @@ abs(x) / x = undefined iff x = 0
 
     [[nodiscard]] ValueSet resolve_all(const std::string& target,
                           std::map<std::string, double> bindings) const {
-        ExprArena::Scope scope(arena);
-        BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
+        const ExprArena::Scope scope(arena);
+        const BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
         populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
-        RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
-        FuncInverterGuard fi_guard(make_func_inverter());
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
+        const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
 
@@ -1720,12 +1720,12 @@ abs(x) / x = undefined iff x = 0
             // then check LHS == evaluated RHS
             // Only cross-validate when there are multiple equations with known LHS values
             // (single-equation multiple roots are already valid by construction)
-            int known_lhs_count = static_cast<int>(std::count_if(
+            const int known_lhs_count = static_cast<int>(std::count_if(
                 equations.begin(), equations.end(),
                 [&prepared](const Equation& eq) { return prepared.count(eq.lhs_var) > 0; }));
             if (exact_results.size() > 1 && known_lhs_count > 1) {
                 std::vector<double> validated;
-                for (double r : exact_results) {
+                for (const double r : exact_results) {
                     auto test = prepared;
                     test[target] = r;
                     bool valid = true;
@@ -1750,7 +1750,7 @@ abs(x) / x = undefined iff x = 0
             }
 
             if (numeric_mode && numeric_results_.count(target)) {
-                bool all_exact = std::all_of(exact_results.begin(), exact_results.end(),
+                const bool all_exact = std::all_of(exact_results.begin(), exact_results.end(),
                     [](double r) { return std::abs(r - std::round(r)) <= EPSILON_ZERO; });
                 numeric_results_[target] = all_exact;
             }
@@ -1786,14 +1786,14 @@ abs(x) / x = undefined iff x = 0
             // cppcheck-suppress useStlAlgorithm
             constraints = constraints.intersect(gc.to_valueset(target, prepared));
 
-        bool has_constraints = !constraints.empty()
+        const bool has_constraints = !constraints.empty()
             && constraints.to_string() != ValueSet::all().to_string();
 
         // Combine results: only unite algebraic + ranges when iff constraints contributed
         if (!exact_results.empty() && has_iff_constraints && has_constraints) {
             auto combined = constraints;
             // not std::accumulate: ValueSet::unite is non-trivial; accumulator pattern is clearer in loop form
-            for (double r : exact_results)
+            for (const double r : exact_results)
                 // cppcheck-suppress useStlAlgorithm
                 combined = combined.unite(ValueSet::eq(r));
             return combined;
@@ -1881,7 +1881,7 @@ private:
             auto b = bindings; // copy — each attempt gets fresh bindings
             bool nan_inf = false;
             if (try_resolve(expr, target, b, visited, depth, nan_inf, missing, dead_ends)) {
-                double val = b.at(target);
+                const double val = b.at(target);
                 // Check equation condition
                 if (cond && !check_condition(*cond, b)) return;
                 // Check global conditions
@@ -1911,7 +1911,7 @@ private:
                     return true; // moved to a new source group — stop enumeration
                 // Check pre-condition
                 if (c.condition && !check_condition(*c.condition, bindings)) return false;
-                size_t before = results.size();
+                const size_t before = results.size();
                 try_expr_all(c.expr, c.desc, c.condition);
                 // cppcheck-suppress knownConditionTrueFalse
                 // try_expr_all mutates results via a captured-by-reference lambda
@@ -1923,12 +1923,12 @@ private:
                 if (formula_depth_ >= max_formula_depth) return false;
                 try {
                     formula_depth_++;
-                    struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
+                    struct DepthGuard { ~DepthGuard() { formula_depth_--; } } const guard;
                     auto sub_binds = prepare_sub_bindings(*c.call, bindings, visited, depth,
                                                           "", true, &dead_ends);
                     auto& sub_sys = load_sub_system(c.call->file_stem);
                     sub_sys.max_formula_depth = max_formula_depth;
-                    double val = sub_sys.resolve(c.call->query_var, sub_binds);
+                    const double val = sub_sys.resolve(c.call->query_var, sub_binds);
                     if (!std::isnan(val) && !std::isinf(val)) {
                         if (std::any_of(results.begin(), results.end(),
                                 [val](double r) { return std::abs(r - val) < EPSILON_ZERO; }))
@@ -1966,9 +1966,9 @@ private:
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
                 auto roots = try_resolve_numeric(c.expr, target, bindings,
                     visited, depth, c.condition, dead_ends);
-                for (double val : roots) {
+                for (const double val : roots) {
                     if (results.size() >= MAX_NUMERIC_RESULTS) break;
-                    bool dup = std::any_of(results.begin(), results.end(),
+                    const bool dup = std::any_of(results.begin(), results.end(),
                         [val](double r) { return approx_equal(r, val); });
                     if (!dup) {
                         if (!numeric_results_.count(target))
@@ -2049,9 +2049,9 @@ private:
             }
             // Check for binding: IDENT EQUALS expr (up to next COMMA or RPAREN)
             else if (i + 1 < rparen_pos && tok[i + 1].type == TokenType::EQUALS) {
-                std::string sub_var = tok[i].text;
+                const std::string sub_var = tok[i].text;
                 // Collect tokens from after = until COMMA or RPAREN
-                size_t expr_start = i + 2;
+                const size_t expr_start = i + 2;
                 size_t expr_end = expr_start;
                 int pd = 0;
                 while (expr_end < rparen_pos) {
@@ -2100,7 +2100,7 @@ private:
             if (tok[i].type == TokenType::IDENT
                 && i + 1 < tok.size()
                 && tok[i + 1].type == TokenType::LPAREN) {
-                size_t rparen = find_matching_rparen(tok, i + 1);
+                const size_t rparen = find_matching_rparen(tok, i + 1);
                 if (rparen != std::string::npos && has_question_in_range(tok, i + 2, rparen)) {
                     auto call = parse_call_args(tok, i, rparen);
 
@@ -2134,9 +2134,9 @@ private:
         std::vector<std::string> clause_strs;
         std::string remaining = cond_str;
         while (!remaining.empty()) {
-            size_t and_pos = remaining.find("&&");
-            size_t or_pos = remaining.find("||");
-            size_t split = std::min(and_pos, or_pos);
+            const size_t and_pos = remaining.find("&&");
+            const size_t or_pos = remaining.find("||");
+            const size_t split = std::min(and_pos, or_pos);
 
             if (split == std::string::npos) {
                 clause_strs.push_back(remaining);
@@ -2177,8 +2177,8 @@ private:
 
             if (op_pos == std::string::npos) continue; // malformed clause, skip
 
-            std::string lhs_str = trim(clause_str.substr(0, op_pos));
-            std::string rhs_str = trim(clause_str.substr(op_pos + op_len));
+            const std::string lhs_str = trim(clause_str.substr(0, op_pos));
+            const std::string rhs_str = trim(clause_str.substr(op_pos + op_len));
 
             auto lhs_tok = Lexer(lhs_str).tokenize();
             auto rhs_tok = Lexer(rhs_str).tokenize();
@@ -2200,7 +2200,7 @@ private:
             int pd = 0;
             // justified: char-cursor with line[i+N] / line[i-1] / line.substr(0, i)
             for (size_t i = 0; i < line.size(); i++) {
-                char ch = line[i];
+                const char ch = line[i];
                 if (ch == '(') { pd++; continue; }
                 if (ch == ')') { pd--; continue; }
                 if (pd != 0) continue;
@@ -2236,7 +2236,7 @@ private:
         // justified: char-cursor with eq_part[ci-1] lookahead
         for (size_t ci = 0; ci < eq_part.size(); ci++) {
             if (eq_part[ci] == '=') {
-                bool part_of_cmp = (ci > 0 && (eq_part[ci-1] == '>' || eq_part[ci-1] == '<' || eq_part[ci-1] == '!'));
+                const bool part_of_cmp = (ci > 0 && (eq_part[ci-1] == '>' || eq_part[ci-1] == '<' || eq_part[ci-1] == '!'));
                 if (!part_of_cmp) { is_equation = true; break; }
             }
         }
@@ -2271,7 +2271,7 @@ private:
         if (eq_pos == 0) return;  // no '=' found
 
         // Simple equation: "var = expr" (IDENT followed by EQUALS)
-        bool simple_lhs = (eq_pos == 1 && mod_tok[0].type == TokenType::IDENT);
+        const bool simple_lhs = (eq_pos == 1 && mod_tok[0].type == TokenType::IDENT);
 
         if (!simple_lhs) {
             // Complex LHS: this is a rewrite rule (e.g., cos(-x) = cos(x))
@@ -2337,7 +2337,7 @@ private:
         // Split dotted names: "geometry.rectangle" → file="geometry", section="rectangle"
         std::string file_part = file_stem;
         std::string section;
-        size_t dot = file_stem.find('.');
+        const size_t dot = file_stem.find('.');
         if (dot != std::string::npos) {
             file_part = file_stem.substr(0, dot);
             section = file_stem.substr(dot + 1);
@@ -2359,7 +2359,7 @@ private:
         catch (const std::filesystem::filesystem_error&) { abs_path = path; }
 
         // Cache key: defined functions use name directly, files use abs path
-        std::string cache_key = def_source
+        const std::string cache_key = def_source
             ? ("@def:" + file_part)
             : (abs_path + (section.empty() ? "" : "#" + section));
         auto it = sub_systems.find(cache_key);
@@ -2441,7 +2441,7 @@ private:
                     resolved = substitute(resolved, v, Expr::Num(it->second));
                 } else if (resolve_unknowns) {
                     try {
-                        double val = solve_recursive(v, parent_bindings, visited, depth + 1, de);
+                        const double val = solve_recursive(v, parent_bindings, visited, depth + 1, de);
                         resolved = substitute(resolved, v, Expr::Num(val));
                     } catch (const SolveBudgetExceededError&) { throw; }
                     catch (const std::runtime_error&) { return; }
@@ -2464,7 +2464,7 @@ private:
                 sub[call.query_var] = it->second;
             else if (resolve_unknowns) {
                 try {
-                    double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1, de);
+                    const double val = solve_recursive(call.output_var, parent_bindings, visited, depth + 1, de);
                     sub[call.query_var] = val;
                 } catch (const SolveBudgetExceededError&) { throw; }
                 // NOLINTNEXTLINE(bugprone-empty-catch) — output_var unresolvable → leave unbound, sub-system may still solve
@@ -2513,7 +2513,7 @@ private:
         for (auto& eq : equations) {
             if (!contains_var(eq.rhs, target)) continue;
             auto sols = solve_for_all(Expr::Var(eq.lhs_var), eq.rhs, target);
-            int eq_group = next_group++;  // one group per source equation
+            const int eq_group = next_group++;  // one group per source equation
             for (auto& sol : sols)
                 if (sol.expr)
                     if (handler(Candidate{CandidateType::EXPR, sol.expr,
@@ -2554,7 +2554,7 @@ private:
                 auto ej = maybe_sub(equations[j].rhs);
                 for (auto& [a, b] : {std::pair{ei, ej}, std::pair{ej, ei}}) {
                     auto sols = solve_for_all(a, b, target);
-                    int pair_group = next_group++; // one group per (i,j,direction)
+                    const int pair_group = next_group++; // one group per (i,j,direction)
                     for (auto& sol : sols) {
                         if (!sol.expr) continue;
                         // Verify: the solution must satisfy BOTH equations' conditions
@@ -2625,7 +2625,7 @@ private:
                         // Try solving directly
                         auto try_solve_and_emit = [&](const ExprPtr& rhs, const std::string& desc) -> bool {
                             auto tsols = solve_for_all(Expr::Var(e1.lhs_var), rhs, target);
-                            int sub_group = next_group++; // one group per elim source
+                            const int sub_group = next_group++; // one group per elim source
                             for (auto& ts : tsols) {
                                 if (!ts.expr) continue;
                                 const Condition* cond = e1.condition ? &*e1.condition : nullptr;
@@ -2835,7 +2835,7 @@ private:
                         // resolution and may cause infinite expansion)
                         std::set<std::string> remaining;
                         collect_vars(unfolded, remaining);
-                        bool has_formula_output = std::any_of(
+                        const bool has_formula_output = std::any_of(
                             sub_sys.formula_calls.begin(), sub_sys.formula_calls.end(),
                             [&remaining](const FormulaCall& fc) {
                                 return remaining.count(fc.output_var) > 0;
@@ -2886,7 +2886,7 @@ private:
                     std::map<std::string, ExprPtr> parent_map;
                     for (auto& [sv, expr] : c.call->bindings)
                         parent_map[sv] = expr;
-                    std::string sub_target = c.sub_var;
+                    const std::string sub_target = c.sub_var;
                     ExprPtr binding_expr = parent_map[sub_target];
                     for (const auto& eq : sub_sys.equations) {
                         if (eq.lhs_var != c.call->query_var) continue;
@@ -2981,7 +2981,7 @@ private:
             if (auto pit = prepared.find(target); pit != prepared.end())
                 result = pit->second;
             else {
-                std::set<std::string> visited;
+                std::set<std::string> const visited;
                 result = solve_recursive(target, prepared, visited, 0, *dead_ends);
             }
         } else {
@@ -3029,7 +3029,7 @@ private:
         if (numeric_active_.count(target)) return {};
         numeric_active_.insert(target);
         struct NumericGuard { const std::string& t; std::set<std::string>& s;
-            ~NumericGuard() { s.erase(t); } } ng_{target, numeric_active_};
+            ~NumericGuard() { s.erase(t); } } const ng_{target, numeric_active_};
 
         // Build set of formula call output vars (may depend on target circularly)
         std::set<std::string> formula_outputs;
@@ -3055,7 +3055,7 @@ private:
                 }
                 try {
                     const auto& visited_copy = visited;
-                    double val = solve_recursive(v, bindings, visited_copy, depth + 1, dead_ends);
+                    const double val = solve_recursive(v, bindings, visited_copy, depth + 1, dead_ends);
                     expr = substitute(expr, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
                 catch (const std::runtime_error&) { has_formula_vars = true; }
@@ -3068,10 +3068,10 @@ private:
         if (lo >= hi) return {};
 
         // Check if target still appears after substitution
-        bool has_target = contains_var(expr, target);
+        const bool has_target = contains_var(expr, target);
 
         // Heuristic: try integer mode if bounds are reasonable integers
-        bool try_integer = (lo >= -10000 && hi <= 10000
+        const bool try_integer = (lo >= -10000 && hi <= 10000
             && std::floor(lo) == lo && std::floor(hi) == hi
             && (hi - lo) <= 20000);
 
@@ -3134,7 +3134,7 @@ private:
             // With 200+ scan points this produces enormous --steps output.
             auto saved_trace = trace.level;
             trace.level = TraceLevel::NONE;
-            struct TraceGuard { Trace& t; TraceLevel l; ~TraceGuard() { t.level = l; } } tg_{trace, saved_trace};
+            struct TraceGuard { Trace& t; TraceLevel l; ~TraceGuard() { t.level = l; } } const tg_{trace, saved_trace};
 
             for (auto& probe_var : probe_vars) {
                 if (!bindings.count(probe_var)) continue;
@@ -3148,7 +3148,7 @@ private:
                         // Fix 2: share the outer DeadEndSet across probe
                         // iterations — first iteration populates, later
                         // iterations benefit from pre-filter short-circuits.
-                        double computed = resolve_memoized(probe_var, test_binds, &dead_ends);
+                        const double computed = resolve_memoized(probe_var, test_binds, &dead_ends);
                         return computed - expected;
                     } catch (const std::runtime_error&) { return std::numeric_limits<double>::quiet_NaN(); }
                 };
@@ -3167,7 +3167,7 @@ private:
         filter:
         // Filter by equation condition and global conditions
         std::vector<double> filtered;
-        for (double r : roots) {
+        for (const double r : roots) {
             auto test_binds = bindings;
             test_binds[target] = r;
             bool ok = true;
@@ -3190,7 +3190,7 @@ private:
             return it->second;
         }
         if (is_active_builtin(target)) {
-            double val = builtin_constants().at(target);
+            const double val = builtin_constants().at(target);
             bindings[target] = val;
             return val;
         }
@@ -3223,7 +3223,7 @@ private:
             trace.step("formula call: " + call.file_stem + "(" + resolve_var + ")", depth + 1);
             try {
                 formula_depth_++;
-                struct DepthGuard { ~DepthGuard() { formula_depth_--; } } guard;
+                struct DepthGuard { ~DepthGuard() { formula_depth_--; } } const guard;
                 auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var,
                                                       true, &dead_ends);
                 auto& sub_sys = load_sub_system(call.file_stem);
@@ -3275,7 +3275,7 @@ private:
                 bindings[target] = result;
                 return true;
             } catch (const std::runtime_error& e) {
-                std::string msg = e.what();
+                const std::string msg = e.what();
                 if (msg.find("depth") != std::string::npos) throw; // propagate depth guard
                 trace.step("  failed: " + msg, depth + 2);
                 return false;
@@ -3393,7 +3393,7 @@ private:
                 }
                 trace.step("need: " + v, depth + 2);
                 try {
-                    double val = solve_recursive(v, bindings, visited, depth + 1, dead_ends);
+                    const double val = solve_recursive(v, bindings, visited, depth + 1, dead_ends);
                     trace.calc("substitute " + v + " = " + fmt_trace(val, nullptr, v), depth + 2);
                     resolved = substitute(resolved, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
@@ -3429,7 +3429,7 @@ private:
             }
             return false;
         }
-        double result = result_opt.value();
+        const double result = result_opt.value();
         if (std::isinf(result)) {
             trace.step("result is inf, trying alternatives", depth + 1);
             had_nan_inf = true;
@@ -3483,7 +3483,7 @@ struct CLIQuery {
                                 bool allow_symbolic = false) {
     CLIQuery q;
 
-    size_t lparen = input.find('(');
+    const size_t lparen = input.find('(');
     if (lparen == std::string::npos)
         throw std::runtime_error("Expected format: filename(var=?, var=value, ...)");
 
@@ -3495,11 +3495,11 @@ struct CLIQuery {
         // Split file.section: "geometry.triangle" → file="geometry.fw", section="triangle"
         // If it ends with ".fw", it's a direct file path (no section)
         // Otherwise, first dot separates file stem from section path
-        size_t dot = q.filename.find('.');
+        const size_t dot = q.filename.find('.');
         if (dot == std::string::npos) {
             q.filename += ".fw";
         } else {
-            std::string after_dot = q.filename.substr(dot + 1);
+            const std::string after_dot = q.filename.substr(dot + 1);
             if (after_dot == "fw" || after_dot.find('/') != std::string::npos
                 || after_dot.find('\\') != std::string::npos) {
                 // It's a file extension or path — keep as-is
@@ -3525,13 +3525,13 @@ struct CLIQuery {
 
     // Capture inline source (text after closing paren)
     if (rparen + 1 < input.size()) {
-        std::string after = trim(input.substr(rparen + 1));
+        const std::string after = trim(input.substr(rparen + 1));
         if (!after.empty()) {
             q.inline_source = after;
             // If there was a "name" before (, it's a section selector, not a filename
             if (!q.filename.empty()) {
                 // Strip .fw suffix if it was auto-added
-                std::string raw = input.substr(0, lparen);
+                const std::string raw = input.substr(0, lparen);
                 q.section = raw;
                 q.filename.clear();
             }
@@ -3557,7 +3557,7 @@ struct CLIQuery {
         arg = trim(arg);
         if (arg.empty()) continue;
 
-        size_t eq = arg.find('=');
+        const size_t eq = arg.find('=');
         if (eq == std::string::npos) {
             // Bare variable name (no '='). In symbolic modes (--derive, --fit)
             // treat as a symbolic placeholder equivalent to "name=name" —
@@ -3594,13 +3594,13 @@ struct CLIQuery {
             }
             if (comma_pos == std::string::npos)
                 throw std::runtime_error("diff(): expected target and variable separated by ','");
-            std::string target = trim(inner.substr(0, comma_pos));
-            std::string dvar   = trim(inner.substr(comma_pos + 1));
+            const std::string target = trim(inner.substr(0, comma_pos));
+            const std::string dvar   = trim(inner.substr(comma_pos + 1));
             if (target.empty() || dvar.empty())
                 throw std::runtime_error("diff(): missing target or variable");
             std::string rest = trim(val.substr(1));
             if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — diff is single-result
-            std::string alias = rest.empty() ? ("diff_" + dvar) : rest;
+            const std::string alias = rest.empty() ? ("diff_" + dvar) : rest;
             q.diff_queries.push_back({target, dvar, alias});
             continue;
         }
@@ -3613,7 +3613,7 @@ struct CLIQuery {
                 strict = true;
                 rest = rest.substr(1);
             }
-            std::string alias = rest.empty() ? name : trim(rest);
+            const std::string alias = rest.empty() ? name : trim(rest);
             q.queries.push_back({name, alias, strict});
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
@@ -3628,7 +3628,7 @@ struct CLIQuery {
                 bool ok = false;
                 try {
                     ExprArena temp_arena;
-                    ExprArena::Scope scope(temp_arena);
+                    const ExprArena::Scope scope(temp_arena);
                     auto expr = Parser(Lexer(val).tokenize()).parse_expr();
                     if (auto val_opt = evaluate(*simplify(expr))) {
                         v = val_opt.value();

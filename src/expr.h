@@ -128,13 +128,13 @@ struct Interval {
     double low = 0, high = 0;
     bool low_inclusive = false, high_inclusive = false;
 
-    bool contains(double v) const {
-        bool above = low_inclusive ? (v >= low) : (v > low);
-        bool below = high_inclusive ? (v <= high) : (v < high);
+    [[nodiscard]] bool contains(double v) const {
+        const bool above = low_inclusive ? (v >= low) : (v > low);
+        const bool below = high_inclusive ? (v <= high) : (v < high);
         return above && below;
     }
 
-    bool empty() const {
+    [[nodiscard]] bool empty() const {
         return (low > high) || (low == high && !(low_inclusive && high_inclusive));
     }
 };
@@ -211,33 +211,33 @@ public:
     }
 
     // Queries
-    bool empty() const { return intervals_.empty() && discrete_.empty(); }
+    [[nodiscard]] bool empty() const { return intervals_.empty() && discrete_.empty(); }
 
-    bool contains(double v) const {
+    [[nodiscard]] bool contains(double v) const {
         if (std::any_of(intervals_.begin(), intervals_.end(),
                 [v](const Interval& iv) { return iv.contains(v); })) return true;
         return std::any_of(discrete_.begin(), discrete_.end(),
             [v](double d) { return std::abs(d - v) < EPSILON_ZERO; });
     }
 
-    const std::vector<Interval>& intervals() const { return intervals_; }
-    const std::vector<double>& discrete() const { return discrete_; }
-    NumberDomain domain() const { return domain_; }
+    [[nodiscard]] const std::vector<Interval>& intervals() const { return intervals_; }
+    [[nodiscard]] const std::vector<double>& discrete() const { return discrete_; }
+    [[nodiscard]] NumberDomain domain() const { return domain_; }
 
     // Set operations
-    ValueSet intersect(const ValueSet& other) const {
+    [[nodiscard]] ValueSet intersect(const ValueSet& other) const {
         ValueSet result;
 
         // Interval ∩ Interval
         for (const auto& a : intervals_)
             for (const auto& b : other.intervals_) {
-                double lo = std::max(a.low, b.low);
-                double hi = std::min(a.high, b.high);
-                bool lo_inc = (a.low == b.low) ? (a.low_inclusive && b.low_inclusive)
+                const double lo = std::max(a.low, b.low);
+                const double hi = std::min(a.high, b.high);
+                const bool lo_inc = (a.low == b.low) ? (a.low_inclusive && b.low_inclusive)
                             : (lo == a.low) ? a.low_inclusive : b.low_inclusive;
-                bool hi_inc = (a.high == b.high) ? (a.high_inclusive && b.high_inclusive)
+                const bool hi_inc = (a.high == b.high) ? (a.high_inclusive && b.high_inclusive)
                             : (hi == a.high) ? a.high_inclusive : b.high_inclusive;
-                Interval iv{lo, hi, lo_inc, hi_inc};
+                const Interval iv{lo, hi, lo_inc, hi_inc};
                 if (!iv.empty()) result.intervals_.push_back(iv);
             }
 
@@ -247,7 +247,7 @@ public:
         for (const auto& d : other.discrete_)
             if (this->contains(d)) {
                 // Avoid duplicates
-                bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
+                const bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
                     [d](double rd) { return std::abs(rd - d) < EPSILON_ZERO; });
                 if (!dup) result.discrete_.push_back(d);
             }
@@ -255,14 +255,14 @@ public:
         return result;
     }
 
-    ValueSet unite(const ValueSet& other) const {
+    [[nodiscard]] ValueSet unite(const ValueSet& other) const {
         ValueSet result;
         result.intervals_ = intervals_;
         result.intervals_.insert(result.intervals_.end(),
             other.intervals_.begin(), other.intervals_.end());
         result.discrete_ = discrete_;
         for (const auto& d : other.discrete_) {
-            bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
+            const bool dup = std::any_of(result.discrete_.begin(), result.discrete_.end(),
                 [d](double rd) { return std::abs(rd - d) < EPSILON_ZERO; });
             if (!dup) result.discrete_.push_back(d);
         }
@@ -270,7 +270,7 @@ public:
     }
 
     // Filter a list of values through this set
-    std::vector<double> filter(const std::vector<double>& values) const {
+    [[nodiscard]] std::vector<double> filter(const std::vector<double>& values) const {
         std::vector<double> result;
         std::copy_if(values.begin(), values.end(), std::back_inserter(result),
             [this](double v) { return contains(v); });
@@ -278,11 +278,11 @@ public:
     }
 
     // Is this a purely discrete set (no intervals)?
-    bool is_discrete() const { return intervals_.empty(); }
+    [[nodiscard]] bool is_discrete() const { return intervals_.empty(); }
 
     // Does this set cover all real numbers (-inf, +inf)?
     // Checks if intervals + discrete points leave no gaps.
-    bool covers_reals() const {
+    [[nodiscard]] bool covers_reals() const {
         if (intervals_.empty() && discrete_.empty()) return false;
         // Merge all coverage into sorted intervals (discrete points become [v,v])
         std::vector<Interval> all_intervals = intervals_;
@@ -314,7 +314,7 @@ public:
     }
 
     // String representation
-    std::string to_string() const {
+    [[nodiscard]] std::string to_string() const {
         if (empty()) return "{}";
 
         std::vector<std::string> parts;
@@ -330,7 +330,7 @@ public:
         }
 
         if (!discrete_.empty()) {
-            std::string s = "{" + join_with_sep(discrete_, ", ",
+            const std::string s = "{" + join_with_sep(discrete_, ", ",
                 [](double d) { return fmt_num(d); }) + "}";
             parts.push_back(s);
         }
@@ -368,7 +368,7 @@ public:
         explicit Scope(ExprArena& a) : prev(current_) { current_ = &a; }
         ~Scope() { current_ = prev; }
     };
-    size_t size() const { return chunks.empty() ? 0 : (chunks.size()-1) * CHUNK_SIZE + next_in_chunk; }
+    [[nodiscard]] size_t size() const { return chunks.empty() ? 0 : (chunks.size()-1) * CHUNK_SIZE + next_in_chunk; }
 };
 
 // ============================================================================
@@ -497,7 +497,7 @@ inline Expr* ExprArena::alloc() {
     // Sign normalization: negative in numerator only
     if (denom < 0) { numer = -numer; denom = -denom; }
     // GCD reduction
-    int64_t g = gcd_abs(numer, denom);
+    const int64_t g = gcd_abs(numer, denom);
     numer /= g; denom /= g;
     if (denom == 1) return Expr::Num(static_cast<double>(numer));
     return Expr::BinOpExpr(BinOp::DIV,
@@ -808,7 +808,7 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
 
             // Match structural pattern factors against target factors
             std::vector<bool> t_used(t.factors.size(), false);
-            for (size_t si : p_structural) {
+            for (const size_t si : p_structural) {
                 auto& [p_base, p_exp] = p.factors[si];
                 bool found = false;
                 // justified: dual-cursor (ti indexes t_used skip-mask)
@@ -894,7 +894,7 @@ inline void flatten_multiplicative(ExprPtr e, double& coeff,
                     ok = true;
                 }
                 if (ok) {
-                    double saved_coeff = remaining_coeff;
+                    const double saved_coeff = remaining_coeff;
                     remaining_coeff = 1.0;  // consumed
                     if (assign_wildcards(wi + 1, p, p_wildcards, t_remaining, t_rem_used, remaining_coeff)) return true;
                     remaining_coeff = saved_coeff;
@@ -1209,7 +1209,7 @@ template<typename Fn>
         }
         auto v = evaluate(substituted);
         if (!v) continue;
-        double d = v.value();
+        const double d = v.value();
         if (!std::isfinite(d)) continue;
         result.push_back(d);
     }
@@ -1277,7 +1277,7 @@ template<typename Fn>
         return Expr::Num(binop_info(e.op).eval(e.left->num, e.right->num));
     }
     if (e.type == ExprType::FUNC_CALL && lookup_function(e.name)) {
-        bool all_num = std::all_of(e.args.begin(), e.args.end(),
+        const bool all_num = std::all_of(e.args.begin(), e.args.end(),
             [](const Expr* a) { return is_num(a); });
         // evaluate() can still return empty here (e.g. multi-arg function
         // with args.size() != 1) — fall through to tree-as-is on failure.
@@ -1423,8 +1423,8 @@ inline void flatten_multiplicative(ExprPtr e,
         else         denom_parts.push_back(make_factor(base, -exp));
     }
 
-    bool neg = coeff < 0;
-    double abs_coeff = std::abs(coeff);
+    const bool neg = coeff < 0;
+    const double abs_coeff = std::abs(coeff);
 
     // Build numerator: coeff (if not 1) * positive-exp factors
     ExprPtr num = nullptr;
@@ -1558,15 +1558,15 @@ struct Condition {
 
     // Convert condition to a ValueSet for a specific variable
     // Only works for simple conditions like "x > 0", "x <= 10"
-    ValueSet to_valueset(const std::string& var,
+    [[nodiscard]] ValueSet to_valueset(const std::string& var,
                          const std::map<std::string, double>& bindings = {}) const {
         ValueSet result = ValueSet::all();
         // justified: index needed to look up parallel `connectors[i-1]`
         for (size_t i = 0; i < clauses.size(); i++) {
             const auto& c = clauses[i];
             // Check if this clause constrains `var`
-            bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
-            bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
+            const bool lhs_is_var = is_var(c.lhs) && c.lhs->name == var;
+            const bool rhs_is_var = is_var(c.rhs) && c.rhs->name == var;
             if (!lhs_is_var && !rhs_is_var) continue;
 
             // Try to evaluate the other side
@@ -1581,7 +1581,7 @@ struct Condition {
             }
             auto val_opt = evaluate(*simplify(resolved));
             if (!val_opt) return ValueSet::all();
-            double val = val_opt.value();
+            const double val = val_opt.value();
 
             // Build ValueSet from operator (flip if var is on RHS)
             CondOp op = c.op;
@@ -1641,8 +1641,8 @@ struct Condition {
         auto l_opt = evaluate(*simplify(lhs));
         auto r_opt = evaluate(*simplify(rhs));
         if (!l_opt || !r_opt) return std::nullopt;
-        double l = l_opt.value();
-        double r = r_opt.value();
+        const double l = l_opt.value();
+        const double r = r_opt.value();
         switch (c.op) {
             case CondOp::GT: return l > r;
             case CondOp::GE: return l >= r;
@@ -1659,7 +1659,7 @@ struct Condition {
     // justified: index needed to look up parallel `cond.connectors[i-1]`
     for (size_t i = 0; i < cond.clauses.size(); i++) {
         auto val = eval_clause(cond.clauses[i]);
-        bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
+        const bool clause_result = !val.has_value() || val.value(); // unknown → true (satisfied)
 
         if (i == 0) {
             result = clause_result;
@@ -1780,7 +1780,7 @@ struct RewriteRulesGuard {
         if (!b) {
             // Pure constant — try to add as rational
             if (is_integer_value(c)) {
-                int64_t n = static_cast<int64_t>(c);
+                const int64_t n = static_cast<int64_t>(c);
                 rat_num = rat_num * 1 + n * rat_den; // rat += n/1
                 // (no GCD yet — normalize at end)
                 has_rational = true;
@@ -1790,11 +1790,11 @@ struct RewriteRulesGuard {
         } else if (is_int_frac(b) && is_integer_value(c)) {
             // Structural fraction with integer coefficient: c * (p/q)
             auto [p, q] = to_rational(b);
-            int64_t ic = static_cast<int64_t>(c);
+            const int64_t ic = static_cast<int64_t>(c);
             rat_num = rat_num * q + ic * p * rat_den;
             rat_den *= q;
             // Prevent overflow by intermediate GCD
-            int64_t g = gcd_abs(rat_num, rat_den);
+            const int64_t g = gcd_abs(rat_num, rat_den);
             if (g > 1) { rat_num /= g; rat_den /= g; }
             has_rational = true;
         } else {
@@ -2067,7 +2067,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                     if (is_int_frac(l) && is_num(r) && is_integer_value(r->num)
                         && r->num > 0 && r->num <= RATIONAL_POW_MAX_EXP) {
                         auto [n, d] = to_rational(l);
-                        int64_t exp = static_cast<int64_t>(r->num);
+                        const int64_t exp = static_cast<int64_t>(r->num);
                         int64_t rn = 1, rd = 1;
                         for (int64_t i = 0; i < exp; i++) { rn *= n; rd *= d; }
                         return make_rational(rn, rd);
@@ -2112,7 +2112,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 }
             }
             if (!check_condition(*rule.condition, numeric)) continue;
-            AssumptionSource source = (exhaustive_flags && rule.group_index >= 0
+            const AssumptionSource source = (exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index])
                 ? AssumptionSource::Inherent : AssumptionSource::Derived;
@@ -2285,7 +2285,8 @@ struct LinearForm { ExprPtr coeff, rest; };
                               simplify(Expr::BinOpExpr(e->op, ld->rest, rd->rest)));
                 }
                 case BinOp::MUL: {
-                    bool lh = contains_var(e->left, t), rh = contains_var(e->right, t);
+                    const bool lh = contains_var(e->left, t);
+                    const bool rh = contains_var(e->right, t);
                     if (lh && rh) return fail();
                     if (!lh && !rh) return ok(Expr::Num(0), e);
                     auto [side, factor] = lh ? std::pair{e->left, e->right}
@@ -2445,9 +2446,9 @@ inline void solve_set_func_inverter(FuncInverter fn) {
         auto l = expand_for_var(e->left, var);
         auto r = expand_for_var(e->right, var);
         if (e->op == BinOp::MUL) {
-            bool l_sum = l->type == ExprType::BINOP &&
+            const bool l_sum = l->type == ExprType::BINOP &&
                 (l->op == BinOp::ADD || l->op == BinOp::SUB);
-            bool r_sum = r->type == ExprType::BINOP &&
+            const bool r_sum = r->type == ExprType::BINOP &&
                 (r->op == BinOp::ADD || r->op == BinOp::SUB);
             if (r_sum && contains_var(l, var) && contains_var(r, var)) {
                 // a * (b +/- c) -> a*b +/- a*c
@@ -2581,7 +2582,7 @@ inline void solve_set_func_inverter(FuncInverter fn) {
                 auto sol2 = simplify(Expr::BinOpExpr(BinOp::DIV,
                     Expr::BinOpExpr(BinOp::SUB, neg_b, sqrt_disc), two_a));
 
-                std::string cond = expr_to_string(disc) + " >= 0";
+                const std::string cond = expr_to_string(disc) + " >= 0";
                 std::vector<Solution> results;
                 results.push_back({sol1, disc, cond});
                 if (!expr_equal(sol1, sol2))
@@ -2618,7 +2619,7 @@ static_assert(NUMERIC_DEFAULT_SAMPLES >= 10);
 
 // Snap to nearest integer if within tolerance
 [[nodiscard]] inline double snap_integer(double x, double tol = EPSILON_ZERO) {
-    double r = std::round(x);
+    const double r = std::round(x);
     return std::abs(x - r) < tol ? r : x;
 }
 
@@ -2632,7 +2633,7 @@ template<class F>
         const std::function<double(double)>* fp_fn = nullptr) {  // std::function: optional derivative callback; nullable pointer pattern is the right shape for "derivative may not be available"
     double x = x0;
     for (int i = 0; i < max_iter; i++) {
-        double fx = f(x);
+        const double fx = f(x);
         if (std::isnan(fx) || std::isinf(fx)) return std::nullopt;
         if (std::abs(fx) < tol) return snap_integer(x);
 
@@ -2641,7 +2642,7 @@ template<class F>
             fp = (*fp_fn)(x);
         } else {
             // Central difference derivative
-            double h = std::max(1e-8, std::abs(x) * 1e-8);
+            const double h = std::max(1e-8, std::abs(x) * 1e-8);
             fp = (f(x + h) - f(x - h)) / (2.0 * h);
         }
         if (std::isnan(fp) || std::isinf(fp) || std::abs(fp) < 1e-15)
@@ -2658,7 +2659,7 @@ template<class F>
         x = x_new;
     }
     // Check if final value is close enough
-    double fx = f(x);
+    const double fx = f(x);
     if (!std::isnan(fx) && std::abs(fx) < tol * 100) return snap_integer(x);
     return std::nullopt;
 }
@@ -2673,8 +2674,8 @@ template<class F>
     if (flo * fhi > 0) return std::nullopt; // no sign change
 
     for (int i = 0; i < max_iter; i++) {
-        double mid = (lo + hi) / 2.0;
-        double fmid = f(mid);
+        const double mid = (lo + hi) / 2.0;
+        const double fmid = f(mid);
         if (std::isnan(fmid) || std::isinf(fmid)) return std::nullopt;
         if (std::abs(fmid) < tol || (hi - lo) < tol)
             return snap_integer(mid);
@@ -2696,10 +2697,10 @@ template<class F>
     std::vector<Sample> samples;
 
     if (integer_only) {
-        int ilo = static_cast<int>(std::ceil(lo));
-        int ihi = static_cast<int>(std::floor(hi));
+        const int ilo = static_cast<int>(std::ceil(lo));
+        const int ihi = static_cast<int>(std::floor(hi));
         for (int i = ilo; i <= ihi; i++) {
-            double fx = f(static_cast<double>(i));
+            const double fx = f(static_cast<double>(i));
             if (std::isfinite(fx)) samples.push_back({static_cast<double>(i), fx});
         }
     } else {
@@ -2708,12 +2709,12 @@ template<class F>
         // NOLINTNEXTLINE(bugprone-random-generator-seed)
         std::mt19937_64 rng(NUMERIC_SEED);
         std::uniform_real_distribution<double> jitter(-NUMERIC_JITTER_FRAC, NUMERIC_JITTER_FRAC);
-        double step = (hi - lo) / n_samples;
+        const double step = (hi - lo) / n_samples;
         for (int i = 0; i <= n_samples; i++) {
             double x = lo + i * step;
             if (i > 0 && i < n_samples)
                 x += jitter(rng) * step; // jitter interior points
-            double fx = f(x);
+            const double fx = f(x);
             if (std::isfinite(fx)) samples.push_back({x, fx});
         }
 
@@ -2721,30 +2722,30 @@ template<class F>
         std::vector<std::pair<double, double>> refine_regions;
         // justified: window comparison samples[i-1] vs samples[i]
         for (size_t i = 1; i < samples.size(); i++) {
-            bool sign_change = samples[i-1].fx * samples[i].fx < 0;
-            double gradient = std::abs(samples[i].fx - samples[i-1].fx)
+            const bool sign_change = samples[i-1].fx * samples[i].fx < 0;
+            const double gradient = std::abs(samples[i].fx - samples[i-1].fx)
                             / std::max(1e-15, samples[i].x - samples[i-1].x);
             // Refine near sign changes and steep gradients
-            double avg_grad = std::abs(samples[i].fx + samples[i-1].fx)
+            const double avg_grad = std::abs(samples[i].fx + samples[i-1].fx)
                             / std::max(1e-15, hi - lo);
             if (sign_change || gradient > avg_grad * 10)
                 refine_regions.push_back({samples[i-1].x, samples[i].x});
         }
 
         // Refine pass: add dense samples in regions of interest
-        int fine_points = n_samples * 5;
+        const int fine_points = n_samples * 5;
         int points_per_region = refine_regions.empty() ? 0
             : fine_points / static_cast<int>(refine_regions.size());
         points_per_region = std::min(points_per_region, fine_points);
         for (auto& [rlo, rhi] : refine_regions) {
             // Expand region slightly
-            double margin = (rhi - rlo) * 0.5;
-            double elo = std::max(lo, rlo - margin);
-            double ehi = std::min(hi, rhi + margin);
-            double rstep = (ehi - elo) / std::max(1, points_per_region);
+            const double margin = (rhi - rlo) * 0.5;
+            const double elo = std::max(lo, rlo - margin);
+            const double ehi = std::min(hi, rhi + margin);
+            const double rstep = (ehi - elo) / std::max(1, points_per_region);
             for (int i = 0; i <= points_per_region; i++) {
-                double x = elo + i * rstep;
-                double fx = f(x);
+                const double x = elo + i * rstep;
+                const double fx = f(x);
                 if (std::isfinite(fx)) samples.push_back({x, fx});
             }
         }
@@ -2786,10 +2787,10 @@ template<class F>
 
         if (integer_only) {
             // For integers, just check exact values
-            int ia = static_cast<int>(std::round(a));
-            int ib = static_cast<int>(std::round(b));
+            const int ia = static_cast<int>(std::round(a));
+            const int ib = static_cast<int>(std::round(b));
             for (int i = ia; i <= ib; i++) {
-                double fx = f(static_cast<double>(i));
+                const double fx = f(static_cast<double>(i));
                 if (std::abs(fx) < NUMERIC_TOLERANCE) {
                     root = static_cast<double>(i);
                     break;
@@ -2800,7 +2801,7 @@ template<class F>
             root = snap_integer(a);
         } else {
             // Try Newton from midpoint, fallback to bisection
-            double mid = (a + b) / 2.0;
+            const double mid = (a + b) / 2.0;
             root = newton_solve(f, mid, NUMERIC_MAX_ITER, NUMERIC_TOLERANCE, fp_fn);
             if (!root || *root < a - 1.0 || *root > b + 1.0)
                 root = bisection_solve(f, a, b);
@@ -2808,11 +2809,11 @@ template<class F>
 
         if (root) {
             // Post-validate: reject false roots (singularities)
-            double fr = f(*root);
+            const double fr = f(*root);
             if (std::isnan(fr) || std::abs(fr) > NUMERIC_TOLERANCE * 1000) continue;
 
             // Deduplicate
-            bool dup = std::any_of(roots.begin(), roots.end(),
+            const bool dup = std::any_of(roots.begin(), roots.end(),
                 [&root](double r) { return std::abs(r - *root) < EPSILON_ZERO; });
             if (!dup) roots.push_back(*root);
         }

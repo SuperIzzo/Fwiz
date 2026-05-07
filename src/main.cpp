@@ -61,7 +61,7 @@ int main(int argc, const char* argv[]) {
         std::string query_str;
 
         for (int i = 1; i < argc; i++) {
-            std::string arg = argv[i];
+            const std::string arg = argv[i];
             if      (arg == "--steps")        level = TraceLevel::STEPS;
             else if (arg == "--calc")         level = TraceLevel::CALC;
             else if (arg == "--explore")      explore = true;
@@ -125,9 +125,9 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
-        bool has_verify = !verify_arg.empty();
-        bool allow_missing = explore || explore_full || has_verify || derive_mode || fit_mode;
-        bool allow_symbolic = derive_mode || fit_mode;
+        const bool has_verify = !verify_arg.empty();
+        const bool allow_missing = explore || explore_full || has_verify || derive_mode || fit_mode;
+        const bool allow_symbolic = derive_mode || fit_mode;
         auto query = parse_cli_query(query_str, allow_missing, allow_symbolic);
         FormulaSystem sys;
         sys.trace.level = level;
@@ -164,7 +164,7 @@ int main(int argc, const char* argv[]) {
             for (const auto& q : query.queries) {
                 try {
                     std::vector<std::string> helpers;
-                    bool cse_active = cse_threshold >= 1;
+                    const bool cse_active = cse_threshold >= 1;
                     auto results = sys.derive_all(
                         q.variable, query.bindings, query.symbolic,
                         cse_active ? &helpers : nullptr,
@@ -195,7 +195,7 @@ int main(int argc, const char* argv[]) {
                     auto print_if_new = [&](const FormulaSystem::FitOutput& f) {
                         if (derived_eqs.count(q.variable) && derived_eqs[q.variable].count(f.equation))
                             return;
-                        std::string sign = f.exact ? " = " : " ~ ";
+                        const std::string sign = f.exact ? " = " : " ~ ";
                         std::cout << q.alias << sign << f.equation << '\n';
                         std::cerr << "  R² = " << fmt_num(f.r_squared)
                                   << ", max error = " << fmt_num(f.max_error) << '\n';
@@ -213,7 +213,7 @@ int main(int argc, const char* argv[]) {
         // --- Fit mode (without derive) ---
         if (fit_mode) {
             auto print_fit = [](const std::string& alias, const FormulaSystem::FitOutput& f) {
-                std::string sign = f.exact ? " = " : " ~ ";
+                const std::string sign = f.exact ? " = " : " ~ ";
                 std::cout << alias << sign << f.equation << '\n';
                 std::cerr << "  R² = " << fmt_num(f.r_squared)
                           << ", max error = " << fmt_num(f.max_error) << '\n';
@@ -254,7 +254,7 @@ int main(int argc, const char* argv[]) {
 
         // fmt_exact_double allocates Expr nodes into the arena (for constant
         // recognition); require an active Scope around the output section.
-        ExprArena::Scope solve_fmt_scope(sys.arena);
+        const ExprArena::Scope solve_fmt_scope(sys.arena);
 
         // User-defined aliases surface in exact-mode solve output. Populated
         // by `populate_aliases_()` (called from resolve()/resolve_all() entry
@@ -281,7 +281,7 @@ int main(int argc, const char* argv[]) {
                     std::cout << alias << " = " << fmt_solve_result(solved.at(var), !approximate_mode, sys.aliases_) << '\n';
                 } else {
                     try {
-                        double result = sys.resolve(var, query.bindings);
+                        const double result = sys.resolve(var, query.bindings);
                         std::cout << alias << " = " << fmt_solve_result(result, !approximate_mode, sys.aliases_) << '\n';
                         solved[var] = result;
                     } catch (const std::runtime_error&) {
@@ -300,15 +300,15 @@ int main(int argc, const char* argv[]) {
                         return it == sys.numeric_results_.end() || it->second;
                     };
                     if (q.strict) {
-                        double result = sys.resolve_one(q.variable, query.bindings);
-                        bool exact = is_exact_result(q.variable);
+                        const double result = sys.resolve_one(q.variable, query.bindings);
+                        const bool exact = is_exact_result(q.variable);
                         std::cout << q.alias << (exact ? " = " : " ~ ")
                                   << fmt_solve_result(result, exact && !approximate_mode, sys.aliases_) << '\n';
                         solved[q.variable] = result;
                     } else {
                         auto result = sys.resolve_all(q.variable, query.bindings);
                         if (result.is_discrete()) {
-                            bool exact = is_exact_result(q.variable);
+                            const bool exact = is_exact_result(q.variable);
                             for (auto r : result.discrete())
                                 std::cout << q.alias << (exact ? " = " : " ~ ")
                                           << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
@@ -346,7 +346,7 @@ int main(int argc, const char* argv[]) {
                     auto result = sys.resolve_all(dq.alias, query.bindings);
                     if (result.is_discrete()) {
                         auto it = sys.numeric_results_.find(dq.alias);
-                        bool exact = (it == sys.numeric_results_.end()) || it->second;
+                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
                         for (auto r : result.discrete())
                             std::cout << dq.alias << (exact ? " = " : " ~ ")
                                       << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';

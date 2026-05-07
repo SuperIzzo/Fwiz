@@ -7,16 +7,16 @@ public:
     explicit Parser(const std::vector<Token>& tokens) : tok_(tokens), pos_(0) {}
 
     ExprPtr parse_expr() { return additive(); }
-    bool at_end() const { return tok_[pos_].type == TokenType::END; }
+    [[nodiscard]] bool at_end() const { return tok_[pos_].type == TokenType::END; }
 
 private:
     std::vector<Token> tok_;
     size_t pos_;
 
-    const Token& peek() const                { return tok_[pos_]; }
+    [[nodiscard]] const Token& peek() const                { return tok_[pos_]; }
     const Token& advance()                   { return tok_[pos_++]; }
-    bool is(TokenType t) const               { return peek().type == t; }
-    bool is(TokenType a, TokenType b) const  { return is(a) || is(b); }
+    [[nodiscard]] bool is(TokenType t) const               { return peek().type == t; }
+    [[nodiscard]] bool is(TokenType a, TokenType b) const  { return is(a) || is(b); }
 
     void expect(TokenType t, const char* msg) {
         if (!is(t)) throw std::runtime_error(std::string(msg) + " (got '" + peek().text + "')");
@@ -62,12 +62,12 @@ private:
     // primary → NUMBER | IDENT (LPAREN args RPAREN)? | LPAREN expr RPAREN
     ExprPtr primary() {
         if (is(TokenType::NUMBER)) {
-            double v = peek().numval;
+            const double v = peek().numval;
             advance();
             return Expr::Num(v);
         }
         if (is(TokenType::IDENT)) {
-            std::string name = peek().text;
+            const std::string name = peek().text;
             advance();
             if (is(TokenType::LPAREN)) {
                 advance();

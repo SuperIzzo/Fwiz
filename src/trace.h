@@ -9,8 +9,8 @@ class Trace {
 public:
     TraceLevel level = TraceLevel::NONE;
 
-    bool show_steps() const { return level >= TraceLevel::STEPS; }
-    bool show_calc()  const { return level >= TraceLevel::CALC; }
+    [[nodiscard]] bool show_steps() const { return level >= TraceLevel::STEPS; }
+    [[nodiscard]] bool show_calc()  const { return level >= TraceLevel::CALC; }
 
     void step(const std::string& msg, int depth = 0) const {
         if (show_steps()) print(depth, msg);

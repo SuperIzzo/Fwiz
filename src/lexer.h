@@ -68,15 +68,15 @@ private:
     }
 
     Token read_number() {
-        size_t start = pos_;
+        const size_t start = pos_;
         while (pos_ < src_.size() && (is_digit(src_[pos_]) || src_[pos_] == '.'))
             pos_++;
-        std::string text = src_.substr(start, pos_ - start);
+        const std::string text = src_.substr(start, pos_ - start);
         return {TokenType::NUMBER, text, std::stod(text)};
     }
 
     Token read_ident() {
-        size_t start = pos_;
+        const size_t start = pos_;
         while (pos_ < src_.size() && (is_alnum(src_[pos_]) || src_[pos_] == '_'))
             pos_++;
         // Include dots for dotted names (e.g., geometry.rectangle in formula calls)
