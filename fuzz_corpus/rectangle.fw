@@ -1,0 +1,1 @@
+area = width * height

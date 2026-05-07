@@ -94,6 +94,7 @@ When user approves design (or a milestone from master-plan.md), for each item sp
 
 → Conditional protocols that fire during IMPLEMENT (read on demand from `fwiz-orchestrator-protocols.md`):
 - **Pre-flight test-site flagging** — contract-changing migrations (return type, exception shape, `.value()` vs `operator*`).
+- **Pre-flight verification — new-infrastructure cycles** — new build/runtime targets (toolchain check + linkage probe + surface-contract audit + API name verification).
 - **Domain-sensitive test data** — designs specifying numeric test points that may violate domain constraints.
 - **Single-BLOCK recovery** (1× BLOCKED): inline revisit vs critic-visionary respawn.
 - **Diagnostic rounds** (2× BLOCKED): spawn the **debugger** agent, then mini design revisit if findings invalidate an assumption.

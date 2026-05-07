@@ -1,0 +1,21 @@
+# builtin.fw — Built-in function definitions
+# Each section defines: @extern for C++ evaluation, inverse equations for solving,
+# and rewrite rules for simplification.
+
+[sin(x) -> result] @extern sin; x = asin(result)
+[cos(x) -> result] @extern cos; x = acos(result)
+[tan(x) -> result] @extern tan; x = atan(result)
+[asin(x) -> result] @extern asin; x = sin(result)
+[acos(x) -> result] @extern acos; x = cos(result)
+[atan(x) -> result] @extern atan; x = tan(result)
+[log(x) -> result] @extern log; x = e^result
+
+[sqrt(x) -> result]
+@extern sqrt
+x = result^2
+result >= 0
+
+[abs(x) -> result]
+@extern abs
+= x iff x >= 0
+= -x iff x < 0

@@ -314,6 +314,25 @@ All trace output goes to stderr. Controlled by `--steps` and `--calc` flags.
 make test
 ```
 
+### Fuzzing
+
+`src/fuzz_parser.cpp` contains a libFuzzer harness that feeds arbitrary byte sequences through the lexer, parser, and simplifier via `FormulaSystem::load_string()`. The harness swallows `std::runtime_error` (expected on malformed input) but lets any other exception or memory error propagate — a sanitizer hit or crash-file drop is a real bug.
+
+**When to run:** pre-release, and after any change to `lexer.h`, `parser.h`, or `expr.h::simplify`. Not required per-cycle (Clang-only; not part of the standard gate).
+
+**Standard invocation:**
+```bash
+make fuzz
+mkdir -p /tmp/fuzz_run
+./bin/fwiz_fuzz /tmp/fuzz_run fuzz_corpus/ -max_total_time=60
+```
+
+The first positional argument is a writable scratch directory for the runtime queue; the second is the committed seed corpus. Passing only `fuzz_corpus/` as the sole argument causes libFuzzer to write ~1000+ mutated files into the seed directory, polluting the committed corpus.
+
+**Crash protocol:** any `crash-*` file dropped by libFuzzer is a real bug. Capture it, file a Known-Issues entry, and fix before the next release.
+
+**Scope:** lexer + parser + simplifier only. The resolve path is not fuzzed — it requires well-formed bindings and is a separate harness concern.
+
 ### Test structure
 
 All tests are in `src/tests.cpp` with a minimal assertion framework (no external dependencies). Tests are organized into sections:

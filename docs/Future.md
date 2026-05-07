@@ -686,6 +686,14 @@ The T2+T3 M1 fix drops parse-failed rewrite rules at load time with a stderr war
 
 **Reopen trigger:** any clang-only warning or codegen divergence surfaces after a future cycle — i.e. the target has found a real issue in a cycle where it was optional.
 
+## 61. Fuzzer coverage report target
+
+Expand `make fuzz` recipe to produce a coverage profile for `parser.h`, `lexer.h`, and `expr.h::simplify`. Mechanically: add a separate `fuzz-cov` target that builds `bin/fwiz_fuzz_cov` with `-fprofile-instr-generate -fcoverage-mapping`, replays `fuzz_corpus/` through it, then runs `llvm-profdata merge` + `llvm-cov report --include parser.h` to emit a per-function branch-coverage table. Currently deferred — the 60-second blind run hits 1907+ unique features without targeted coverage tracking, and the extra Makefile and tooling complexity exceeds the SHIP-DESIRABLE threshold. Reopen trigger: a parser regression slips past the per-cycle gate AND was not caught by the fuzzer's blind exploration.
+
+## 62. `analyze-fast` cppcheck scope expansion
+
+The per-cycle gate hard-codes `src/main.cpp src/tests.cpp` and silently excludes `src/fuzz_parser.cpp`. Currently harmless — the harness body is a single try/catch, yielding zero cppcheck findings. Reopen trigger: when the harness grows beyond a single entry point (e.g. a separate solver-fuzzer harness or corpus-extraction script), add those files to the cppcheck invocation.
+
 ## 59. Periodic C1 follow-up (`misc-const-correctness`) — RESOLVED 2026-05-07
 
 Cycle 7.5 drove the `misc-const-correctness` + `modernize-use-nodiscard` baseline to 0 via a one-shot `clang-tidy --fix` pass over the full codebase (245 findings fixed; 7 files, +251/-245 LOC). Local-variable `const` is now enforced by clang-tidy rather than being aspirational. Future `make analyze-full` runs start from a clean baseline; any new findings will surface incrementally at the next batch run.

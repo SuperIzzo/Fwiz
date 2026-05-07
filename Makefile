@@ -46,10 +46,20 @@ ubsan: src/tests.cpp $(HEADERS) | bin
 sanitize: asan ubsan
 	@echo "All sanitizer checks passed."
 
+# --- Fuzzing ---
+# libFuzzer harness for the lexer + parser + simplifier pipeline. Clang-only
+# (libFuzzer is a Clang/LLVM feature). NOT in the default `all` target —
+# fuzzing is a pre-release / parser-change check, not a per-cycle gate.
+# Usage: `make fuzz && ./bin/fwiz_fuzz fuzz_corpus/ -max_total_time=60`
+fuzz: src/fuzz_parser.cpp $(HEADERS) | bin
+	$(CXX_CLANG) -std=c++17 -O1 -g -fsanitize=address,fuzzer \
+		-fno-omit-frame-pointer \
+		-o bin/fwiz_fuzz src/fuzz_parser.cpp
+
 # --- Static analysis ---
 # Tiered oracles. Per-cycle gate: `make analyze-fast` (cppcheck, ~1-2 min).
 # User-triggered batch (run during PC idle windows): `make analyze-full`
-# (clang-tidy, ~1-2h on this header-heavy codebase). `make analyze` runs both.
+# (clang-tidy, ~10s post-2026-05-07 hang fix). `make analyze` runs both.
 
 # tests.cpp uses inline test loops where readability is local; file-level skip
 # for syntaxError / containerOutOfBounds / useStlAlgorithm — same pattern.
@@ -94,4 +104,4 @@ bin:
 	mkdir -p bin
 
 clean:
-	rm -f $(TARGET) $(TEST) bin/fwiz_asan bin/fwiz_ubsan bin/fwiz_clang_tests
+	rm -f $(TARGET) $(TEST) bin/fwiz_asan bin/fwiz_ubsan bin/fwiz_clang_tests bin/fwiz_fuzz

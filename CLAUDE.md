@@ -16,6 +16,7 @@ make test-clang   # optional: rebuild + run tests under clang++ (soft-skip if no
 make analyze-fast # cppcheck only (~1-2 min, per-cycle gate)
 make analyze-full # clang-tidy (~10s after 2026-05-07 hang fix; was hung indefinitely before)
 make analyze      # both tiers (analyze-fast + analyze-full)
+make fuzz         # libFuzzer harness for parser; Clang-only; pre-release / post-parser-change check
 ```
 
 Run: `./bin/fwiz [flags] <file>(<var>=?, <var>=?!, <var>=<value>, <var>=<expr>, ...)`
