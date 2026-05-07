@@ -2,7 +2,7 @@
 
 This file holds decision protocols that fire on specific triggers, not every cycle. The orchestrator reads it on demand from `fwiz-orchestrator.md`. Each section names its trigger; if the trigger does not apply this cycle, the section is irrelevant.
 
-Sibling files: `fwiz-orchestrator.md` (core), `fwiz-orchestrator-ops.md` (background tasks, artifact lifecycle, oracle policy).
+Sibling files: `fwiz-orchestrator.md` (core), `fwiz-orchestrator-ops.md` (background tasks, artifact lifecycle, oracle policy), `fwiz-orchestrator-preflight.md` (pre-flight checks before implementer spawn — toolchain probes, test-site flagging, domain-constraint scans).
 
 ---
 
@@ -53,31 +53,21 @@ If ANY heuristic threshold is being picked (`max_den=12`, `|p| ≤ 12`, power-of
 
 Trigger: user's brief explicitly invokes a per-cycle execution slug from a multi-cycle audit roadmap or master plan (e.g. "Run Cycle N from `.fwiz-workflow/design-X-cycles.md`"), AND the referenced brief contains the standard precision fields (target delta, exact sites, skip list, per-category acceptance, lock mechanism, verification command, LOC delta, reopen trigger, Stop-and-Ship Criteria).
 
-Skip RESEARCH and DESIGN cleanly and go directly to IMPLEMENT. This is the legitimate Phase 2B execution path — design was already done at master-plan time. Required logging: at CYCLE START, an explicit "Phase plan: RESEARCH skip — design brief IS the research; DESIGN skip — already written at lines L–M of design-file" entry. If any of the standard precision fields is missing OR the brief invents a new architectural surface (new primitive, new threshold, new abstraction), do NOT skip — fall back to full RESEARCH/DESIGN. Canonical: Cycles 1 and 2 of the C++ Best Practices Audit 2026-05-05 — both ran clean as master-plan execution, ~75 min and ~80 min wall-clock respectively, zero design-loaded surprises; the brief's precision fully substituted for fresh design rounds.
+Skip RESEARCH and DESIGN cleanly and go directly to IMPLEMENT. This is the legitimate Phase 2B execution path — design was already done at master-plan time. Required logging: at CYCLE START, an explicit "Phase plan: RESEARCH skip — design brief IS the research; DESIGN skip — already written at lines L–M of design-file" entry. If any of the standard precision fields is missing OR the brief invents a new architectural surface (new primitive, new threshold, new abstraction), do NOT skip — fall back to full RESEARCH/DESIGN. Canonical: Cycles 1 and 2 of the C++ Best Practices Audit 2026-05-05 — both ran clean as master-plan execution, ~75 min and ~80 min wall-clock respectively, zero design-loaded surprises; the brief's precision fully substituted for fresh design rounds. **Validated end-to-end**: 9 ships of the C++ Best Practices Audit (Cycles 1–7, 7.5, 8) under master-plan execution — 0/11 cumulative implementer block rate, 0 design revisits, ~35–80 min wall-clock per cycle.
 
 **Pre-planned bundle-in for cleanup cycles**: when ≥ 3 reviewer-flagged carry-overs accumulate (across prior cycles' "Carried over" sections) AND the next cycle's primary scope already touches the carry-over target files, prefer pre-planned bundling over per-item micro-cycles. Append a "Bundle-in carry-overs from prior cycles" section to the design brief at orchestrator decision time, listing each item with file:line, mechanical-shape note, and net-LOC estimate. Implementer sequences (a) primary scope first (RGR), (b) bundle items as cleanup steps after primary green, (c) one final gate across the whole bundle. Bundle items must be mechanical (split, rename, dead-code, comment) — anything requiring fresh design judgment falls back to its own micro-cycle. Validates: Cycle 6 C1+C2 bundled 4 carry-overs (Cycles 2/4/5 origins) cleanly, +3 net LOC, zero process churn, single implementer spawn vs 4 micro-cycles.
 
-**Pre-flight verification — new-infrastructure cycles**: when the cycle introduces NEW build/runtime infrastructure (a new binary target, a new harness, a new toolchain entry point), run an orchestrator-side pre-flight BEFORE spawning the implementer. Four checks: (a) **Toolchain availability** — the required compiler/linker/library is on `$PATH` and produces the expected version; (b) **Linkage probe** — a one-liner `clang++ ... -o /tmp/dummy.x` (or equivalent) that confirms the new sanitizer/runtime/library link-step works (e.g. `-fsanitize=fuzzer` finds `libclang_rt.fuzzer-*.a` — link-test produces the *expected* symbol error, not an unexpected toolchain error); (c) **Surface-contract audit** — grep the existing source for behaviors the new harness assumes (e.g. parser uses `exit()`/`assert()`? throws? prints to stderr?); (d) **API name verification** — for every API the design brief names, grep the actual source for the symbol (the design's `load_from_string` was actually `load_string`). The pre-flight runs at CYCLE START, AFTER the 4-field check and BEFORE implementer spawn; findings are appended to the implementer brief as corrections (not deferred to BLOCKED reports). Validates: Cycle 8 T7 libFuzzer harness 2026-05-07 — 4-check pre-flight caught the `load_from_string` → `load_string` API mismatch in the design brief; implementer ran 0-block on the corrected brief. Without the pre-flight the implementer would have hit the typo at compile time and spent a self-fix round on it. Single canonical-positive instance — encoded because procedural (sequencing + checklist, not anecdotal), and the pattern is the analog of `Pre-flight test-site flagging` for contract-changing migrations.
+**Pre-flight verification — new-infrastructure cycles**: when the cycle introduces new build/runtime infrastructure (binary target, harness, toolchain entry point), run an orchestrator-side 4-check pre-flight BEFORE implementer spawn. → see `fwiz-orchestrator-preflight.md` §Pre-flight verification.
 
 ---
 
 ## Implementer-coordination protocols
 
-### Pre-flight test-site flagging
+### Pre-flight test-site flagging — contract-changing migrations
 
-Trigger: spawning the implementer for a contract-changing migration (return type, exception shape, `.value()` vs `operator*`, etc.).
-
-Scan `src/tests.cpp` for sites whose assertion style depends on the OLD contract — tests catching `std::bad_optional_access`, relying on `operator*` throwing vs. `.value()` asserting, checking `std::isnan` via `*opt`. List these sites in the implementer brief with the exact rewrite. Without this, the implementer wastes a cycle on "harness mismatch or real bug?" (Validated: Checked<T> cycle — see `7095f95`, `e65e1fe`.)
+Trigger: spawning the implementer for a contract-changing migration (return type, exception shape, `.value()` vs `operator*`, etc.). → see `fwiz-orchestrator-preflight.md` §Pre-flight test-site flagging + §Domain-sensitive test data.
 
 Note: contract-changing migrations also require the critic-accepted/rejected items list to be echoed into `review-notes*.md` so the reviewer validates design fidelity (did the implementation honor each decision?), not just code quality.
-
-### Domain-sensitive test data
-
-Trigger: design specifies numeric test points (fingerprint probes, property-based sampling, numeric-solver seeds).
-
-Scan the user's reproducer for implicit domain constraints BEFORE the design is locked: triangle inequalities, positivity, monotonicity, branch-cut regions, unit-box constraints. If the design's test-point formula is a generic scheme (prime cycling, uniform sampling), spot-check it against the reproducer's bindings on paper — do two or three points land in-domain?
-
-When implementer reports BLOCKED with "all candidates NaN / domain-violating at test points" as the failure pattern, the fix is a test-data change, NOT a dedup / algorithm change. Orchestrator self-fix is appropriate here even if the delta is >5 LOC, because the change is a constant-choice correction under a design invariant the domain-scan should have caught. Log the miss so the next cycle's DESIGN phase can spot it earlier. Canonical miss: derive-dedup cycle M3-6 — multiplicative prime scheme (b=10,c=6) violated triangle inequality at a=4; self-fix switched to per-variable cycling (b=2,c=3), ~5 LOC, mechanical once the domain constraint surfaced, but required triangle-inequality judgment to notice.
 
 ---
 

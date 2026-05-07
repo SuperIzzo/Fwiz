@@ -67,6 +67,7 @@ Look across cycles for recurring issues:
 - **Redundant processes**: multiple agents running the same expensive command → deduplicate
 - **Ignored recommendations**: your previous recommendations weren't applied → escalate to user
 - **Context inflation**: artifact sizes growing cycle over cycle → need compression
+- **Anti-rubber-stamp dormancy** (the meta-reviewer's analog of the rubber-stamp critic): pre-escalation recommendations that have ridden 3+ consecutive meta-reviews without action become **dormant** — stop re-surfacing until either a NEW surface-shape appears (different failure mode/agent/context) OR the user explicitly re-raises. 3 un-acted recommendations is itself information; re-emitting the same item every cycle degrades signal-to-noise. Log "DORMANT" once instead of re-listing. Canonical: untrusted-content harness leakage dormanted Cycle 8 after 4 cycles / 11+ surfaces.
 
 ### 8. Apply Fixes
 
