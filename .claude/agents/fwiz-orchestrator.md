@@ -129,7 +129,7 @@ After PLAN-NEXT, spawn **meta-reviewer** to audit the workflow itself. **NOT opt
 ## Quality Bar — TL;DR
 
 - **Per-cycle gate (mandatory)**: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). Every cycle.
-- **Periodic full oracle (user-triggered)**: `make analyze-full` (clang-tidy — ~1-2h). User runs during PC idle windows. Orchestrator tracks debt and surfaces gently in `next-priorities.md`; when the batch runs, orchestrator audits residuals against the cumulative diff since last green.
+- **Periodic full oracle (user-triggered)**: `make analyze-full` (clang-tidy — **~10 s post-2026-05-07 hang fix**; was hanging indefinitely on `bugprone-exception-escape` before that). User runs whenever convenient. Orchestrator tracks "cycles since last run" in `next-priorities.md`; when the batch runs, orchestrator audits residuals against the cumulative diff since last green. **Cross-cycle escalation**: if a user-triggered tool is "pending" for 3+ cycles with 0 successful runs, escalate to debugger-agent diagnostic instead of re-recommending.
 - **Grep policy**: exit code 0 only means the tool ran — NOT warning-free. MUST grep `warning:` / `error:` / `style:` / `performance:` and report delta.
 
 → Full grep policy, oracle rationale, and bridge-task procedure: `fwiz-orchestrator-ops.md` §Quality Bar.

@@ -67,11 +67,22 @@ analyze-fast:
 	) || echo "cppcheck not installed, skipping"
 	@echo "Fast static analysis complete (cppcheck)."
 
+# Excludes:
+# -bugprone-easily-swappable-parameters: noisy, low signal on this codebase.
+# -bugprone-exception-escape: hangs indefinitely on header-heavy TUs (whole-
+#   call-graph noexcept analysis explodes on inlined templates). Documented
+#   pre-2026-05-07 hang bisection in `.fwiz-workflow/debug-analyze-full-hang.md`.
+# -bugprone-unchecked-optional-access: known LLVM regression hang since
+#   clang-16 (LLVM issues #55530, #69298). Defensive exclude — not directly
+#   observed hanging on this codebase but the dataflow engine is the same one
+#   that broke on bugprone-exception-escape, so we pre-empt.
+# -performance-inefficient-string-concatenation: stylistic; we prefer + over
+#   stringstream for simple cases.
 analyze-full:
 	@which clang-tidy > /dev/null 2>&1 && ( \
 		echo "=== clang-tidy ===" && \
 		clang-tidy src/main.cpp \
-			--checks='bugprone-*,performance-*,clang-analyzer-*,modernize-use-nodiscard,misc-const-correctness,-bugprone-easily-swappable-parameters,-performance-inefficient-string-concatenation' \
+			--checks='bugprone-*,performance-*,clang-analyzer-*,modernize-use-nodiscard,misc-const-correctness,-bugprone-easily-swappable-parameters,-bugprone-exception-escape,-bugprone-unchecked-optional-access,-performance-inefficient-string-concatenation' \
 			-- -std=c++17 -I src 2>&1 \
 	) || echo "clang-tidy not installed, skipping"
 	@echo "Full static analysis complete (clang-tidy)."

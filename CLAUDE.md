@@ -14,7 +14,7 @@ make test         # run all tests (2307+)
 make sanitize     # ASan + UBSan
 make test-clang   # optional: rebuild + run tests under clang++ (soft-skip if not on PATH)
 make analyze-fast # cppcheck only (~1-2 min, per-cycle gate)
-make analyze-full # clang-tidy (~1-2h, USER-triggered batch on idle PC)
+make analyze-full # clang-tidy (~10s after 2026-05-07 hang fix; was hung indefinitely before)
 make analyze      # both tiers (analyze-fast + analyze-full)
 ```
 
@@ -159,7 +159,7 @@ Read `docs/Developer.md` for the full guide. Summary:
 - **Data-driven** — BinOp table, builtin registry, strategy enumeration
 - **No empty catch blocks** — return, log, or handle
 - **Write failing tests first**, commit tests before refactoring
-- `make test && make sanitize && make analyze-fast` must pass before committing. `make analyze-full` (clang-tidy, ~1-2h) is a user-triggered batch on idle PC — see Quality bar below.
+- `make test && make sanitize && make analyze-fast` must pass before committing. `make analyze-full` (clang-tidy, ~10s post-fix) is a user-triggered batch — see Quality bar below.
 
 ## Orchestrated Development Workflow
 
@@ -177,7 +177,7 @@ USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → re
 
 **Quality bar (tiered oracle)**:
 - **Per-cycle gate**: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). Must pass before cycle close.
-- **User-triggered batch**: `make analyze-full` (clang-tidy — ~1-2h on this header-heavy codebase). User runs during PC idle windows (overnight, before work). Orchestrator tracks debt across cycles and surfaces "N cycles since last clang-tidy" gently at cycle close — no hard-stop, no 3-strike escalation. When user runs the batch, orchestrator audits residuals against the cumulative diff since last green clang-tidy baseline.
+- **User-triggered batch**: `make analyze-full` (clang-tidy — **~10 s** post-fix). Earlier framing claimed "1-2 h on this header-heavy codebase"; that was a fiction — the tool was hanging indefinitely on `bugprone-exception-escape` for ~9 cycles, never producing output. The 2026-05-07 hang fix excluded `bugprone-exception-escape` and `bugprone-unchecked-optional-access` (a known LLVM regression hang); the bisection lives in `.fwiz-workflow/debug-analyze-full-hang.md`. Orchestrator tracks "N cycles since last clang-tidy" and audits residuals against the cumulative diff since last green baseline. **Escalation rule**: if a user-triggered tool is "pending" for 3+ cycles with zero successful runs, do not keep recommending it — escalate to a debugger-agent diagnostic instead.
 - **Periodic**: data locality / disassembly audits on hot paths (perf-auditor agent).
 
 **Core principle**: least code, least features, maximum flexibility, tiny fast core, infinite extendability via .fw rules.
