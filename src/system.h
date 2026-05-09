@@ -578,6 +578,17 @@ public:
     [[nodiscard]] bool is_active_builtin(const std::string& name) const {
         auto& consts = builtin_constants();
         if (!consts.count(name)) return false;
+        // Skip NaN-valued builtin constants (e.g. `i`): they have no real numeric
+        // value and must not be auto-bound by the resolver. The pattern matcher
+        // still treats them as literal-match constants via builtin_constants().count(name)
+        // — that path does not consult is_active_builtin.
+        //
+        // Note: this guard closes the auto-binding side-channel for NaN-valued
+        // builtin constants. The deeper `flatten_additive` NaN-propagation bug
+        // (Future.md #13c) remains; it is unreachable from user-facing input
+        // *while `i` is the only NaN-bound constant*. A second NaN-valued
+        // builtin (e.g. complex infinity) would require fixing #13c first.
+        if (std::isnan(consts.at(name))) return false;
         if (defaults.count(name)) return false;
         return std::none_of(equations.begin(), equations.end(),
             [&name](const Equation& eq) { return eq.lhs_var == name; });
@@ -643,6 +654,12 @@ x / (1 / y) = x * y iff y != 0
 x^0 = 1
 x^1 = x
 x^(1/2) = sqrt(x)
+# Complex identity i^2 = -1 — both forms because the simplifier
+# canonicalizes MUL(i,i) → POW(i,2) during multiplicative flattening,
+# so the post-flatten POW form is what fires on `i*i`. The pre-flatten
+# MUL form is defensive (catches paths that bypass flatten).
+i * i = -1
+i ^ 2 = -1
 (x^a)^b = x^(a*b)
 x^a / x^b = x^(a - b) iff x != 0
 abs(x) / x = sign(x) iff x != 0

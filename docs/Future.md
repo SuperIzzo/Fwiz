@@ -133,7 +133,9 @@ Core landed; see COMPLETED.md #10.
 
 - Rational propagation in `evaluate()` for exact intermediate results
 
-## 10a. Extending `evaluate_symbolic` for new number types
+## 10a. Extending `evaluate_symbolic` for new number types — PARTIAL (first vertical shipped 2026-05-09)
+
+**Shipped (Cycle A):** `i` as a builtin constant with NaN binding; `i*i=-1` and `i^2=-1` rewrite rules; `is_active_builtin` NaN-skip preventing silent real-valued resolution. The rewrite-rule route (step 1 of the complex checklist below) is the approach taken — no `ExprType::COMPLEX` leaf, no bindings-map promotion. Deferred items: `ExprType::COMPLEX` leaf, `evaluate_symbolic` complex dispatch, complex `expr_to_string`, `sqrt(-1)=i` rule, simplifier-side rational migrations.
 
 `expr.h` now has two evaluators in sibling roles:
 
@@ -224,11 +226,46 @@ M3-6 test (5 branch-distinguishing points) exposed that `derive_all`'s 3-point S
 
 M1's branch-multiplicity cascade grew triangle `--derive --cse` output 158 → 649 lines (4×); loading and re-solving the 654-line `.fw` exceeds 60s wall-clock. The CSE-I3 test now wraps popen with `timeout 10` and accepts either correctness or timeout. Investigation needed: is the bottleneck parsing, simplify, `enumerate_candidates` explosion, or numeric solver re-entrance? Reopen trigger: user reports slow roundtrip on `--derive --cse` output, or any sufficiently-large `.fw` file load exceeds 10s.
 
-## 13. Complex / Imaginary Numbers
+## 13. Complex / Imaginary Numbers — PARTIAL (2026-05-09)
 
-Support `i` as a builtin constant. Complex arithmetic in the expression tree — enables solving polynomials with no real roots, AC circuit analysis, signal processing. Structural representation as `a + b*i` pairs, similar to how rationals use structural fractions.
+**Shipped (Cycle A, 2026-05-09):**
+- `i` registered as a Fwiz-wide builtin constant with quiet-NaN binding in `builtin_constants()` (`src/expr.h`). Pattern-matcher literal-match guard (`src/expr.h:838`) prevents `i` from acting as a wildcard.
+- `evaluate()` on any `i`-containing expression returns empty `Checked<double>{}` — no new code path; the NaN-as-empty contract in `Checked<double>` covers it automatically.
+- Two rewrite rules added to `BUILTIN_REWRITE_RULES` (`src/system.h`): `i * i = -1` (defensive) and `i ^ 2 = -1` (fires after multiplicative flattening canonicalizes `i*i` → `i^2`).
+- `is_active_builtin` extended with a `std::isnan` guard: NaN-valued builtin constants are never auto-bound in the resolver's fast-path, so `y = 2*i; y=?` correctly returns "Cannot solve" rather than silently evaluating to a wrong real result (regression caught at REVIEW phase, fix shipped same day).
+
+**Still open — reopen triggers:**
+- `(1+i)*(1-i) == 2`: requires MUL-over-ADD distribution in the simplifier (see Future.md #13a below).
+- `i^4 == 1`: requires power-cascade for POW on builtin constants (see Future.md #13b below).
+- `sqrt(-1) = i`: requires rule-parser support for negative-literal LHS patterns.
+- `resolve_all` returning `i`-containing forms for `x^2+1=0`: depends on the `sqrt(-1)=i` rule landing first.
+- `ExprType::COMPLEX` leaf, bindings-map promotion, simplifier-side migrations: see #10a.
 
 Implementation plan and extension point: see **#10a — Extending `evaluate_symbolic` for new number types** (Complex numbers checklist).
+
+## 13a. MUL-over-ADD distribution for cascading complex rule firing
+
+`(1+i)*(1-i)` does not simplify to `2` because the simplifier has no general MUL-over-ADD distribution step. When a MUL child is an ADD, distributing it would expose inner sub-expressions that match existing rules (e.g. `i * i = -1`). The general form is: `a*(b+c) → a*b + a*c` when at least one of `a*b` or `a*c` is rule-reducible. This is a structural simplifier extension, not a new rule; it belongs in the flattening/distribution layer of `expr.h`. Per "simplification over filtration" — a MUL-distribution step would benefit every structural expression, not just complex ones.
+
+**Reopen trigger:** 2+ users report expressions of shape `(A+B)*(A-B)` not collapsing to `A^2 - B^2`, where `B` is a symbol with a known square rule (e.g. `i`).
+
+## 13b. Power-cascade for builtin constants (`i^N` for N ≥ 4)
+
+`i^4` does not simplify to `1` because there is no intermediate `(i^2)^2` form — the simplifier sees `POW(i, 4)` directly and no rule matches `i^4`. Adding individual rules `i^3 = -i`, `i^4 = 1` covers the base cases; a general `(x^a)^b = x^(a*b)` rule paired with `i^2 = -1` would cover all `i^N`. Today: only `i^2 = -1` and `i^1 = i` (identity) are in `BUILTIN_REWRITE_RULES`.
+
+**Reopen trigger:** user reports `i^N` for N ≥ 3 not simplifying, or a complex-polynomial reproducer produces non-simplified `i^4` forms in `--derive` output.
+
+## 13c. `flatten_additive` NaN-propagation (pre-existing simplifier bug)
+
+`flatten_additive` (`src/expr.h:1894-1937`) silently drops `Num(NaN)` terms: the integer-value guard at line 1903 is `false` for NaN (by IEEE 754), so the constant accumulator receives `NaN`; the emit guard at line 1935 (`std::abs(constant) >= EPSILON_ZERO`) is also `false` for NaN — so the accumulated NaN is dropped entirely, not propagated. Pre-Cycle-A this was unreachable from user input. Post-Cycle-A, `i` is the only NaN-valued builtin, and its resolver fast-path is now closed by the `is_active_builtin` NaN-skip. The bug remains latent: if any future builtin constant (or user-defined constant) carries a NaN value and reaches `flatten_additive`, the additive identity `1 + nan → 1` silently loses the NaN term instead of producing NaN. Companion bug exists in `flatten_multiplicative`.
+
+**Reopen trigger:** a second NaN-valued builtin constant is added (e.g. a symbolic infinity, an indeterminate form), OR a user demonstrates that `i` reaches `flatten_additive` via an unanticipated path that bypasses the `is_active_builtin` guard.
+
+## 13d. `defaults`-as-query-target limitation (pre-existing, not M2-specific)
+
+A `.fw` line of the form `x = 42` (literal RHS, no free variables) populates `defaults`, not `equations`. Querying that variable directly — `x=?` in an otherwise-empty system — fails with "No equation found for 'x'" because the solver searches `equations`, not `defaults`. This applies to all default variables (dotted or not). Users typically query equations that *consume* defaults, so this rarely surfaces. It is not a regression from M2; M2's test suite documented it as a pre-existing limitation.
+
+**Reopen trigger:** a user explicitly reports `mass=?` on `mass = 1500` failing as a usability issue, suggesting that querying a pure-default as a solve target should be supported.
 
 ## 14. Vectors, Quaternions, and Matrix Math
 
@@ -236,9 +273,11 @@ Vector literals (`[1, 2, 3]`), dot product, cross product, magnitude. Quaternion
 
 Implementation plan and extension point: see **#10a — Extending `evaluate_symbolic` for new number types** (Matrices / vectors checklist).
 
-## 15. Structs / Dot Access
+## 15. Structs / Dot Access — DONE (flat-naming approach, 2026-05-09)
 
-Hierarchical variable namespacing: `car.velocity.x`, `beam.load.max`. Enables modeling complex systems with nested properties. Could be syntactic sugar over flattened variable names (`car_velocity_x`) or a real structural feature.
+Dotted identifiers like `car.velocity.x` work end-to-end as flat variable names. The lexer (`src/lexer.h:82-89`) tokenizes `IDENT.IDENT.IDENT` as a single `IDENT` token; no other pipeline stage needed changes. Confirmed via `test_struct_dotnames` (9 assertions: round-trip, `collect_vars`, defaults storage + downstream consumption, dotted names in conditions, Pythagoras example). See Developer.md `### Dotted variable names` for the full characterization.
+
+**Real `ExprType::STRUCT` / `DOT_ACCESS` node (deferred):** required only for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution. Reopen trigger: a user demonstrates a concrete need that flat naming cannot express (e.g. iterating all fields of a struct, or enforcing that two variables share the same dotted prefix).
 
 ## 16. Integrals and Differentials
 

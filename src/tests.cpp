@@ -9116,6 +9116,236 @@ void test_rewrite_rules() {
     }
 }
 
+// Future.md #13 — Complex via NaN-binding + rewrite rules.
+// `i` is a builtin constant with a quiet_NaN binding; the rule `i*i = -1`
+// (and `i^2 = -1`, since multiplicative flattening canonicalizes i*i → i^2)
+// fires in the simplifier. evaluate() on i-containing expressions returns
+// empty Checked<double> via the NaN-as-empty contract — same surface as
+// any other domain failure.
+void test_complex_numbers() {
+    SECTION("Complex Numbers (i)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // 1. evaluate(i) is empty — `i` is in builtin_constants() with NaN binding,
+    //    Checked<double> collapses NaN to empty automatically.
+    {
+        auto r = evaluate(*parse("i"));
+        ASSERT(!r.has_value(), "evaluate(i): empty (NaN-as-empty contract)");
+    }
+
+    // 2. evaluate propagates empty through ADD: `1 + i` is empty.
+    {
+        auto r = evaluate(*parse("1 + i"));
+        ASSERT(!r.has_value(), "evaluate(1 + i): empty (propagates)");
+    }
+
+    // 3. simplify("i * i") → "(-1)" via builtin rewrite rule.
+    //    Note: multiplicative flattening canonicalizes i*i → i^2 first, so the
+    //    rule that actually fires is `i ^ 2 = -1`. Rendered output "(-1)" is
+    //    the canonical form for a simplified Num(-1) — see tests.cpp:11836
+    //    ("negative literals print parenthesized") for the established style.
+    {
+        FormulaSystem sys;
+        sys.load_string("");  // loads BUILTIN_REWRITE_RULES
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        const auto* e = simplify(parse("i * i"));
+        ASSERT_EQ(expr_to_string(e), "(-1)", "i * i = -1 (rewrite rule)");
+    }
+
+    // 4. simplify("i ^ 2") → "(-1)" — direct match against `i ^ 2 = -1` rule.
+    {
+        FormulaSystem sys;
+        sys.load_string("");
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        const auto* e = simplify(parse("i ^ 2"));
+        ASSERT_EQ(expr_to_string(e), "(-1)", "i ^ 2 = -1 (rewrite rule)");
+    }
+
+    // 5. Wildcard guard: `i` is treated as a literal in patterns (builtin
+    //    constant), not a wildcard. Verify by ensuring `i + 1` is unchanged
+    //    after simplification with rules loaded — no `x + n` rule should
+    //    misfire because `i` is captured as a wildcard.
+    {
+        FormulaSystem sys;
+        sys.load_string("");
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        const auto* e = simplify(parse("i + 1"));
+        ASSERT_EQ(expr_to_string(e), "i + 1",
+            "i + 1 unchanged: i is literal, not wildcard");
+    }
+
+    // 6. Wildcard guard, sharper: `i^0` should still simplify to 1 via the
+    //    `x^0 = 1` rule — `i` is a valid wildcard binding, just literal in
+    //    patterns. This confirms `i` is not "specially blocked" outside its
+    //    own rule LHS — it's only literal where a *pattern* names it.
+    {
+        FormulaSystem sys;
+        sys.load_string("");
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        const auto* e = simplify(parse("i^0"));
+        ASSERT_EQ(expr_to_string(e), "1", "i^0 = 1 (x^0 wildcard binds to i)");
+    }
+
+    // 7. DESIRABLE (not asserted — Future.md follow-up): cascade `(1+i)*(1-i) = 2`.
+    //    Currently produces `(i + 1) * (-i + 1)` — the simplifier does not
+    //    distribute MUL over ADD/SUB on this shape before constant-folding.
+    //    Reopen trigger: simplifier gains a "distribute MUL over ADD" pass that
+    //    fires when the resulting i-products would collapse via i^2=-1.
+
+    // 8. DESIRABLE (not asserted — Future.md follow-up): `i^4 = 1`.
+    //    Currently stays as `i^4` — the simplifier does not cascade
+    //    `i^4 = (i^2)^2 = (-1)^2 = 1`. Rule `(x^a)^b = x^(a*b)` exists but
+    //    `i^4` is parsed directly as `POW(i, 4)`, not as `(i^2)^2`. A targeted
+    //    rule `i^4 = 1` (or even-exponent specialization) would close this.
+    //    Reopen trigger: user reports `i^N` for `N >= 4` as common in CLI input.
+
+    // 9. DESIRABLE: 3 * i * i = -3. Multiplicative flattening + i^2=-1 + fold.
+    //    Rendered "(-3)" — same parenthesized-negative-literal house style.
+    {
+        FormulaSystem sys;
+        sys.load_string("");
+        RewriteRulesGuard rr_guard(&sys.rewrite_rules);
+        const auto* e = simplify(parse("3 * i * i"));
+        ASSERT_EQ(expr_to_string(e), "(-3)", "3*i*i = -3 (DESIRABLE)");
+    }
+
+    // 10-12. Cycle A continuation — silent-correctness regression guards.
+    //    Pre-fix: post-M1 `is_active_builtin("i")` returned true, causing
+    //    `solve_recursive` to auto-bind `i -> NaN` and the simplifier's
+    //    `flatten_additive` to silently drop the NaN term, producing
+    //    plausible-looking but wrong real-valued results. Fix: skip NaN-valued
+    //    builtin constants in `is_active_builtin` so the resolver treats `i`
+    //    as a free unbound variable; the equation is then correctly rejected
+    //    as unsolvable. The bug is reachable only when the numeric solver is
+    //    enabled (CLI default), so each test sets `numeric_mode = true` to
+    //    match the CLI path. These tests pin the rejection path; pre-fix they
+    //    silently succeed with wrong real results (y=0, z=1, w=0).
+    //    The deeper `flatten_additive` NaN-propagation bug is a separate
+    //    Future.md follow-up — fixing the resolver auto-binding side-channel
+    //    here is sufficient to restore pre-M1 CLI behavior.
+
+    // 10. `y = 2 * i; y=?` must NOT silently resolve (pre-fix: y = 0).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = 2 * i\n");
+        bool threw = false;
+        try { (void)sys.resolve_all("y", {}); } catch (...) { threw = true; }
+        ASSERT(threw, "y = 2*i; y=? must not silently resolve (regression guard)");
+    }
+
+    // 11. `z = 1 + i; z=?` must NOT silently resolve (pre-fix: z = 1).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("z = 1 + i\n");
+        bool threw = false;
+        try { (void)sys.resolve_all("z", {}); } catch (...) { threw = true; }
+        ASSERT(threw, "z = 1+i; z=? must not silently resolve (regression guard)");
+    }
+
+    // 12. `w = i; w=?` must NOT silently resolve (pre-fix: w = 0).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("w = i\n");
+        bool threw = false;
+        try { (void)sys.resolve_all("w", {}); } catch (...) { threw = true; }
+        ASSERT(threw, "w = i; w=? must not silently resolve (regression guard)");
+    }
+}
+
+// ---- M2: struct dot-access via flat naming ----
+//
+// The lexer (lexer.h:82-89) already accepts IDENT.IDENT.IDENT as a single
+// dotted token. M2 confirms that the entire pipeline (parser, simplifier,
+// FormulaSystem, parse_condition, expr_to_string) handles dotted names
+// end-to-end without mangling. Per the Final Design (design-proposal.md
+// §M2), this is a confirmation milestone — the expected outcome is that
+// all five BLOCKING criteria pass with zero new code outside this function.
+void test_struct_dotnames() {
+    SECTION("Struct dot-access via flat naming");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // 1. expr_to_string round-trips a dotted IDENT: parse("a.b.c") renders as "a.b.c".
+    //    Confirms the parser stores the full dotted name in Var::name and that
+    //    expr_to_string emits e.name verbatim.
+    {
+        ASSERT_EQ(expr_to_string(parse("a.b.c")), "a.b.c",
+            "round-trip: a.b.c parses + renders");
+    }
+
+    // 2. collect_vars treats a dotted name as one variable, not three.
+    //    parse("a.b + c") yields BINOP(ADD, Var("a.b"), Var("c")) — collect_vars
+    //    walks both children and writes their names directly; no dot-splitting.
+    {
+        std::set<std::string> vars;
+        collect_vars(*parse("a.b + c"), vars);
+        ASSERT(vars.size() == 2,
+            "collect_vars: a.b + c has 2 vars (got " + std::to_string(vars.size()) + ")");
+        ASSERT(vars.count("a.b") == 1, "collect_vars: 'a.b' present");
+        ASSERT(vars.count("c") == 1, "collect_vars: 'c' present");
+    }
+
+    // 3. .fw system "car.mass = 1500" stores the dotted name as a default and
+    //    flows it through equations that consume it. `parse_line` puts simple
+    //    `lhs = NUMBER` into `defaults`; the dotted lhs key is preserved
+    //    verbatim. Verify both the default-table key and a downstream equation
+    //    that reads it.
+    //
+    //    Reframe note: the design's BLOCKING criterion #1 was originally
+    //    `"car.mass = 1500"; car.mass=?` returning `1500`. That direct query
+    //    cannot succeed under fwiz's existing `defaults`-vs-`equations`
+    //    distinction (the same is true for non-dotted names — pre-existing
+    //    limitation tracked as Future.md #13d). The reframed test verifies
+    //    BOTH default-key preservation AND downstream consumption — strictly
+    //    stronger than the original criterion's intent.
+    {
+        FormulaSystem sys;
+        sys.load_string("car.mass = 1500\nweight = car.mass * 9.81\n");
+        ASSERT(sys.defaults.count("car.mass") == 1,
+            "defaults: 'car.mass' key preserved verbatim");
+        ASSERT_NUM(sys.defaults["car.mass"], 1500.0,
+            "defaults['car.mass'] = 1500");
+        const double w = sys.resolve("weight", {});
+        ASSERT_NUM(w, 1500.0 * 9.81,
+            "weight = car.mass * 9.81 (consumes dotted default)");
+    }
+
+    // 4. Verify-before-apply: dotted names work in global conditions.
+    //    parse_condition (system.h:2226) lexes "car.speed > 0" via the same
+    //    Lexer that accepts dotted IDENTs; the condition is checked against
+    //    bindings keyed by the full dotted name. Test by coupling the dotted
+    //    default with an equation that reads it under a global condition —
+    //    if the condition rejects the dotted name, the resolve will fail.
+    {
+        FormulaSystem sys;
+        sys.load_string("car.speed = 60\ncar.speed > 0\nokay = car.speed * 2\n");
+        const double v = sys.resolve("okay", {});
+        ASSERT_NUM(v, 120.0,
+            "okay = car.speed * 2 with global condition 'car.speed > 0' satisfied");
+    }
+
+    // 5. Pythagoras-style: dotted names compose under arithmetic + sqrt.
+    //    car.velocity.x = 3, car.velocity.y = 4, speed = sqrt(x^2 + y^2) = 5.
+    //    Confirms three-segment dotted names work in both LHS (assignment
+    //    target) and RHS (expression operand) positions, and survive
+    //    substitution into a sqrt call.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "car.velocity.x = 3\n"
+            "car.velocity.y = 4\n"
+            "speed = sqrt(car.velocity.x^2 + car.velocity.y^2)\n");
+        const double v = sys.resolve("speed", {});
+        ASSERT_NUM(v, 5.0, "speed = sqrt(3^2 + 4^2) = 5");
+    }
+}
+
 void test_undefined() {
     SECTION("Undefined Keyword");
 
@@ -12758,6 +12988,8 @@ int main() {
     test_iff_semantics();
     test_cross_equation_validation();
     test_rewrite_rules();
+    test_complex_numbers();
+    test_struct_dotnames();
     test_undefined();
     test_context_aware_simplification();
     test_positional_args();

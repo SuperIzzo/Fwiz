@@ -74,6 +74,20 @@ The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `r
 
 M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 to 649 lines (4×); reloading and re-solving the 654-line intermediate `.fw` file exceeds 60s wall-clock. The CSE-I3 test now wraps the roundtrip call with `timeout 10` and accepts either a correct numeric result (A ≈ 15–16) or a timeout-bound empty output — real correctness is not lost, but perf is degraded. Investigation needed before next derive-heavy cycle; see Future.md #12g.
 
+## 11. Complex numbers (`i`) — current scope and limitations (2026-05-09)
+
+`i` is a builtin constant with NaN binding as of Cycle A. What works and what does not:
+
+**Works:** `simplify("i * i") == "(-1)"`, `simplify("i ^ 2") == "(-1)"`, `simplify("3 * i * i") == "(-3)"`. `evaluate()` on any `i`-containing expression returns empty `Checked<double>{}`. `i` is never wildcard-matched in rewrite-rule patterns. Equations containing `i` (e.g. `y = 2*i`) correctly produce "Cannot solve" rather than a wrong real result.
+
+**Does not work yet:**
+- `(1+i)*(1-i)` does not simplify to `2` — requires MUL-over-ADD distribution (Future #13a).
+- `i^4` does not simplify to `1` — no power-cascade rule for `i^N` with N ≥ 4 (Future #13b).
+- `sqrt(-1)` does not produce `i` — requires rule-parser support for negative-literal LHS.
+- Complex root-finding (`resolve_all` on `x^2+1=0` returning `i`-containing forms) is not supported.
+
+The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than propagating NaN — a pre-existing bug made reachable by the NaN-binding for `i`. It is closed off from user input by the `is_active_builtin` NaN-skip, but remains latent; see Future #13c.
+
 ## 10. M3-6 fingerprint dedup relaxed post-M1 cascade (Future.md #12f)
 
 `derive_all` uses a 3-point Schwartz–Zippel fingerprint; the M3-6 test uses 5 branch-distinguishing points. Post-M1 (added sin/cos second inverse branches), 4 candidates collide on `derive_all`'s 3 test points but diverge on the test's 5 — `derive_all` retains them (correct under its resolution); the original `dup_count == 0` assertion was too strict. The test now allows `dup_count <= 4` with a comment explaining the cascade. Underlying fix (extend test points or add structural canonicalization, ~30-50 LOC) tracked in Future.md #12f.

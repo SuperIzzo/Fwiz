@@ -42,6 +42,7 @@ Current capabilities:
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
 - Inline comments (`# after equations`), semicolons as line separators
+- Dotted variable names (`car.velocity.x`) as flat identifiers — no struct machinery needed
 - Data-driven rewrite rules (23 builtin `.fw` patterns for simplification)
 - Commutative pattern matching (N-term additive/multiplicative permutation search)
 - `undefined` keyword for explicit domain boundaries and exhaustiveness checking
@@ -51,7 +52,7 @@ Current capabilities:
 - Numeric solving (adaptive grid scan + Newton/bisection, enabled by default)
 - Exact/approximate result classification (`=` vs `~`)
 - Curve fitting (`--fit`) with template matching and recursive composition
-- Built-in constants (`pi`, `e`, `phi`)
+- Built-in constants (`pi`, `e`, `phi`, `i` — imaginary unit with NaN binding since 2026-05-09)
 - Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
 - Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
 - Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
@@ -298,6 +299,36 @@ Every `--steps`/`--calc` trace site calls `fmt_trace`, so trace and final output
 ### Periodic families (`PeriodicFamily`, `ValueSet::periodic_`)
 
 `struct PeriodicFamily { double base; ExprPtr period; }` (expr.h) represents one branch of a trig solution family parameterized by integer `k` — e.g. `pi/6 + k * 2*pi`. `ValueSet` carries a `std::vector<PeriodicFamily> periodic_` field alongside its existing `intervals_` and `discrete_` members; `has_periodic()` / `periodic()` expose it. `ValueSet::to_string()` renders each surviving family as `<base> + k * <period>, k in Z` (ASCII), deduplicating at render time by checking whether `(b1 - b2) mod period ≈ 0` for each new family against already-kept ones. `trig_period(fn_name)` (src/system.h) is a symbolic-table lookup returning `2*pi` for sin/cos or `pi` for tan. `detect_trig_origin(target, equations)` (src/system.h) scans the equation set to determine whether the target variable comes exclusively from a single named-trig builtin, enabling the `resolve_all` hook that promotes discrete results to a `PeriodicFamily` when the source matches. `FuncInverter` was widened from `std::function<ExprPtr(...)>` to `std::function<std::vector<ExprPtr>(...)>` to support multiple inverse branches per builtin (sin/cos now each have two); `solve_by_inversion` iterates all returned branches and concatenates solutions. Deferred concerns (set algebra on `periodic_`, gap-based detection, round-trip parsing, `--derive` format) are tracked in Future.md #12a-g.
+
+### Complex numbers (`i`)
+
+The imaginary unit `i` ships as a Fwiz-wide builtin constant with a quiet-NaN binding, registered alongside `pi`, `e`, `phi` in `builtin_constants()` (`src/expr.h`). Two integration points:
+
+- **`evaluate()`**: the NaN-as-empty contract on `Checked<double>` (`src/expr.h:30-89`) collapses NaN to empty automatically, so `evaluate()` on any `i`-containing expression returns empty `Checked<double>{}`. No new code path; `i` reuses the existing domain-failure surface.
+- **Pattern matcher**: the literal-match guard at `src/expr.h:838` already consults `builtin_constants().count(name)`, so `i` cannot bind as a wildcard in any rewrite-rule LHS. A pattern naming `i` matches only the literal symbol `i`.
+
+Symbolic identity ships as a rewrite rule in `BUILTIN_REWRITE_RULES` (`src/system.h`):
+
+```
+i * i = -1
+i ^ 2 = -1
+```
+
+Both forms are present because the simplifier's multiplicative flattening canonicalizes `i * i` → `i^2` (POW form) before any rewrite rule sees it; `i ^ 2 = -1` is the form that actually fires after canonicalization, while `i * i = -1` is defensive for paths that may bypass flattening.
+
+**Branch-cut convention** (principal value): when complex identities ship, `sqrt(-1) = i`, `log(-1) = i * pi`, `arg(z) ∈ (-π, π]`. Currently only the `i^2 = -1` identity ships (two rules — `i * i = -1` and `i ^ 2 = -1` — cover both pre- and post-flatten forms). Other identities (Euler, conjugate product, complex `sqrt`/`log`) are aspirational and depend on future rule additions.
+
+**LLM-ergonomics**: complex-containing expressions return empty from `evaluate()` — the same surface as any other domain failure (unresolved variable, unknown function). To distinguish "complex result" from "evaluation failed", check the simplified expression's string form for the literal token `i`. The `--approximate` mode does **not** substitute `i` to a numeric form (it would just produce NaN).
+
+**Out of scope**: `ExprType::COMPLEX` leaf (deferred — reopen when profiling shows complex arithmetic >5% of `simplify` time); numeric complex root-finding (Strategy 6 stays real-only); the `Var("i")` shows up in `collect_vars` as a free variable, which is harmless because no equation defines `i` unless a user authors one (and that's a user error).
+
+### Dotted variable names (`car.velocity.x`)
+
+Dotted identifiers like `car.velocity.x` are tokenized as a **single** `IDENT` token by the lexer (`src/lexer.h:82-89`): after the initial alphanumeric run, additional `.IDENT` segments are appended to the same token whenever a dot is followed by an alpha character. They are pure **syntactic sugar** — internally `car.velocity.x` is just `Var("car.velocity.x")`, with the dots being legal name characters that flow through the entire pipeline (parser, simplifier, `FormulaSystem.parse_line`, `parse_condition`, `expr_to_string`) without any special handling.
+
+There is **no struct/record machinery**: no namespace resolution, no field-access infrastructure, no hierarchical lookup table. The dotted name acts as one flat key in the `bindings` / `defaults` / equation maps. This means user-facing equations like `speed = sqrt(car.velocity.x^2 + car.velocity.y^2)` work end-to-end, and dotted names compose under arithmetic, function calls, and global conditions (`car.speed > 0`) the same way single-segment names do.
+
+**Out of scope**: a real structural `ExprType::STRUCT` / `DOT_ACCESS` node type (Future.md #15) is deferred. Reopen trigger: a concrete user need for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution that flat naming cannot express.
 
 ### trace.h
 

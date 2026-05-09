@@ -704,6 +704,12 @@ inline const std::map<std::string, double>& builtin_constants() {
         {"pi",  M_PI},
         {"e",   M_E},
         {"phi", (1.0 + std::sqrt(5.0)) / 2.0},  // golden ratio 1.618...
+        // Imaginary unit. NaN binding intentional: complex-containing
+        // expressions return empty Checked<double> via the NaN-as-empty
+        // contract, matching the surface for any other domain failure.
+        // Symbolic identity ships as a rewrite rule (`i ^ 2 = -1`).
+        // See docs/Developer.md §"Complex numbers".
+        {"i",   std::numeric_limits<double>::quiet_NaN()},
     };
     return registry;
 }
