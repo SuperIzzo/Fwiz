@@ -159,7 +159,12 @@ struct PeriodicFamily {
 inline std::string expr_to_string(const Expr& e);
 // fmt_exact_double lives in fit.h (depends on expr_recognize_constants).
 // to_string() calls it for periodic-family base rendering so `pi / 6` is
-// recognized; falls back to fmt_num when no arena is active.
+// recognized; falls back to fmt_num when no arena is active. The decl
+// here is intentionally NOT marked `inline` even though the fit.h
+// definition is — adding `inline` to the forward decl trips clang's
+// -Wundefined-inline at the use site below (definition not yet visible
+// when expr.h is parsed). C++ permits this asymmetry: an inline function
+// can be declared without `inline` as long as the definition has it.
 [[nodiscard]] std::string fmt_exact_double(double v,
         const std::map<std::string, double>& extra_constants);
 
@@ -456,8 +461,10 @@ static_assert(static_cast<int>(ExprType::COUNT_) == 5, "ExprType has 5 real valu
 static_assert(static_cast<int>(BinOp::COUNT_) == 5, "BinOp has 5 real values");
 static_assert(static_cast<int>(BinOp::ADD) == 0, "BinOp values start at 0 (used as array index)");
 
-struct Expr;
-using ExprPtr = Expr*;
+// `struct Expr;` and `using ExprPtr = Expr*;` already forward-declared
+// earlier in the file (above PeriodicFamily / ValueSet). Forward decls
+// are idempotent, so re-declaring here is harmless, but keeping a single
+// declaration site is cleaner — see the pair near the top of this file.
 
 class ExprArena {
     static constexpr size_t CHUNK_SIZE = 1024;  // nodes per chunk
