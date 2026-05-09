@@ -59,7 +59,7 @@ private:
         return node;
     }
 
-    // primary → NUMBER | IDENT (LPAREN args RPAREN)? | LPAREN expr RPAREN
+    // primary → NUMBER | IDENT (LPAREN args RPAREN)? | LPAREN expr RPAREN | LBRACKET vec/mat RBRACKET
     ExprPtr primary() {
         if (is(TokenType::NUMBER)) {
             const double v = peek().numval;
@@ -86,6 +86,23 @@ private:
             auto e = parse_expr();
             expect(TokenType::RPAREN, "Expected ')'");
             return e;
+        }
+        // Vec/Mat literal: `[a, b, c]` → vec(a, b, c). If every element is itself
+        // a `vec(...)` call, rewrap as `mat(...)`. Empty `[]` → vec() (0-elem).
+        // No new ExprType; pure FUNC_CALL sugar (design-proposal §M3).
+        if (is(TokenType::LBRACKET)) {
+            advance();
+            std::vector<ExprPtr> elems;
+            if (!is(TokenType::RBRACKET)) {
+                elems.push_back(parse_expr());
+                while (is(TokenType::COMMA)) { advance(); elems.push_back(parse_expr()); }
+            }
+            expect(TokenType::RBRACKET, "Expected ']'");
+            // Promote to mat if every element is a vec literal AND we have at
+            // least one element. Empty [] stays as vec().
+            const bool all_vec = !elems.empty() && std::all_of(elems.begin(), elems.end(),
+                [](const Expr* el) { return el->type == ExprType::FUNC_CALL && el->name == "vec"; });
+            return Expr::Call(all_vec ? "mat" : "vec", elems);
         }
         throw std::runtime_error("Unexpected token: '" + peek().text + "'");
     }

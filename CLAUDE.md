@@ -10,7 +10,7 @@ Bidirectional formula solver. Write equations once in `.fw` files, solve for any
 
 ```bash
 make              # build (C++17, GCC 7+ or Clang 5+)
-make test         # run all tests (2307+)
+make test         # run all tests (3167+)
 make sanitize     # ASan + UBSan
 make test-clang   # optional: rebuild + run tests under clang++ (soft-skip if not on PATH)
 make analyze-fast # cppcheck only (~1-2 min, per-cycle gate)
@@ -49,7 +49,7 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Symbolic provenance carrier:** `solved_symbolic_` (`mutable map<string, ExprPtr>`) and `aliases_` (`mutable map<string, double>`) on `FormulaSystem` carry symbolic forms and the alias-resolution table alongside the numeric `bindings` map, so `--steps`/`--calc` trace sites render from the same ExprPtr as final output — trace and final cannot disagree. `fmt_trace(double, ExprPtr=nullptr, key="")` is the single unified render helper.
 
-**Two evaluators:** `Checked<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns empty via NaN sentinel — not a separate bool. `Checked<T>` (expr.h:30-89) is a NaN-sentinel optional: `sizeof(Checked<double>) == sizeof(double)` (8 bytes vs 16 for `std::optional<double>`); `has_value()` / `operator bool` to test; `.value()` to unwrap (asserts on empty in debug); `.value_or_nan()` is the deliberate boundary escape for handing off to the pure-double numerical root-finder layer — its use is grep-worthy and should stay rare. `ExprPtr evaluate_symbolic(const Expr&)` — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued.
+**Two evaluators:** `Checked<double> evaluate(const Expr&)` — numeric projection, collapses tree to a `double`; empty (`!has_value()`) for structural failures (unresolved variable, unknown function, arg-count mismatch, `undefined`, null pointer). Division by zero returns empty via NaN sentinel — not a separate bool. `Checked<T>` (expr.h:30-89) is a NaN-sentinel optional: `sizeof(Checked<double>) == sizeof(double)` (8 bytes vs 16 for `std::optional<double>`); `has_value()` / `operator bool` to test; `.value()` to unwrap (asserts on empty in debug); `.value_or_nan()` is the deliberate boundary escape for handing off to the pure-double numerical root-finder layer — its use is grep-worthy and should stay rare. `ExprPtr evaluate_symbolic(const Expr&)` — exact projection, preserves integer rationals as `DIV(Num, Num)`; used by the simplifier's constant-folding paths. New number types (complex, matrix) extend `evaluate_symbolic`; `evaluate` stays real-valued. Vec/mat FUNC_CALL sugar (since 2026-05-10) follows this pattern: `evaluate()` returns empty for any `vec`/`mat` node; simplifier-level dispatch handles arithmetic instead.
 
 **Symbolic differentiation:** `symbolic_diff(const Expr&, const std::string& var) → ExprPtr` (expr.h) — two-level dispatch: per-AST-class switch for ADD/SUB/MUL/DIV/POW/NEG, inline if-chain for FUNC_CALL covering 9 builtins (sin, cos, tan, asin, acos, atan, log, sqrt, abs). Returns `nullptr` for unrecognized FUNC_CALLs (signal to the post-load pass). `symbolic_diff_simplified` wrapper calls `simplify()` on the result. Post-load pass `resolve_diff_in_equations` (system.h) rewrites `diff(named_var, x)` and `diff(formula_call, x)` nodes after all equations parse and rewrite rules load. Two API surfaces: (1) `sensitivity = diff(force, mass)` as an in-file builtin; (2) `diff(target, var)=?[alias]` as a CLI query target dispatched in `main.cpp`. `--derive` is unchanged — `diff(f, x)` is the symbolic-differentiation surface; no new `--diff` flag was added. `sign(x)` registered as a builtin with `sign_eval` numeric evaluator. Three new rules in `BUILTIN_REWRITE_RULES`: `x^a/x^b = x^(a-b) iff x != 0`, `abs(x)/x = sign(x) iff x != 0`, `abs(x)/x = undefined iff x = 0`.
 
@@ -132,6 +132,14 @@ Depth guard: `max_formula_depth` (default 1000).
 
 ### Built-in constants
 `pi`, `e`, `phi`, `i` available in any equation. `pi`/`e`/`phi` are symbolic in derive, numeric in solve; `i` (imaginary unit, since 2026-05-09) has a NaN binding — `evaluate()` on `i`-containing expressions returns empty, and `i^2` simplifies to `-1` via rewrite rule. File defaults override builtins.
+
+### Vector and matrix literals (since 2026-05-10)
+```
+v = [1, 2, 3]                   # row vector (FUNC_CALL "vec" internally)
+m = [[1, 0], [0, 1]]            # 2×2 matrix (FUNC_CALL "mat", rows are vec calls)
+w = [a, b+1, c^2]              # symbolic elements supported
+```
+Element-wise add/sub and scalar-mul simplify automatically. Matrix builtins: `matmul(A, B)`, `det(M)` (2×2 and 3×3), `inv(M)` (2×2), `transpose(M)` (general). Shape mismatch → `undefined`. No new `ExprType` — `sizeof(Expr)` unchanged. See Developer.md §"Vectors and matrices" and Known-Issues #12 for scope.
 
 ### Numeric solving
 Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive inverses) solved via adaptive grid scan + Newton/bisection. Exact results use `=`, approximate use `~`.

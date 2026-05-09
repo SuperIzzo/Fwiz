@@ -53,6 +53,7 @@ Current capabilities:
 - Exact/approximate result classification (`=` vs `~`)
 - Curve fitting (`--fit`) with template matching and recursive composition
 - Built-in constants (`pi`, `e`, `phi`, `i` — imaginary unit with NaN binding since 2026-05-09)
+- Vector/matrix literals (`[1,2,3]`, `[[1,0],[0,1]]`) with element-wise ops and `matmul`/`det`/`inv`/`transpose` builtins (since 2026-05-10)
 - Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
 - Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
 - Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
@@ -329,6 +330,32 @@ Dotted identifiers like `car.velocity.x` are tokenized as a **single** `IDENT` t
 There is **no struct/record machinery**: no namespace resolution, no field-access infrastructure, no hierarchical lookup table. The dotted name acts as one flat key in the `bindings` / `defaults` / equation maps. This means user-facing equations like `speed = sqrt(car.velocity.x^2 + car.velocity.y^2)` work end-to-end, and dotted names compose under arithmetic, function calls, and global conditions (`car.speed > 0`) the same way single-segment names do.
 
 **Out of scope**: a real structural `ExprType::STRUCT` / `DOT_ACCESS` node type (Future.md #15) is deferred. Reopen trigger: a concrete user need for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution that flat naming cannot express.
+
+### Vectors and matrices (`vec`/`mat` sugar)
+
+Vectors and matrices ship as **`FUNC_CALL` sugar** — no new `ExprType`. Internally:
+
+- `[1, 2, 3]` parses to `FUNC_CALL("vec", {Num(1), Num(2), Num(3)})`.
+- `[[1, 2], [3, 4]]` parses to `FUNC_CALL("mat", {vec(1,2), vec(3,4)})` — each row is itself a `vec` call.
+- Empty `[]` parses to `vec()` (zero-element vector). The promotion to `mat` only fires when EVERY element is itself a `vec` AND the list is non-empty.
+- `expr_to_string` special-cases `name == "vec" || name == "mat"` to render with brackets; the recursive call on each `args[i]` produces the nested `[[...], [...]]` shape naturally for `mat`.
+
+**Element-wise add/sub/scalar-mul**: a single hook `try_simplify_vec_mat_binop` (in `expr.h`) runs from `simplify_once_impl`'s BINOP branch BEFORE the standard scalar dispatch. It handles three cases: (1) `BINOP(ADD/SUB, vec, vec)` and `BINOP(ADD/SUB, mat, mat)` with matching arity → element-wise; mismatched arity → `Var("undefined")`; (2) `BINOP(MUL, Num, vec/mat)` and the commuted form → element-wise scaled. `MUL(vec, vec)` and `MUL(mat, mat)` fall through (no element-wise multiplication of vectors — use `matmul` explicitly).
+
+**Multi-arg builtins** (`matmul`, `det`, `inv`, `transpose`): dispatched in the FUNC_CALL branch of `simplify_once_impl` via `try_dispatch_vec_mat_builtin` after children are simplified. Scope per design §M3:
+
+- `det`: 2x2 closed form (`a*d - b*c`) and 3x3 cofactor expansion. Larger → `undefined`.
+- `inv`: 2x2 only. Other shapes or singular determinant → `undefined`.
+- `matmul`: arbitrary R×K × K×C → R×C. Inner-dim mismatch → `undefined`.
+- `transpose`: arbitrary rectangular matrix or row-vec.
+
+All handlers preserve **symbolic args** — `det([[a,b],[c,d]])` returns the symbolic tree `a*d - b*c`, not a numeric fold.
+
+**Shape mismatch → `undefined`** (deliberate divergence from CAS prior art). This is the fwiz domain-boundary idiom that already covers `x/x = undefined iff x = 0`. Symbolic-first reasoning lets shape resolution be deferred to substitution time. Users can check `is_undefined(result)` at the solve boundary.
+
+**`evaluate()` rejects matrices**: `evaluate(parse("[1,2,3]"))` returns empty `Checked<double>`. Vector/matrix has no real-valued projection; the existing `args.size() != 1 || !lookup_function(name)` short-circuit in `evaluate()` already covers this — no new failure modes added.
+
+**Out of scope** (Future.md / reopen triggers in `master-plan.md`): Gaussian elimination for `inv` of N≥4 (open `.fw`-rule alternative first); eigenvalues / LU / SVD; complex-element matrices (orthogonal vector — Future.md #13a); promotion to `ExprType::MATRIX` leaf (reopen when `vec`/`mat` dispatch shows >5% of `simplify` time on matrix-heavy reproducers).
 
 ### trace.h
 

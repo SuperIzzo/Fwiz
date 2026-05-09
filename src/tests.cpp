@@ -1469,7 +1469,7 @@ void test_lexer_garbage() {
     expect_throw("x ` y", "backtick");
     expect_throw("x < y", "angle bracket");
     expect_throw("{x}", "curly brace");
-    expect_throw("[x]", "square bracket");
+    // [x] is now a valid 1-element vec literal — see test_vec_mat_type for positive coverage.
     expect_throw("x!", "exclamation");
 
     // Null byte
@@ -9346,6 +9346,258 @@ void test_struct_dotnames() {
     }
 }
 
+// ---- M3 (Cycle B): Vec/Mat via FUNC_CALL sugar ----
+//
+// Per design-proposal.md §M3: vectors and matrices ship as FUNC_CALL sugar
+// (`FUNC_CALL("vec", {...})` for 1D, `FUNC_CALL("mat", {vec, vec, ...})` for
+// 2D). NO new ExprType is introduced. Lexer emits LBRACKET/RBRACKET; parser
+// rewrites `[a, b, c]` as `vec(a, b, c)` and `[[...], [...]]` as `mat(...)`;
+// expr_to_string special-cases `name == "vec"`/`"mat"` to emit bracket syntax.
+// Element-wise ADD/SUB and scalar-MUL via simplifier hook in expr.h.
+// `matmul`/`det`/`inv`/`transpose` dispatched in `evaluate_symbolic`'s
+// FUNC_CALL arm by name when args are vec/mat shape.
+// Shape mismatch propagates `Var("undefined")` (existing fwiz idiom).
+void test_vec_mat_type() {
+    SECTION("Vec/Mat via FUNC_CALL sugar (M3)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // 1. BLOCKING: lexer emits LBRACKET/RBRACKET (not throws) for `[x]`.
+    //    M3 contract change: replaces former `expect_throw("[x]", "square bracket")`
+    //    at tests.cpp:1472 (now removed). Confirms `[` and `]` are accepted by
+    //    the lexer as standalone tokens.
+    {
+        auto tokens = Lexer("[x]").tokenize();
+        ASSERT(tokens.size() == 4, "[x]: 4 tokens (LBRACKET IDENT RBRACKET END)");
+        ASSERT(tokens[0].type == TokenType::LBRACKET, "[x]: token[0] is LBRACKET");
+        ASSERT(tokens[1].type == TokenType::IDENT, "[x]: token[1] is IDENT");
+        ASSERT(tokens[2].type == TokenType::RBRACKET, "[x]: token[2] is RBRACKET");
+    }
+
+    // 2. BLOCKING: parse `[1, 2, 3]` → FUNC_CALL("vec", [Num(1), Num(2), Num(3)]).
+    //    1D row vectors map to `vec(...)` internally (no new ExprType).
+    {
+        auto e = parse("[1, 2, 3]");
+        ASSERT(e->type == ExprType::FUNC_CALL, "[1,2,3]: top is FUNC_CALL");
+        ASSERT_EQ(e->name, "vec", "[1,2,3]: name is 'vec'");
+        ASSERT(e->args.size() == 3, "[1,2,3]: 3 args");
+        ASSERT(is_num(e->args[0]) && e->args[0]->num == 1, "[1,2,3]: arg[0] = 1");
+        ASSERT(is_num(e->args[1]) && e->args[1]->num == 2, "[1,2,3]: arg[1] = 2");
+        ASSERT(is_num(e->args[2]) && e->args[2]->num == 3, "[1,2,3]: arg[2] = 3");
+    }
+
+    // 3. BLOCKING: parse `[]` → empty vec (zero-length row vector).
+    {
+        auto e = parse("[]");
+        ASSERT(e->type == ExprType::FUNC_CALL, "[]: top is FUNC_CALL");
+        ASSERT_EQ(e->name, "vec", "[]: name is 'vec'");
+        ASSERT(e->args.empty(), "[]: 0 args");
+    }
+
+    // 4. BLOCKING: parse `[[1, 2], [3, 4]]` → FUNC_CALL("mat", [vec(1,2), vec(3,4)]).
+    //    Nested-vec → mat. Outer brackets see all elements are themselves vec
+    //    calls and rewrap as `mat(...)`.
+    {
+        auto e = parse("[[1, 2], [3, 4]]");
+        ASSERT(e->type == ExprType::FUNC_CALL, "[[1,2],[3,4]]: top is FUNC_CALL");
+        ASSERT_EQ(e->name, "mat", "[[1,2],[3,4]]: name is 'mat'");
+        ASSERT(e->args.size() == 2, "[[1,2],[3,4]]: 2 row args");
+        ASSERT(e->args[0]->type == ExprType::FUNC_CALL
+            && e->args[0]->name == "vec"
+            && e->args[0]->args.size() == 2,
+            "[[1,2],[3,4]]: row 0 is vec of 2");
+        ASSERT(e->args[1]->type == ExprType::FUNC_CALL
+            && e->args[1]->name == "vec"
+            && e->args[1]->args.size() == 2,
+            "[[1,2],[3,4]]: row 1 is vec of 2");
+    }
+
+    // 5. BLOCKING: expr_to_string round-trips `[1, 2, 3]`.
+    //    Uses the FUNC_CALL special-case render branch (`name == "vec"`).
+    {
+        ASSERT_EQ(ps("[1, 2, 3]"), "[1, 2, 3]", "round-trip: [1, 2, 3]");
+    }
+
+    // 6. BLOCKING: expr_to_string round-trips a 2x2 matrix.
+    {
+        ASSERT_EQ(ps("[[1, 2], [3, 4]]"), "[[1, 2], [3, 4]]",
+            "round-trip: [[1, 2], [3, 4]]");
+    }
+
+    // 7. Empty vec renders as `[]`.
+    {
+        ASSERT_EQ(ps("[]"), "[]", "round-trip: []");
+    }
+
+    // 8. BLOCKING: element-wise add. `[1, 2] + [3, 4]` simplifies to `[4, 6]`.
+    //    Per design §M3 step 4: simplifier hook on `BINOP(ADD, vec, vec)` with
+    //    matching arity emits a new `vec(args[0]+args'[0], ...)`; numeric folds
+    //    via the existing `is_num + is_num` constant-fold path.
+    {
+        ASSERT_EQ(ss("[1, 2] + [3, 4]"), "[4, 6]", "[1,2]+[3,4] = [4,6]");
+    }
+
+    // 9. BLOCKING: element-wise sub.
+    {
+        ASSERT_EQ(ss("[5, 6] - [1, 2]"), "[4, 4]", "[5,6]-[1,2] = [4,4]");
+    }
+
+    // 10. BLOCKING: shape-mismatched vec ADD propagates `undefined`.
+    //     This is the fwiz domain-boundary idiom — design §M3 chooses
+    //     `undefined` propagation over CAS-style immediate error.
+    {
+        ASSERT_EQ(ss("[1, 2] + [3, 4, 5]"), "undefined",
+            "[1,2]+[3,4,5] = undefined (shape mismatch)");
+    }
+
+    // 11. BLOCKING: scalar * vec → element-wise scaled vec.
+    {
+        ASSERT_EQ(ss("2 * [1, 2, 3]"), "[2, 4, 6]", "2*[1,2,3] = [2,4,6]");
+    }
+
+    // 12. Commuted form: vec * scalar.
+    {
+        ASSERT_EQ(ss("[1, 2, 3] * 2"), "[2, 4, 6]", "[1,2,3]*2 = [2,4,6]");
+    }
+
+    // 13. Element-wise add for matrices. `[[1,2],[3,4]] + [[5,6],[7,8]]`
+    //     → `[[6,8],[10,12]]`. Same hook as vec ADD because mat is `vec` of
+    //     `vec` — the outer-level dispatch sees mat+mat with matching shape,
+    //     produces a new mat whose rows are vec+vec (recursing into the
+    //     element-wise hook again).
+    {
+        ASSERT_EQ(ss("[[1, 2], [3, 4]] + [[5, 6], [7, 8]]"),
+            "[[6, 8], [10, 12]]",
+            "mat element-wise ADD");
+    }
+
+    // 14. mat shape-mismatch (different row counts) → undefined.
+    {
+        ASSERT_EQ(ss("[[1, 2], [3, 4]] + [[5, 6]]"), "undefined",
+            "mat row-count mismatch → undefined");
+    }
+
+    // 15. BLOCKING: identity matmul. matmul(I_2, B) = B for any 2x2 B.
+    //     Per design §M3 step 5: dispatched in `evaluate_symbolic`'s FUNC_CALL
+    //     branch by name (`matmul`) when args are mat-shaped.
+    {
+        ASSERT_EQ(ss("matmul([[1, 0], [0, 1]], [[5, 6], [7, 8]])"),
+            "[[5, 6], [7, 8]]",
+            "matmul(I_2, B) = B");
+    }
+
+    // 16. BLOCKING: matmul(B, I_2) = B. Right-identity.
+    {
+        ASSERT_EQ(ss("matmul([[1, 2], [3, 4]], [[1, 0], [0, 1]])"),
+            "[[1, 2], [3, 4]]",
+            "matmul(B, I_2) = B");
+    }
+
+    // 17. BLOCKING: matmul shape mismatch → undefined.
+    //     [[1,2]] is 1x2; [[3,4],[5,6],[7,8]] is 3x2. Inner dims (2 vs 3) don't
+    //     match.
+    {
+        ASSERT_EQ(ss("matmul([[1, 2]], [[3, 4], [5, 6], [7, 8]])"),
+            "undefined", "matmul shape mismatch → undefined");
+    }
+
+    // 18. BLOCKING: evaluate(parse("[1,2,3]")) is empty Checked<double>.
+    //     Vector has no real-valued projection; FUNC_CALL("vec", ...) is not in
+    //     `lookup_function` so `evaluate()` returns empty (existing path —
+    //     no new code needed). This is the "matrices are not numerically
+    //     projectable" invariant.
+    {
+        auto r = evaluate(*parse("[1, 2, 3]"));
+        ASSERT(!r.has_value(), "evaluate([1,2,3]) is empty");
+    }
+
+    // 19. BLOCKING (structural): sizeof(Expr) unchanged at 96.
+    //     Static_assert at expr.h:510 must still compile; runtime check belt-
+    //     and-braces in case the file moved.
+    {
+        ASSERT(sizeof(Expr) == 96,
+            "sizeof(Expr) == 96 (no new fields from M3)");
+    }
+
+    // 20. BLOCKING (structural): ExprType count unchanged at 5.
+    //     Static_assert at expr.h:463 must still compile; runtime check too.
+    {
+        ASSERT(static_cast<int>(ExprType::COUNT_) == 5,
+            "ExprType::COUNT_ unchanged (no new ExprType from M3)");
+    }
+
+    // 21. DESIRABLE: det of 2x2 symbolic matrix.
+    //     `det([[a,b],[c,d]])` → `a*d - b*c` after simplification. The
+    //     evaluator emits `BINOP(SUB, BINOP(MUL,a,d), BINOP(MUL,b,c))`; the
+    //     existing simplifier doesn't reorder (the args are symbolic VARs).
+    {
+        const auto* e = simplify(parse("det([[a, b], [c, d]])"));
+        ASSERT_EQ(expr_to_string(e), "a * d - b * c",
+            "det 2x2 symbolic = a*d - b*c (DESIRABLE)");
+    }
+
+    // 22. DESIRABLE: numeric 2x2 det. det([[1,2],[3,4]]) = 1*4 - 2*3 = -2.
+    //     Output is parenthesized per fwiz's negative-literal house style.
+    {
+        ASSERT_EQ(ss("det([[1, 2], [3, 4]])"), "(-2)",
+            "det([[1,2],[3,4]]) = -2 (DESIRABLE)");
+    }
+
+    // 23. DESIRABLE: 2x2 inverse on identity returns identity.
+    //     inv(I_2) = I_2 — det = 1, adj = I, so 1/1 * I = I.
+    {
+        ASSERT_EQ(ss("inv([[1, 0], [0, 1]])"), "[[1, 0], [0, 1]]",
+            "inv(I_2) = I_2 (DESIRABLE)");
+    }
+
+    // 24. DESIRABLE: transpose of 1x3 row vec → 3x1 column matrix.
+    //     transpose([[1,2,3]]) → [[1],[2],[3]].
+    {
+        ASSERT_EQ(ss("transpose([[1, 2, 3]])"), "[[1], [2], [3]]",
+            "transpose 1x3 → 3x1 (DESIRABLE)");
+    }
+
+    // 25. DESIRABLE: 3x3 det via cofactor.
+    //     det([[1,2,3],[4,5,6],[7,8,10]]) = 1*(5*10 - 6*8) - 2*(4*10 - 6*7) + 3*(4*8 - 5*7)
+    //                                     = 1*(50-48) - 2*(40-42) + 3*(32-35)
+    //                                     = 2 + 4 - 9 = -3.
+    {
+        ASSERT_EQ(ss("det([[1, 2, 3], [4, 5, 6], [7, 8, 10]])"),
+            "(-3)", "det 3x3 via cofactor (DESIRABLE)");
+    }
+
+    // 26. REGRESSION (reviewer Cycle B 2026-05-10): formula-call binding
+    //     containing a vec literal must NOT truncate at the first inner COMMA.
+    //     parse_call_args's depth scanner originally tracked LPAREN/RPAREN
+    //     only; LBRACKET/RBRACKET were added so [a, b, c] inside a binding
+    //     RHS is treated as a single sub-expression. Without the fix,
+    //     `f(v=[1, 2, 3], result=?)` would parse the binding as `[1` and
+    //     either error or silently mis-bind. Test by simulating a multi-
+    //     element vec passed as a binding to a sub-formula and verifying
+    //     the resulting bindings map carries the full vec ExprPtr.
+    {
+        std::vector<Token> tok = Lexer(
+            "f(v=[1, 2, 3], result=?, w=[4, 5])").tokenize();
+        // Find the LPAREN after "f"; rparen_pos is the matching RPAREN.
+        ASSERT(tok.size() >= 5, "tokenizes the call shape");
+        ASSERT(tok[0].type == TokenType::IDENT && tok[0].text == "f",
+            "first token is f");
+        ASSERT(tok[1].type == TokenType::LPAREN, "second is LPAREN");
+        const size_t rparen = FormulaSystem::find_matching_rparen(tok, 1);
+        ASSERT(rparen != std::string::npos, "matching RPAREN found");
+        FormulaCall call = FormulaSystem::parse_call_args(tok, 0, rparen);
+        ASSERT(call.bindings.count("v") == 1, "binding 'v' present");
+        ASSERT(call.bindings.count("w") == 1, "binding 'w' present");
+        // The bound expression should round-trip to its full vec form,
+        // not the truncated `[1` that would result without the fix.
+        ASSERT_EQ(expr_to_string(call.bindings["v"]), "[1, 2, 3]",
+            "v binding carries full 3-element vec (regression)");
+        ASSERT_EQ(expr_to_string(call.bindings["w"]), "[4, 5]",
+            "w binding carries full 2-element vec (regression)");
+    }
+}
+
 void test_undefined() {
     SECTION("Undefined Keyword");
 
@@ -12990,6 +13242,7 @@ int main() {
     test_rewrite_rules();
     test_complex_numbers();
     test_struct_dotnames();
+    test_vec_mat_type();
     test_undefined();
     test_context_aware_simplification();
     test_positional_args();

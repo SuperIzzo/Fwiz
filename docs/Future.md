@@ -133,9 +133,11 @@ Core landed; see COMPLETED.md #10.
 
 - Rational propagation in `evaluate()` for exact intermediate results
 
-## 10a. Extending `evaluate_symbolic` for new number types — PARTIAL (first vertical shipped 2026-05-09)
+## 10a. Extending `evaluate_symbolic` for new number types — PARTIAL (Cycles A+B shipped 2026-05-10)
 
-**Shipped (Cycle A):** `i` as a builtin constant with NaN binding; `i*i=-1` and `i^2=-1` rewrite rules; `is_active_builtin` NaN-skip preventing silent real-valued resolution. The rewrite-rule route (step 1 of the complex checklist below) is the approach taken — no `ExprType::COMPLEX` leaf, no bindings-map promotion. Deferred items: `ExprType::COMPLEX` leaf, `evaluate_symbolic` complex dispatch, complex `expr_to_string`, `sqrt(-1)=i` rule, simplifier-side rational migrations.
+**Shipped (Cycle A, 2026-05-09):** `i` as a builtin constant with NaN binding; `i*i=-1` and `i^2=-1` rewrite rules; `is_active_builtin` NaN-skip preventing silent real-valued resolution. The rewrite-rule route (step 1 of the complex checklist below) is the approach taken — no `ExprType::COMPLEX` leaf, no bindings-map promotion. Deferred complex items: `ExprType::COMPLEX` leaf, `evaluate_symbolic` complex dispatch, complex `expr_to_string`, `sqrt(-1)=i` rule, simplifier-side rational migrations.
+
+**Shipped (Cycle B M3, 2026-05-10):** Vec/mat sugar via `FUNC_CALL("vec"/"mat", ...)` — no new `ExprType`, `sizeof(Expr)` unchanged. Element-wise add/sub/scalar-mul via `try_simplify_vec_mat_binop` hook. Matrix builtins `matmul`/`det`/`inv`/`transpose` dispatched from `try_dispatch_vec_mat_builtin`. `evaluate()` returns empty for matrix operands. Shape mismatch propagates `Var("undefined")`. Scope: `det` 2x2+3x3, `inv` 2x2 only, `transpose` general, `matmul` general NxN. Deferred matrix items: `ExprType::MATRIX` leaf, Gaussian elimination for `inv` N≥4, eigenvalues/LU/SVD, complex-element matrices, bindings-map promotion for matrix-valued CLI bindings.
 
 `expr.h` now has two evaluators in sibling roles:
 
@@ -267,9 +269,16 @@ A `.fw` line of the form `x = 42` (literal RHS, no free variables) populates `de
 
 **Reopen trigger:** a user explicitly reports `mass=?` on `mass = 1500` failing as a usability issue, suggesting that querying a pure-default as a solve target should be supported.
 
-## 14. Vectors, Quaternions, and Matrix Math
+## 14. Vectors, Quaternions, and Matrix Math — PARTIAL (vec/mat sugar shipped 2026-05-10)
 
-Vector literals (`[1, 2, 3]`), dot product, cross product, magnitude. Quaternions for rotation math. Matrix operations (multiply, inverse, determinant, eigenvalues). Key question: how to represent multi-dimensional values in the expression tree without breaking the scalar pipeline.
+**Shipped (Cycle B M3):** `[1, 2, 3]` / `[[1,0],[0,1]]` literal syntax; element-wise add/sub; scalar-mul; `matmul`, `det` (2x2+3x3 cofactor), `inv` (2x2), `transpose` (general); shape mismatch → `undefined`. All ops preserve symbolic args. See Developer.md §"Vectors and matrices" for implementation detail.
+
+**Deferred — reopen triggers:**
+- Gaussian elimination for `inv` N≥4 (or open `.fw`-rule approach): reopen when a user needs `inv` of a 3×3+ matrix.
+- Eigenvalues / SVD / LU decomposition: reopen when a concrete use case (physics, statistics) drives the need.
+- Quaternions and normed division algebras: reopen when a rotation-math use case arrives; classify as In-scope (rotation math is universal) vs Wrapper-tool (game engine) at that point.
+- Complex-element matrices (e.g. `[[1+i, 0],[0, 1-i]]`): depends on Future #13a (MUL-over-ADD distribution) landing first.
+- Matrix-valued CLI bindings: `bindings` is `map<string, double>` today; matrix variables need a parallel `ExprPtr` track (see #10a Bindings-parameter extension).
 
 Implementation plan and extension point: see **#10a — Extending `evaluate_symbolic` for new number types** (Matrices / vectors checklist).
 

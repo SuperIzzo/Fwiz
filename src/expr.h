@@ -1112,6 +1112,14 @@ inline std::string expr_to_string(const Expr& e) {
         }
 
         case ExprType::FUNC_CALL: {
+            // Vec/Mat sugar (M3): `vec(a, b)` renders as `[a, b]`. `mat(...)`
+            // is a vec-of-vec — each row is itself a vec, so the recursive
+            // expr_to_string call on each element naturally produces nested
+            // `[[a, b], [c, d]]`. No special-case branching needed for mat.
+            if (e.name == "vec" || e.name == "mat") {
+                return "[" + join_with_sep(e.args, ", ",
+                    [](const Expr* arg) { return expr_to_string(*arg); }) + "]";
+            }
             return e.name + "(" + join_with_sep(e.args, ", ",
                 [](const Expr* arg) { return expr_to_string(*arg); }) + ")";
         }
@@ -2133,9 +2141,236 @@ struct RewriteRulesGuard {
     return e;
 }
 
-// ---- Simplify: main entry ----
+// ---- Vec/Mat predicates (M3) ----
+//
+// `vec`/`mat` are FUNC_CALL sugar (no new ExprType). The element-wise
+// simplifier hook and the `matmul`/`det`/`inv`/`transpose` dispatchers
+// share these predicates. See design-proposal.md §M3.
+[[nodiscard]] inline bool is_vec(const ExprPtr& e) {
+    return e && e->type == ExprType::FUNC_CALL && e->name == "vec";
+}
+[[nodiscard]] inline bool is_mat(const ExprPtr& e) {
+    return e && e->type == ExprType::FUNC_CALL && e->name == "mat";
+}
 
-[[nodiscard]] inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl — impl calls wrapper recursively
+// Element-wise BINOP hook for vec/mat operands (M3 step 4). Returns nullptr
+// when the operands aren't vec/mat-shaped — caller falls through to ordinary
+// simplifier dispatch. Shape mismatch returns Var("undefined") (fwiz idiom).
+//
+// Cases handled:
+//   ADD/SUB(vec, vec) → vec(args[i] op args'[i])  — same-arity required
+//   ADD/SUB(mat, mat) → mat(rows[i] op rows'[i])  — same row count required;
+//       the recursive simplify on each row pair re-enters this hook, so
+//       column-count mismatch surfaces there.
+//   MUL(Num, vec/mat) and MUL(vec/mat, Num) → element-wise scaled
+//
+// MUL(vec, vec) and MUL(mat, mat) are NOT handled here — those go through
+// `matmul(...)` explicitly per design (keeps BinOp table small).
+[[nodiscard]] inline ExprPtr simplify_once(const ExprPtr& e);  // forward decl
+
+[[nodiscard]] inline ExprPtr try_simplify_vec_mat_binop(BinOp op, const ExprPtr& l, const ExprPtr& r) {
+    const bool l_vm = is_vec(l) || is_mat(l);
+    const bool r_vm = is_vec(r) || is_mat(r);
+    if (!l_vm && !r_vm) return nullptr;
+    // ADD / SUB: both must be same kind (vec+vec or mat+mat) and same arity.
+    if (op == BinOp::ADD || op == BinOp::SUB) {
+        if (!l_vm || !r_vm) return Expr::Var("undefined");
+        if (l->name != r->name) return Expr::Var("undefined");
+        if (l->args.size() != r->args.size()) return Expr::Var("undefined");
+        std::vector<ExprPtr> out;
+        out.reserve(l->args.size());
+        for (size_t i = 0; i < l->args.size(); i++) {
+            auto piece = simplify_once(Expr::BinOpExpr(op, l->args[i], r->args[i]));
+            if (is_undefined(piece)) return piece;  // propagate row-level mismatch
+            out.push_back(piece);
+        }
+        return Expr::Call(l->name, out);
+    }
+    // MUL: scalar (Num) on one side, vec/mat on the other → element-wise scale.
+    if (op == BinOp::MUL) {
+        ExprPtr scalar = nullptr, container = nullptr;
+        if (is_num(l) && r_vm)      { scalar = l; container = r; }
+        else if (is_num(r) && l_vm) { scalar = r; container = l; }
+        else                         return nullptr;  // non-scalar mul; matmul() handles vec*vec/mat*mat
+        std::vector<ExprPtr> out;
+        out.reserve(container->args.size());
+        for (auto a : container->args) {
+            auto piece = simplify_once(Expr::BinOpExpr(BinOp::MUL, scalar, a));
+            if (is_undefined(piece)) return piece;
+            out.push_back(piece);
+        }
+        return Expr::Call(container->name, out);
+    }
+    return nullptr;  // SUB handled above; DIV/POW on vec/mat: not in M3 scope
+}
+
+// ---- Vec/Mat builtin handlers (M3 step 5) ----
+//
+// Multi-arg matrix functions: matmul, det, inv, transpose. Dispatched by name
+// from the simplifier's FUNC_CALL branch when args are vec/mat-shaped. Each
+// handler returns ExprPtr (matrix result, scalar result, or Var("undefined")
+// for shape failures). All handlers preserve symbolic args — det of a matrix
+// of VARs returns a symbolic SUB(MUL,MUL) tree, not a fold to NaN.
+//
+// Scope (per design §M3 reopen triggers):
+//   det:       2x2 closed form, 3x3 cofactor expansion. >3x3 → undefined.
+//   inv:       2x2 only.                                 Other shapes → undefined.
+//   matmul:    arbitrary rectangular A (RxK) * B (KxC).
+//   transpose: arbitrary rectangular matrix or row vector.
+//
+// Shape inspection uses the FUNC_CALL("mat", {vec, vec, ...}) layout. Each row
+// is a vec FUNC_CALL whose args are scalars. A bare vec is 1xN. The helpers
+// below normalize both to "rows of vec" for uniform indexing.
+
+// Return rows as vector<vec-ExprPtr>. For mat: args directly; for vec: wrap
+// the vec itself as the single row. Returns empty vector for non-vec/mat.
+[[nodiscard]] inline std::vector<ExprPtr> mat_rows(const ExprPtr& m) {
+    if (is_mat(m)) return m->args;
+    if (is_vec(m)) return { m };
+    return {};
+}
+
+// Return cols of a rectangular mat/vec. Empty if non-uniform or non-mat/vec.
+[[nodiscard]] inline size_t mat_cols(const ExprPtr& m) {
+    auto rows = mat_rows(m);
+    if (rows.empty()) return 0;
+    if (!is_vec(rows[0])) return 0;
+    const size_t c = rows[0]->args.size();
+    for (size_t i = 1; i < rows.size(); i++) {
+        if (!is_vec(rows[i]) || rows[i]->args.size() != c) return 0;  // non-rectangular
+    }
+    return c;
+}
+
+// Get matrix element (i, j) with 0-based row/col. Asserts in-bounds.
+[[nodiscard]] inline ExprPtr mat_at(const ExprPtr& m, size_t i, size_t j) {
+    auto rows = mat_rows(m);
+    assert(i < rows.size() && "mat_at: row index OOB");
+    assert(is_vec(rows[i]) && j < rows[i]->args.size() && "mat_at: col index OOB");
+    return rows[i]->args[j];
+}
+
+// Build vec(elems).
+[[nodiscard]] inline ExprPtr make_vec(std::vector<ExprPtr> elems) {
+    return Expr::Call("vec", std::move(elems));
+}
+// Build mat(rows). Each row must be a vec.
+[[nodiscard]] inline ExprPtr make_mat(std::vector<ExprPtr> rows) {
+    return Expr::Call("mat", std::move(rows));
+}
+
+// 2x2 cofactor / 3x3 cofactor expansion. Returns Var("undefined") for other shapes.
+[[nodiscard]] inline ExprPtr vec_mat_det(const ExprPtr& m) {
+    auto rows = mat_rows(m);
+    const size_t n = rows.size();
+    const size_t cols = mat_cols(m);
+    if (n != cols || (n != 2 && n != 3)) return Expr::Var("undefined");
+    if (n == 2) {
+        // a*d - b*c
+        auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1);
+        auto c = mat_at(m, 1, 0); auto d = mat_at(m, 1, 1);
+        return simplify(Expr::BinOpExpr(BinOp::SUB,
+            Expr::BinOpExpr(BinOp::MUL, a, d),
+            Expr::BinOpExpr(BinOp::MUL, b, c)));
+    }
+    // 3x3 cofactor: a(ei - fh) - b(di - fg) + c(dh - eg)
+    auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1); auto c = mat_at(m, 0, 2);
+    auto d = mat_at(m, 1, 0); auto en = mat_at(m, 1, 1); auto f = mat_at(m, 1, 2);
+    auto g = mat_at(m, 2, 0); auto h = mat_at(m, 2, 1); auto k = mat_at(m, 2, 2);
+    auto term = [](const ExprPtr& x, const ExprPtr& y, const ExprPtr& u, const ExprPtr& v) {
+        return Expr::BinOpExpr(BinOp::SUB,
+            Expr::BinOpExpr(BinOp::MUL, x, y),
+            Expr::BinOpExpr(BinOp::MUL, u, v));
+    };
+    auto t1 = Expr::BinOpExpr(BinOp::MUL, a, term(en, k, f, h));
+    auto t2 = Expr::BinOpExpr(BinOp::MUL, b, term(d, k, f, g));
+    auto t3 = Expr::BinOpExpr(BinOp::MUL, c, term(d, h, en, g));
+    return simplify(Expr::BinOpExpr(BinOp::ADD,
+        Expr::BinOpExpr(BinOp::SUB, t1, t2), t3));
+}
+
+// 2x2 inverse only. Returns Var("undefined") for other shapes or singular dets.
+[[nodiscard]] inline ExprPtr vec_mat_inv(const ExprPtr& m) {
+    auto rows = mat_rows(m);
+    if (rows.size() != 2 || mat_cols(m) != 2) return Expr::Var("undefined");
+    auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1);
+    auto c = mat_at(m, 1, 0); auto d = mat_at(m, 1, 1);
+    auto det = simplify(Expr::BinOpExpr(BinOp::SUB,
+        Expr::BinOpExpr(BinOp::MUL, a, d),
+        Expr::BinOpExpr(BinOp::MUL, b, c)));
+    if (is_zero(det)) return Expr::Var("undefined");  // singular matrix
+    auto scale = [&](const ExprPtr& v) {
+        return simplify(Expr::BinOpExpr(BinOp::DIV, v, det));
+    };
+    auto neg = [](const ExprPtr& v) { return Expr::Neg(v); };
+    auto row0 = make_vec({ scale(d),       scale(neg(b)) });
+    auto row1 = make_vec({ scale(neg(c)),  scale(a)      });
+    return simplify(make_mat({ row0, row1 }));
+}
+
+// Transpose any rectangular mat or row-vec. Vec input is treated as 1xN.
+[[nodiscard]] inline ExprPtr vec_mat_transpose(const ExprPtr& m) {
+    auto rows = mat_rows(m);
+    const size_t n = rows.size();
+    const size_t cols = mat_cols(m);
+    if (n == 0 || cols == 0) return Expr::Var("undefined");
+    std::vector<ExprPtr> out_rows;
+    out_rows.reserve(cols);
+    for (size_t j = 0; j < cols; j++) {
+        std::vector<ExprPtr> row;
+        row.reserve(n);
+        for (size_t i = 0; i < n; i++) row.push_back(mat_at(m, i, j));
+        out_rows.push_back(make_vec(std::move(row)));
+    }
+    return make_mat(std::move(out_rows));
+}
+
+// matmul(A, B): A is RxK, B is KxC → RxC. Inner-dim mismatch → undefined.
+[[nodiscard]] inline ExprPtr vec_mat_matmul(const ExprPtr& a, const ExprPtr& b) {
+    auto a_rows = mat_rows(a);
+    auto b_rows = mat_rows(b);
+    const size_t R = a_rows.size();
+    const size_t K_a = mat_cols(a);
+    const size_t K_b = b_rows.size();
+    const size_t C = mat_cols(b);
+    if (R == 0 || K_a == 0 || K_b == 0 || C == 0) return Expr::Var("undefined");
+    if (K_a != K_b) return Expr::Var("undefined");
+    std::vector<ExprPtr> out_rows;
+    out_rows.reserve(R);
+    for (size_t i = 0; i < R; i++) {
+        std::vector<ExprPtr> row;
+        row.reserve(C);
+        for (size_t j = 0; j < C; j++) {
+            // sum over k: A[i][k] * B[k][j]
+            ExprPtr acc = nullptr;
+            for (size_t k = 0; k < K_a; k++) {
+                auto term = Expr::BinOpExpr(BinOp::MUL, mat_at(a, i, k), mat_at(b, k, j));
+                acc = acc ? Expr::BinOpExpr(BinOp::ADD, acc, term) : term;
+            }
+            row.push_back(simplify(acc));
+        }
+        out_rows.push_back(make_vec(std::move(row)));
+    }
+    return make_mat(std::move(out_rows));
+}
+
+// Name dispatch hook for the simplifier's FUNC_CALL branch. Returns nullptr
+// to fall through (unrecognized name or arg shape fails the precondition).
+[[nodiscard]] inline ExprPtr try_dispatch_vec_mat_builtin(const std::string& name,
+                                                         const std::vector<ExprPtr>& args) {
+    auto matrixy = [](const ExprPtr& a) { return is_vec(a) || is_mat(a); };
+    if (name == "matmul" && args.size() == 2 && matrixy(args[0]) && matrixy(args[1]))
+        return vec_mat_matmul(args[0], args[1]);
+    if (name == "det" && args.size() == 1 && matrixy(args[0]))
+        return vec_mat_det(args[0]);
+    if (name == "inv" && args.size() == 1 && matrixy(args[0]))
+        return vec_mat_inv(args[0]);
+    if (name == "transpose" && args.size() == 1 && matrixy(args[0]))
+        return vec_mat_transpose(args[0]);
+    return nullptr;
+}
+
+// ---- Simplify: main entry ----
 
 inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     if (!e) return e;
@@ -2167,6 +2402,10 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             auto s = Expr::Call(e->name, sa);
             if (all_num && lookup_function(e->name)) return evaluate_symbolic(*s);
 
+            // Vec/Mat builtin dispatch (M3 step 5): matmul / det / inv / transpose.
+            // Returns nullptr when name is unrecognized or args aren't vec/mat-shaped.
+            if (auto m = try_dispatch_vec_mat_builtin(e->name, sa)) return m;
+
             // Function-specific rules migrated to BUILTIN_REWRITE_RULES
             return s;
         }
@@ -2177,6 +2416,12 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             if (is_undefined(l) || is_undefined(r)) return Expr::Var("undefined");
             if (is_num(l) && is_num(r))
                 return evaluate_symbolic(*Expr::BinOpExpr(e->op, l, r));
+
+            // Vec/Mat element-wise hook (M3): handles vec+vec / mat+mat ADD/SUB
+            // (same arity required; mismatch → undefined) and scalar * vec/mat MUL.
+            // Returns nullptr when neither operand is vec/mat — falls through to
+            // the standard scalar dispatch below.
+            if (auto hook = try_simplify_vec_mat_binop(e->op, l, r)) return hook;
 
             switch (e->op) {
                 case BinOp::ADD: case BinOp::SUB:

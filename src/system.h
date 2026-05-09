@@ -2163,6 +2163,12 @@ public:
                 while (expr_end < rparen_pos) {
                     if (tok[expr_end].type == TokenType::LPAREN) pd++;
                     else if (tok[expr_end].type == TokenType::RPAREN) pd--;
+                    // M3 vec/mat literals embed COMMAs inside [...]; track
+                    // bracket depth alongside paren depth so a binding like
+                    // `f(v=[1, 2, 3], result=?)` does not truncate at the
+                    // first inner comma. Reviewer Cycle B 2026-05-10.
+                    else if (tok[expr_end].type == TokenType::LBRACKET) pd++;
+                    else if (tok[expr_end].type == TokenType::RBRACKET) pd--;
                     else if (tok[expr_end].type == TokenType::COMMA && pd == 0) break;
                     expr_end++;
                 }

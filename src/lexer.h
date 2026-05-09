@@ -9,7 +9,7 @@
 enum class TokenType : uint8_t {
     NUMBER, IDENT,
     PLUS, MINUS, STAR, SLASH, CARET,
-    LPAREN, RPAREN, EQUALS, QUESTION, COMMA,
+    LPAREN, RPAREN, LBRACKET, RBRACKET, EQUALS, QUESTION, COMMA,
     END
 };
 
@@ -61,7 +61,8 @@ private:
             case '+': return TokenType::PLUS;   case '-': return TokenType::MINUS;
             case '*': return TokenType::STAR;   case '/': return TokenType::SLASH;
             case '^': return TokenType::CARET;  case '(': return TokenType::LPAREN;
-            case ')': return TokenType::RPAREN; case '=': return TokenType::EQUALS;
+            case ')': return TokenType::RPAREN; case '[': return TokenType::LBRACKET;
+            case ']': return TokenType::RBRACKET; case '=': return TokenType::EQUALS;
             case '?': return TokenType::QUESTION; case ',': return TokenType::COMMA;
             default:  return std::nullopt;
         }

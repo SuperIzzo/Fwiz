@@ -74,7 +74,7 @@ The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `r
 
 M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 to 649 lines (4×); reloading and re-solving the 654-line intermediate `.fw` file exceeds 60s wall-clock. The CSE-I3 test now wraps the roundtrip call with `timeout 10` and accepts either a correct numeric result (A ≈ 15–16) or a timeout-bound empty output — real correctness is not lost, but perf is degraded. Investigation needed before next derive-heavy cycle; see Future.md #12g.
 
-## 11. Complex numbers (`i`) — current scope and limitations (2026-05-09)
+## 11. Complex numbers (`i`) and vectors/matrices — current scope and limitations (2026-05-09/10)
 
 `i` is a builtin constant with NaN binding as of Cycle A. What works and what does not:
 
@@ -87,6 +87,21 @@ M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 
 - Complex root-finding (`resolve_all` on `x^2+1=0` returning `i`-containing forms) is not supported.
 
 The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than propagating NaN — a pre-existing bug made reachable by the NaN-binding for `i`. It is closed off from user input by the `is_active_builtin` NaN-skip, but remains latent; see Future #13c.
+
+## 12. Vectors and matrices (`vec`/`mat`) — current scope (2026-05-10)
+
+`[1, 2, 3]` and `[[1,0],[0,1]]` literals are supported as of Cycle B M3. What works and what does not:
+
+**Works:** vector/matrix literals; element-wise add/sub (`[1,2]+[3,4] == [4,6]`); scalar-mul (`2*[1,2,3] == [2,4,6]`); `matmul`, `det` (2×2 and 3×3), `inv` (2×2), `transpose` (general). Symbolic arguments are preserved throughout — `det([[a,b],[c,d]])` returns `a*d - b*c`. Shape mismatch on any operation propagates `Var("undefined")`.
+
+**Does not work yet:**
+- `inv` for 3×3 and larger — returns `undefined` (Future #14 reopen trigger).
+- `det` for 4×4 and larger — returns `undefined`.
+- Matrix-valued CLI bindings: `bindings` is `map<string, double>`; matrix variables cannot be bound to concrete values in CLI queries (Future #10a bindings-parameter extension).
+- Complex-element matrices (e.g. `[[1+i, 0],[0, 1-i]]`) — depends on Future #13a.
+- `evaluate()` always returns empty for vec/mat expressions — no real-valued projection exists. Numeric solver and condition comparisons cannot consume matrix values.
+
+**Shape mismatch behavior** is deliberate: fwiz's domain-boundary idiom propagates `undefined` rather than throwing, consistent with `x/x = undefined iff x = 0`. Equations containing undefined operands fail to solve cleanly at the `resolve()` boundary.
 
 ## 10. M3-6 fingerprint dedup relaxed post-M1 cascade (Future.md #12f)
 
