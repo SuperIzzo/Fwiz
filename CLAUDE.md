@@ -192,3 +192,16 @@ USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → re
 - **Ship-with-followup**: if the cycle has shipped SHIP-BLOCKING tests but has SHIP-DESIRABLE outstanding, close the cycle, log Future.md entries with reopen triggers, and spin a micro-cycle for the follow-up.
 - **Measure before design** (hang/perf tasks): research phase MUST include an "Empirical bisection" section — run the reproducer with every orthogonal flag, time each, identify which variants fail the same way. Skip only if the user explicitly says "the hang is in [specific layer]" with authority. Triangle-hang wasted two design rounds this way.
 - **Meta-review fires automatically** at end of every cycle, not on user request. See `.claude/agents/fwiz-orchestrator.md` Phase 6.
+
+## Future.md tiers
+
+`docs/Future.md` is organised into four visionary tiers. The visionary audit (`/audit-future`, also auto-fired at Phase 5 entry when `Future.md` has been modified) maintains this organisation autonomously — high-confidence moves apply silently; only uncertain calls escalate to the user.
+
+- **In-scope** — aligned with the universal math inference engine vision; tiny fast core; eligible for direct planning.
+- **Wrapper-tool** — useful but belongs OUTSIDE the core (plotting, LaTeX, GUIs, integrations, output formatting that isn't load-bearing for solving). Per `visionary.md`: "Everything else (plotting, LaTeX, GUIs, integrations) is built AROUND it, not inside it."
+- **Parked** — in-scope but waiting on a concrete reopen trigger. Each parked item carries the trigger condition explicitly, in the spirit of `Future.md` #20's deferral pattern.
+- **Killed** — out of vision. Removed from `Future.md` entirely and recorded in `docs/REJECTED.md` (case-law sidecar) with rationale, vision principle violated, date, and optional reopen trigger.
+
+**Lock mechanism.** Any item carrying `**Locked:** YYYY-MM-DD — <reason>` is durable: the visionary skips it on every audit. Locks are the user's veto channel — set one when you disagree with the agent's tier or want an item immune from auto-classification. Removing the lock re-enables future audits.
+
+**Audit firing.** The audit short-circuits silently if `Future.md` mtime is older than `.fwiz-workflow/last-future-audit`. So most cycles close without spawning the visionary; the audit only runs when there's actual change to evaluate. See `.claude/agents/visionary.md` §Audit Mode and `.claude/commands/audit-future.md` for the protocol.

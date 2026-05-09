@@ -118,6 +118,27 @@ Merge all three into `.fwiz-workflow/review-notes.md`. Present to user.
 
 ## Phase 5: PLAN-NEXT
 
+**Prelude — Future.md vision audit (auto-fire).** Before reading `docs/Future.md` for next priorities, check whether a vision audit is due. The audit fires when ANY of `docs/Future.md`, `.claude/agents/visionary.md`, or `CLAUDE.md` has been modified since the last audit (vision-drift detection — if vision principles or tier semantics change, all classifications are presumptively stale):
+
+```bash
+LAST_AUDIT_FILE=.fwiz-workflow/last-future-audit
+if [ -f "$LAST_AUDIT_FILE" ]; then
+  LAST_TS=$(cat "$LAST_AUDIT_FILE")
+  F_TS=$(stat -c %Y docs/Future.md)
+  V_TS=$(stat -c %Y .claude/agents/visionary.md)
+  C_TS=$(stat -c %Y CLAUDE.md)
+  if [ "$F_TS" -gt "$LAST_TS" ] || [ "$V_TS" -gt "$LAST_TS" ] || [ "$C_TS" -gt "$LAST_TS" ]; then
+    echo "audit-due"
+  else
+    echo "audit-skip"
+  fi
+else
+  echo "audit-due"
+fi
+```
+
+If `audit-due`, run the audit BEFORE step (1) below — invoke `/audit-future` (or spawn the visionary in audit-mode directly, following the protocol in `.claude/commands/audit-future.md`). High-confidence verdicts auto-apply silently; only medium/low confidence calls surface to the user as a small approval batch. The audit is bidirectional — it both classifies new items DOWN the tier ladder AND scans parked / REJECTED.md items for reopen-trigger satisfaction (UP the ladder). Its purpose is to keep `Future.md` aligned with vision autonomously, so PLAN-NEXT operates on a tiered, vision-aligned list. Skip the audit silently if `audit-skip`. See CLAUDE.md §Future.md tiers for the four-tier model and the lock mechanism.
+
 When review completes or user asks "what's next": (1) read `.fwiz-workflow/review-notes.md`, docs/Future.md, docs/Known-Issues.md; (2) **carry forward unresolved SHIP-DESIRABLE items**: read the PRIOR cycle's `next-priorities.md` (in `archive/<prior-cycle>/` if rotated) under "reviewer-flagged follow-up items" or equivalent — for each item not picked up this cycle, restate it in this cycle's next-priorities under a "Carried over from {prior-cycle}" section, refreshed with whatever context the new cycle provides. SHIP-DESIRABLE items shipped without follow-up degrade silently otherwise: `next-priorities.md` is rotated per cycle, so an item that doesn't get picked up in cycle N+1 is invisible to cycle N+2 unless the orchestrator re-surfaces it. Canonical miss: PROV-E (provenance cycle 2026-04-26) deferred to SHIP-DESIRABLE; Symbolic Differentiation cycle 2026-04-27 did not pick it up; meta-review flagged the gap, no orchestrator-side mechanism existed to catch it; (2b) **extract lock-mechanism artifacts the brief said to write at cycle close**: cleanup-cycle briefs commonly include a "Lock mechanism" or "Verification command" clause requiring a baseline count / hash / grep tally to land in `next-priorities.md` at cycle close (so the next cycle's review can grep the lock). Re-read the brief's lock clause before writing next-priorities; if it names an artifact ("Add a `grep -c X` baseline count to `next-priorities.md` at cycle close"), include it explicitly. The reviewer will catch a missing lock at REVIEW phase, but PLAN-NEXT is the right place to land it — closing the cycle without the lock-block in next-priorities means the lock isn't queryable next cycle. Canonical miss: Cycle 5 S3 std::function triage 2026-05-06 — brief line 415 required a `grep -c 'std::function' src/*.h` baseline count; first next-priorities.md draft omitted it; reviewer Finding 1 flagged it as MINOR; orchestrator added it at PLAN-NEXT close; (3) write `.fwiz-workflow/next-priorities.md` with Completed, Issues from review, **Carried over from prior cycle** (if any), **Lock-mechanism block** (if brief required one), Top 3 priorities (ranked by impact), Recommended next (single item + research question); (4) ask "Should I research {recommended item}?"
 
 ## Phase 6: META-REVIEW (End of Cycle)
