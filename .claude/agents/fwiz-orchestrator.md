@@ -143,11 +143,83 @@ When review completes or user asks "what's next": (1) read `.fwiz-workflow/revie
 
 ## Phase 6: META-REVIEW (End of Cycle)
 
+**Prelude — Blind-Spot Critic (auto-fire).** Before spawning the meta-reviewer, spawn the **blind-spot-critic** agent against the cycle's diff. It samples 7 eligible functions (2 longest in the diff, 2 random from the diff, 3 random from anywhere in the codebase), runs Haiku-grader explanation tests at three context tiers, and on failure files refactor items into `docs/Future.md` plus extracts patterns into `docs/Code-Style.md`. Score record lands in `.fwiz-workflow/blind-spot-scores.md`.
+
+Determine the diff base. On first run, `.fwiz-workflow/last-blind-spot-commit` doesn't exist — fall back to `HEAD~1`:
+
+```bash
+LAST_BS=.fwiz-workflow/last-blind-spot-commit
+if [ -f "$LAST_BS" ]; then
+  BASE=$(cat "$LAST_BS")
+else
+  BASE=HEAD~1
+fi
+# blind-spot-critic uses: git diff $BASE..HEAD -- src/*.h src/*.cpp
+```
+
+Pass `BASE` to the agent in the spawn brief.
+
+This catches the **negative-signal complement** — code that isn't broken but isn't readable. The meta-reviewer reviews the cycle's process; the blind-spot-critic reviews the cycle's output for opacity. Together they cover both axes of cycle quality.
+
+After the blind-spot-critic returns, update `.fwiz-workflow/last-blind-spot-commit`:
+
+```bash
+git rev-parse HEAD > .fwiz-workflow/last-blind-spot-commit
+```
+
+Skip the prelude only if the diff has zero eligible functions (no `src/*.h`/`src/*.cpp` changes, or all changes are in trivial getters/setters). For full-codebase audits, see `/blind-spot-sweep` (user-triggered).
+
 After PLAN-NEXT, spawn **meta-reviewer** to audit the workflow itself. **NOT optional, NOT user-triggered** — fires automatically at cycle end. Skipping accumulates workflow debt. If user declines ("not now"), log the decline. Execution: give meta-reviewer all `.fwiz-workflow/*.md` artifacts + all `.claude/agents/*.md` profiles; ask for cycle analysis (what worked, what didn't, why) and specific profile edits. Apply clear wins (prompt fixes, model changes) immediately; present debatable changes to the user.
 
 → Conditional protocols that may fire at META-REVIEW (read on demand from `fwiz-orchestrator-protocols.md`):
 - **Multi-cycle audit roadmap archival** — when this cycle is part of a `design-*-cycles.md` roadmap with Cycle N+1 listed.
 - **Ad-hoc meta-review** — also fires mid-cycle if any agent produces unexpected/low-quality output (do NOT wait for end of cycle).
+
+**Reflector — strategic positioning (auto-fire, after meta-reviewer).** When the meta-reviewer returns, spawn the **log-arc-reflector** agent. Brief includes: meta-reviewer output summary, paths to all relevant `.fwiz-workflow/*.md` artifacts, and the output of `tools/session-stats.py --json` for context-state proxies. The reflector reads what it needs; do not pre-ingest the artifacts.
+
+The reflector returns a verdict (`continue` / `new-cycle keep-context` / `new-cycle clear-context` / `pause-and-survey` / `new-arc`) plus reasoning. In **interactive mode** (default) the verdict is a recommendation — surface it to the user and act per their confirmation (or proceed silently for no-op verdicts like `continue`). In **autonomous mode** (see next section) the verdict auto-applies within the goal's `allowed_dispositions`.
+
+After the reflector returns, log `[ISO timestamp] REFLECTION` to `orchestrator-log.md` with the verdict and action taken.
+
+## Autonomous mode
+
+Active when `.fwiz-workflow/autonomous-mode.md` exists with `mode: active`. The user enters via `/autonomous <goal>` and exits via `/halt-autonomous` or any user input.
+
+**Cycle-close flow when autonomous mode is active:**
+
+1. Read `.fwiz-workflow/autonomous-mode.md` (goal, completion criterion, allowed dispositions, max cycles).
+2. The reflector evaluates goal completion (concrete criterion or `reflector-judged`) and emits its verdict + safety-brake check.
+3. **If goal met:** reflector writes `mode: complete`. Orchestrator pings user with the result. Exit autonomous.
+4. **If safety brake fires** (max-cycles reached without goal-met, `pause-and-survey` verdict, 3-strike implementer this cycle, muddy-context-with-no-remediation, parked-list inflation, meta-reviewer high-severity unresolved): reflector writes `mode: halted` with reason. Ping user. Exit autonomous.
+5. **Otherwise:** apply the verdict per its allowed-disposition mapping:
+   - `continue` → start Phase 1 of next cycle immediately, using the goal description as the user brief; do NOT ask for confirmation.
+   - `new-cycle keep-context` → same as `continue`.
+   - `new-cycle clear-context` → only if the verdict is allowed AND `context_state_hint == muddy` AND reflector confidence high; if applying, the orchestrator should ping the user with a brief summary before clearing (clearing is irreversible and worth a one-line surface).
+   - `new-arc` → trigger Phase 4 plan-ideator (when shipped); if Phase 4 not yet built, exit autonomous and ping user.
+6. Increment `cycles_so_far` in autonomous-mode.md after each cycle.
+
+**Halt-on-user-input:** any user message during autonomous mode exits the mode. The user can resume with `/autonomous` again if desired.
+
+**Logging:** every autonomous cycle starts with a `[timestamp] AUTONOMOUS-CYCLE-K-OF-M` entry in `orchestrator-log.md` so the run is reconstructable later.
+
+## Campaign planning (plan-ideator + plan-critic)
+
+Triggered when the reflector emits a `new-arc` verdict at Phase 6, OR via the `/plan-campaign [seed]` slash command (user-driven).
+
+**Pair structure:** divergent generation followed by convergent selection.
+
+1. Spawn `plan-ideator` (Opus). It reads project state and produces 3-5 genuinely-different campaign shapes (depth-first on subsystem / breadth-first features / hardening / capability-unlock / external integration / quality-oracle / etc). Returns text only.
+2. Spawn `plan-critic` (Opus) with the ideator's full output passed in. The critic evaluates each campaign against vision, current state fit, velocity match, risk profile, strategic positioning, counterfactual cost — picks ONE winner (or merges compatibles).
+3. Archive `docs/ROADMAP.md` to `.fwiz-workflow/roadmap-archive/<date>-genN.md`.
+4. Compose the new `ROADMAP.md` with the winner as the active arc, runner-up queued, prior active arc moved to completed (or queued / dropped).
+5. Increment `<!-- generation: N -->`.
+6. Apply per mode:
+   - **Interactive** — surface the winner to the user, accept approve / swap-to-runner-up / re-run-ideator-with-adjusted-seed.
+   - **Autonomous** — if critic confidence is `high`, apply silently; if `medium` or `low`, exit autonomous and ping user (don't pick arcs on weak evidence in unattended runs).
+
+**Independence between halves:** the ideator and critic must NOT see each other's prior outputs across runs. Spawn them with clean briefs each time. Same anti-collapse rule that keeps generate-then-filter pairs from drifting toward agreement over iterations.
+
+See `.claude/commands/plan-campaign.md` for the runtime; `.claude/agents/plan-ideator.md` and `.claude/agents/plan-critic.md` for agent profiles.
 
 ## Quality Bar — TL;DR
 
