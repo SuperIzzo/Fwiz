@@ -11969,36 +11969,35 @@ void test_periodicity_m1_branch_generation() {
     SECTION("Periodicity M1: second inverse equations for sin/cos");
 
     // sin(x) = 0.5 with --no-numeric: post-M2 the periodic carrier wraps both
-    // algebraic branches into one ValueSet, rendered as a single output line
-    // (`x : 1/6*pi + k*2*pi, k in Z | 5/6*pi + k*2*pi, k in Z`). The two-family
-    // structural invariant is checked by test_periodicity_m2_integration_sin
-    // (`vs.periodic().size() == 2`). This test verifies the M1 wiring fires
-    // and the line-1 ValueSet rendering succeeds.
+    // algebraic branches into one ValueSet. Post-12h main.cpp emits one
+    // alias-prefixed line per family, so we get 2 lines (pi/6 and 5*pi/6).
+    // The two-family structural invariant is checked by
+    // test_periodicity_m2_integration_sin (`vs.periodic().size() == 2`).
     {
         write_fw("/tmp/per_m1_sin.fw", "result = sin(x)\n");
         FILE* p = popen("./bin/fwiz --no-numeric '/tmp/per_m1_sin(x=?, result=0.5)' 2>&1 | wc -l", "r");
         ASSERT(p != nullptr, "M1 sin(x)=0.5 popen");
         int n = 0; if (p) { fscanf(p, "%d", &n); pclose(p); }
-        ASSERT(n == 1, std::string("M1 sin(x)=0.5: exactly 1 rendered periodic line (got ")
+        ASSERT(n == 2, std::string("M1 sin(x)=0.5: 2 rendered periodic lines post-12h (got ")
                        + std::to_string(n) + ")");
     }
 
-    // cos(x) = 0 with --no-numeric: post-M2, both algebraic branches (pi/2
-    // and 3*pi/2) wrap into one periodic ValueSet, rendered as a single
-    // output line. The two-family count is checked structurally by
-    // test_periodicity_m2_integration_cos_zero.
+    // cos(x) = 0 with --no-numeric: two algebraic branches (pi/2 and 3*pi/2)
+    // produce a periodic ValueSet with 2 families. Post-12h main.cpp emits
+    // 2 lines. (The half-period collapse to one stride-pi family is a Future.md
+    // follow-up; current dedup keeps both families visible.)
     {
         write_fw("/tmp/per_m1_cos.fw", "result = cos(x)\n");
         FILE* p = popen("./bin/fwiz --no-numeric '/tmp/per_m1_cos(x=?, result=0)' 2>&1 | wc -l", "r");
         ASSERT(p != nullptr, "M1 cos(x)=0 popen");
         int n = 0; if (p) { fscanf(p, "%d", &n); pclose(p); }
-        ASSERT(n == 1, std::string("M1 cos(x)=0: exactly 1 rendered periodic line (got ")
+        ASSERT(n == 2, std::string("M1 cos(x)=0: 2 rendered periodic lines post-12h (got ")
                        + std::to_string(n) + ")");
     }
 
     // sin(x) = 1 — degenerate case where both branches coincide at pi/2.
     // Pre-M2 dedup we may see 2 numerically-equal roots; ValueSet::discrete
-    // deduplicates by EPSILON_ZERO, so only 1 root survives.
+    // deduplicates by EPSILON_ZERO, so only 1 root survives. Renders as 1 line.
     {
         write_fw("/tmp/per_m1_sin1.fw", "result = sin(x)\n");
         FILE* p = popen("./bin/fwiz --no-numeric '/tmp/per_m1_sin1(x=?, result=1)' 2>&1 | wc -l", "r");
@@ -12186,6 +12185,150 @@ void test_periodicity_m2_render_substring() {
     ASSERT(out.find("5 / 6 * pi") != std::string::npos
            || out.find("5 * pi / 6") != std::string::npos,
            std::string("M2 render contains '5 / 6 * pi' or '5 * pi / 6' (got: ") + out + ")");
+}
+
+// 12h: ValueSet::periodic_render_lines() returns one rendered string per
+// dedup'd family (no separator, no prefix). to_string() now joins with " | ".
+// Two new dispatch arms in main.cpp emit one line per rendered string with
+// `<alias> = <line>` (or `~` if approximate).
+void test_periodicity_12h_render_lines_method() {
+    SECTION("Periodicity 12h: ValueSet::periodic_render_lines() shape");
+
+    // sin(x) = 0.5 produces 2 dedup'd families. Method returns 2 strings,
+    // each like "1 / 6 * pi + k * 2 * pi, k in Z".
+    {
+        write_fw("/tmp/per_12h_sin.fw", "result = sin(x)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/per_12h_sin.fw");
+        auto vs = sys.resolve_all("x", {{"result", 0.5}});
+        auto lines = vs.periodic_render_lines();
+        ASSERT(lines.size() == 2,
+               std::string("12h: sin(x)=0.5 produces 2 render lines (got ")
+                   + std::to_string(lines.size()) + ")");
+        for (const auto& l : lines) {
+            ASSERT(l.find("+ k *") != std::string::npos,
+                   std::string("12h: line contains '+ k *' (got '") + l + "')");
+            ASSERT(l.find("k in Z") != std::string::npos,
+                   std::string("12h: line contains 'k in Z' (got '") + l + "')");
+            // No alias prefix or separator embedded in the line itself.
+            ASSERT(l.find('=') == std::string::npos,
+                   std::string("12h: line has no '=' separator (got '") + l + "')");
+            ASSERT(l.find('|') == std::string::npos,
+                   std::string("12h: line has no '|' separator (got '") + l + "')");
+        }
+    }
+
+    // tan(x) = 1 produces 1 family. Method returns 1 string.
+    {
+        write_fw("/tmp/per_12h_tan.fw", "result = tan(x)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/per_12h_tan.fw");
+        auto vs = sys.resolve_all("x", {{"result", 1.0}});
+        auto lines = vs.periodic_render_lines();
+        ASSERT(lines.size() == 1,
+               std::string("12h: tan(x)=1 produces 1 render line (got ")
+                   + std::to_string(lines.size()) + ")");
+    }
+}
+
+// 12h: main.cpp Pass 1 dispatch emits per-family `x = <base> + k * <period>, k in Z`
+// lines (NOT the colon-style `x : ... | ...` shape). One line per family.
+void test_periodicity_12h_main_pass1_per_family_equals() {
+    SECTION("Periodicity 12h: main.cpp Pass 1 per-family '=' shape");
+
+    // Fresh-env hygiene: remove any prior /tmp artifact.
+    std::remove("/tmp/per_12h_pass1_sin.fw");
+    write_fw("/tmp/per_12h_pass1_sin.fw", "result = sin(x)\n");
+    FILE* p = popen(
+        "./bin/fwiz --no-numeric '/tmp/per_12h_pass1_sin(x=?, result=0.5)' 2>&1", "r");
+    ASSERT(p != nullptr, "12h Pass 1 popen");
+    std::string out;
+    if (p) {
+        char buf[1024];
+        while (fgets(buf, sizeof(buf), p)) out += buf;
+        pclose(p);
+    }
+
+    // Must use '=' separator, NOT the legacy ':' colon-range form.
+    ASSERT(out.find(" = ") != std::string::npos,
+           std::string("12h Pass 1: output uses ' = ' separator (got: ") + out + ")");
+    ASSERT(out.find(" : ") == std::string::npos,
+           std::string("12h Pass 1: output does NOT use ' : ' colon (got: ") + out + ")");
+
+    // One line per family — count newlines preceded by `+ k *`.
+    size_t pos = 0, families_on_lines = 0;
+    while ((pos = out.find("+ k *", pos)) != std::string::npos) {
+        ++families_on_lines;
+        ++pos;
+    }
+    ASSERT(families_on_lines == 2,
+           std::string("12h Pass 1: 2 family-bearing rendered lines (got ")
+               + std::to_string(families_on_lines) + " in '" + out + "')");
+
+    // Both alias-prefixed lines must appear independently (no `|`).
+    ASSERT(out.find("|") == std::string::npos,
+           std::string("12h Pass 1: no '|' alternative-separator (got: ") + out + ")");
+
+    // Both expected family bases (pi/6 and 5*pi/6) appear with the `x = ` prefix.
+    // We don't pin the exact substring to avoid coupling to canonicalizer drift,
+    // but each must appear on its own line beginning `x = ` (after newline or
+    // start-of-string).
+    auto count_x_eq_lines = [&](const std::string& s) {
+        size_t i = 0, c = 0;
+        while ((i = s.find("x = ", i)) != std::string::npos) {
+            // Ensure beginning of line.
+            if (i == 0 || s[i - 1] == '\n') ++c;
+            ++i;
+        }
+        return c;
+    };
+    ASSERT(count_x_eq_lines(out) == 2,
+           std::string("12h Pass 1: 2 lines starting 'x = ' (got ")
+               + std::to_string(count_x_eq_lines(out)) + " in '" + out + "')");
+}
+
+// 12h: cos(x)=0 — single family (post-dedup design intent) OR two; whatever
+// `to_string()` shows is what the new arm must show, but with '=' not ':'.
+// This guards the dedup parity between to_string() and the new dispatch path.
+void test_periodicity_12h_main_pass1_dedup_parity() {
+    SECTION("Periodicity 12h: dispatch / to_string dedup parity");
+
+    std::remove("/tmp/per_12h_pass1_cos.fw");
+    write_fw("/tmp/per_12h_pass1_cos.fw", "result = cos(x)\n");
+
+    // Count families via C++ API to_string() (ground truth post-dedup).
+    FormulaSystem sys;
+    sys.load_file("/tmp/per_12h_pass1_cos.fw");
+    auto vs = sys.resolve_all("x", {{"result", 0.0}});
+    const auto rendered = vs.to_string();
+    size_t pos = 0, expected_families = 0;
+    while ((pos = rendered.find("+ k *", pos)) != std::string::npos) {
+        ++expected_families;
+        ++pos;
+    }
+
+    // Now count families via main.cpp dispatch.
+    FILE* p = popen(
+        "./bin/fwiz --no-numeric '/tmp/per_12h_pass1_cos(x=?, result=0)' 2>&1", "r");
+    ASSERT(p != nullptr, "12h dedup parity popen");
+    std::string out;
+    if (p) {
+        char buf[1024];
+        while (fgets(buf, sizeof(buf), p)) out += buf;
+        pclose(p);
+    }
+    pos = 0;
+    size_t cli_families = 0;
+    while ((pos = out.find("+ k *", pos)) != std::string::npos) {
+        ++cli_families;
+        ++pos;
+    }
+    ASSERT(cli_families == expected_families,
+           std::string("12h dedup parity: CLI emits same family count as to_string() (CLI ")
+               + std::to_string(cli_families) + " vs to_string " + std::to_string(expected_families)
+               + ", out='" + out + "')");
+    ASSERT(out.find(" = ") != std::string::npos,
+           std::string("12h dedup parity: CLI uses '=' separator (got: ") + out + ")");
 }
 
 // Regression guard: x^2 = 4 must NOT trigger periodic detection.
@@ -12504,6 +12647,9 @@ int main() {
     test_periodicity_m2_integration_cos_zero();
     test_periodicity_m2_integration_cos_one();
     test_periodicity_m2_render_substring();
+    test_periodicity_12h_render_lines_method();
+    test_periodicity_12h_main_pass1_per_family_equals();
+    test_periodicity_12h_main_pass1_dedup_parity();
     test_periodicity_regression_quadratic();
 
     std::cout << "\n===============\n";

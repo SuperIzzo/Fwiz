@@ -314,6 +314,13 @@ int main(int argc, const char* argv[]) {
                                           << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
                             if (!result.discrete().empty())
                                 solved[q.variable] = result.discrete()[0];
+                        } else if (result.has_periodic()) {
+                            // 12h: periodic families render per-line with '=' / '~'
+                            // separator (same as discrete), one line per dedup'd
+                            // family. Dedup via ValueSet::periodic_render_lines().
+                            const bool exact = is_exact_result(q.variable);
+                            for (const auto& line : result.periodic_render_lines())
+                                std::cout << q.alias << (exact ? " = " : " ~ ") << line << '\n';
                         } else {
                             std::cout << q.alias << " : " << result.to_string() << '\n';
                         }
@@ -352,6 +359,12 @@ int main(int argc, const char* argv[]) {
                                       << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
                         if (!result.discrete().empty())
                             solved[dq.alias] = result.discrete()[0];
+                    } else if (result.has_periodic()) {
+                        // 12h: periodic families per-line '=' / '~' shape.
+                        auto it = sys.numeric_results_.find(dq.alias);
+                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
+                        for (const auto& line : result.periodic_render_lines())
+                            std::cout << dq.alias << (exact ? " = " : " ~ ") << line << '\n';
                     } else {
                         std::cout << dq.alias << " : " << result.to_string() << '\n';
                     }

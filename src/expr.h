@@ -366,6 +366,49 @@ public:
         return covered_to == INF;
     }
 
+    // Periodic families (Future #12). Render each dedup'd family as
+    // `<base> + k * <period>, k in Z`. base recognised via fmt_exact_double
+    // (so `pi / 6` surfaces); period is symbolic from inception. Render-time
+    // dedup collapses {b1,p1} ≡ {b2,p2} when periods agree numerically AND
+    // (b1-b2) lies on the integer-multiple-of-p1 lattice. Pairwise; small N
+    // (typically 1-2 families per equation). 12h: extracted from to_string()
+    // so main.cpp dispatch can emit per-family `<alias> = <line>` shapes
+    // without re-implementing dedup.
+    [[nodiscard]] std::vector<std::string> periodic_render_lines() const {
+        std::vector<std::string> lines;
+        if (periodic_.empty()) return lines;
+        std::vector<PeriodicFamily> kept;
+        kept.reserve(periodic_.size());
+        for (const auto& pf : periodic_) {
+            const double p_new = evaluate(*pf.period).value_or_nan();
+            bool dup = false;
+            if (std::isfinite(p_new) && p_new > 0) {
+                for (const auto& k : kept) {
+                    const double p_old = evaluate(*k.period).value_or_nan();
+                    if (!std::isfinite(p_old) || p_old <= 0) continue;
+                    if (std::abs(p_new - p_old) >= EPSILON_ZERO * std::max(p_new, p_old))
+                        continue;
+                    double rem = std::fmod(pf.base - k.base, p_old);
+                    if (rem >= p_old / 2.0) rem -= p_old;
+                    else if (rem < -p_old / 2.0) rem += p_old;
+                    if (std::abs(rem) < EPSILON_ZERO * p_old) { dup = true; break; }
+                }
+            }
+            if (!dup) kept.push_back(pf);
+        }
+        // fmt_exact_double allocates Expr nodes via the arena to recognise
+        // pi/6 etc. Every in-tree call site executes under an active
+        // ExprArena::Scope (see main.cpp:257 solve_fmt_scope; tests use the
+        // global test_arena scope).
+        lines.reserve(kept.size());
+        for (const auto& pf : kept) {
+            const std::string base_str   = fmt_exact_double(pf.base, {});
+            const std::string period_str = expr_to_string(*pf.period);
+            lines.push_back(base_str + " + k * " + period_str + ", k in Z");
+        }
+        return lines;
+    }
+
     // String representation
     [[nodiscard]] std::string to_string() const {
         if (empty()) return "{}";
@@ -388,41 +431,13 @@ public:
             parts.push_back(s);
         }
 
-        // Periodic families (Future #12). Render each as
-        // `<base> + k * <period>, k in Z`. base recognised via fmt_exact_double
-        // (so `pi / 6` surfaces); period is symbolic from inception. Render-time
-        // dedup collapses {b1,p1} ≡ {b2,p2} when periods agree numerically AND
-        // (b1-b2) lies on the integer-multiple-of-p1 lattice. Pairwise; small N
-        // (typically 1-2 families per equation).
+        // Periodic families: delegate dedup-and-render to periodic_render_lines()
+        // (12h refactor). Each rendered line goes in as one " | "-joinable part.
         if (!periodic_.empty()) {
-            std::vector<PeriodicFamily> kept;
-            kept.reserve(periodic_.size());
-            for (const auto& pf : periodic_) {
-                const double p_new = evaluate(*pf.period).value_or_nan();
-                bool dup = false;
-                if (std::isfinite(p_new) && p_new > 0) {
-                    for (const auto& k : kept) {
-                        const double p_old = evaluate(*k.period).value_or_nan();
-                        if (!std::isfinite(p_old) || p_old <= 0) continue;
-                        if (std::abs(p_new - p_old) >= EPSILON_ZERO * std::max(p_new, p_old))
-                            continue;
-                        double rem = std::fmod(pf.base - k.base, p_old);
-                        if (rem >= p_old / 2.0) rem -= p_old;
-                        else if (rem < -p_old / 2.0) rem += p_old;
-                        if (std::abs(rem) < EPSILON_ZERO * p_old) { dup = true; break; }
-                    }
-                }
-                if (!dup) kept.push_back(pf);
-            }
-            // fmt_exact_double allocates Expr nodes via the arena to
-            // recognise pi/6 etc. Every in-tree call site of to_string()
-            // executes under an active ExprArena::Scope (see main.cpp:257
-            // solve_fmt_scope; tests use the global test_arena scope).
-            for (const auto& pf : kept) {
-                const std::string base_str   = fmt_exact_double(pf.base, {});
-                const std::string period_str = expr_to_string(*pf.period);
-                parts.push_back(base_str + " + k * " + period_str + ", k in Z");
-            }
+            auto plines = periodic_render_lines();
+            parts.insert(parts.end(),
+                std::make_move_iterator(plines.begin()),
+                std::make_move_iterator(plines.end()));
         }
 
         if (parts.size() == 1) return parts[0];
