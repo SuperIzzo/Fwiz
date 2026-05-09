@@ -10754,17 +10754,10 @@ void test_semantic_dedup_m3() {
             // NOLINTNEXTLINE(bugprone-empty-catch) — unparseable line → skip
             } catch (...) {}
         }
-        // 2026-05-08: M1 (sin/cos second inverse equations) cascade exposes a
-        // resolution gap between derive_all's 3-point fingerprint and this
-        // test's 5-point branch-cut probes. derive_all keeps 4 candidates that
-        // coincide on its 3 points but diverge on the test's 5 (i.e., they are
-        // NOT semantic duplicates by branch-cut criteria — derive_all is
-        // correct to retain them; this test is *more* discriminating than
-        // derive_all). Relaxed to bounded cascade. Future.md #12f trigger:
-        // tighten derive_all fingerprint resolution (extend test points or
-        // add structural canonicalization). 30-50 LOC, separate cycle.
-        ASSERT(dup_count <= 4,
-               "M3-6: triangle derive fingerprint dups bounded by M1 cascade (got: " + std::to_string(dup_count) + ", cap: 4)");
+        // 2026-05-09 (#12f): tightened back to 0 after derive_all fingerprint
+        // resolution was extended to cover obtuse-domain branch cuts.
+        ASSERT(dup_count == 0,
+               "M3-6: triangle derive fingerprint dups must be 0 (got: " + std::to_string(dup_count) + ")");
 
         // M1 (SHIP-BLOCKING): no result line contains a sqrt(...)^2 substring.
         // Structural invariant, not count threshold (see earlier comment on numerology).
@@ -11366,8 +11359,11 @@ void test_cse_integration() {
     // CSE-I4: bare --derive byte-identical to current baseline.
     // Baseline rebaselined 2026-05-08 from 158/40983 → 649/186127 after Future
     // #12 M1 (sin/cos second inverse equations) widened branch generation 4x.
-    // The growth is design-anticipated cascade; a follow-up cycle should
-    // investigate dedup/canonicalization to compress repeated branch families.
+    // 2026-05-09 (#12f): rebaselined 649/186127 → 648/185628 after derive_all
+    // fingerprint test points were extended from 3 cyclic primes to 5
+    // explicit branch-cut-distinguishing pairs. Net: 4 false-distinct dups
+    // collapse; a few alternate-branch forms (acos vs 2π−acos) now correctly
+    // retained as distinct. M3-6 fingerprint-resolution gap closes.
     {
         FILE* f = popen(
             "./bin/fwiz --derive 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null | wc -lc",
@@ -11381,10 +11377,10 @@ void test_cse_integration() {
             }
             pclose(f);
         }
-        ASSERT(lines == 649,
-               "CSE-I4: bare --derive line count unchanged at 649 (got " + std::to_string(lines) + ")");
-        ASSERT(chars == 186127,
-               "CSE-I4: bare --derive char count unchanged at 186127 (got " + std::to_string(chars) + ")");
+        ASSERT(lines == 648,
+               "CSE-I4: bare --derive line count unchanged at 648 (got " + std::to_string(lines) + ")");
+        ASSERT(chars == 185628,
+               "CSE-I4: bare --derive char count unchanged at 185628 (got " + std::to_string(chars) + ")");
     }
 
     // CSE-I5: cap interaction. --derive 5 --cse 3 → exactly 5 main equations

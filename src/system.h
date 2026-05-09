@@ -1284,25 +1284,55 @@ abs(x) / x = undefined iff x = 0
         // final emit phase).
         const auto aliases = build_alias_table();
 
-        // --- Semantic fingerprint dedup setup (2026-04-19 cycle) ---
-        // Build 3 prime test points for every free variable in the output.
+        // --- Semantic fingerprint dedup setup (2026-04-19 cycle; #12f extended 2026-05-09) ---
+        // Build 5 prime test points for every free variable in the output.
         // Free vars are the VALUES of symbolic_bindings — the aliased names
         // that actually appear as VARs in the derived expression after
         // build_alias_table() substitution (see ~l.880). Schwartz–Zippel:
-        // distinct small primes per
-        // variable per row minimize accidental cancellations. Values stay
-        // ≤ 5, so pairwise differences are ≤ 3 — friendlier to domain
-        // constraints like the triangle inequality than multiplicative
-        // schemes (which inflate magnitudes and differences).
+        // distinct small primes per variable per row minimize accidental
+        // cancellations.
+        //
+        // Row construction: 5 explicit (small,large) prime pairs, plus
+        // cyclic-prime fill for free vars beyond column 1. The pairs are
+        // chosen so that, for typical 2-side-and-target-angle geometry
+        // workloads (e.g., triangle.fw with `a` ~ small integer), most rows
+        // satisfy both the triangle inequality and the asin/acos input-domain
+        // constraint. This adds branch-cut discriminating power to expose
+        // semantic non-duplicates that 3 close primes cannot distinguish (e.g.
+        // `b*sin(X)/4` vs `sin(pi - asin(c*sin(X)/4)) * b/c`, which coincide
+        // on small-magnitude inputs but diverge when the asin argument exits
+        // [-1, 1] for one variant but not the other). Resolves Future.md #12f.
+        //
+        // For >2 free vars, the 3rd column onward uses the original
+        // cyclic-prime scheme — geometry-domain heuristics don't apply
+        // generically beyond two variables.
         std::vector<std::string> free_vars;
         free_vars.reserve(symbolic_bindings.size());
         for (auto& [k, v] : symbolic_bindings) { (void)k; free_vars.push_back(v); }
-        static constexpr double primes[3] = {2.0, 3.0, 5.0};
-        std::vector<std::map<std::string, double>> test_points(3);
-        // justified: cross-index `(i+j) % 3` arithmetic into `primes`
-        for (size_t i = 0; i < 3; i++) {
+        // Per-row (col0, col1) pair: covers obtuse-A (small, small),
+        // mirror-asymmetric pairs, and acute-A (twin-prime medium and
+        // medium/large). All consecutive cycles satisfy |Δ| ≤ 4 OR are
+        // explicit pairs that the M1 branch test exercises analogously.
+        static constexpr double row_pairs[5][2] = {
+            {2.0, 3.0},    // obtuse A (b²+c² < typical a²); also covers
+                           //   small-magnitude where asin args stay in domain
+            {3.0, 2.0},    // mirror — distinguishes b/c-asymmetric forms
+            {5.0, 7.0},    // acute A; gap=2; medium magnitude
+            {7.0, 5.0},    // mirror
+            {11.0, 13.0},  // acute A; gap=2; twin primes; large magnitude
+                           //   exercises forms that domain-fail at smaller scales
+        };
+        // Cyclic primes for 3rd+ free vars (geometry heuristics don't apply).
+        static constexpr double primes[5] = {2.0, 3.0, 5.0, 7.0, 11.0};
+        std::vector<std::map<std::string, double>> test_points(5);
+        // justified: row_pairs and primes are 2D/1D indexed lookup tables
+        for (size_t i = 0; i < 5; i++) {
             for (size_t j = 0; j < free_vars.size(); j++) {
-                test_points[i][free_vars[j]] = primes[(i + j) % 3];
+                if (j < 2) {
+                    test_points[i][free_vars[j]] = row_pairs[i][j];
+                } else {
+                    test_points[i][free_vars[j]] = primes[(i + j) % 5];
+                }
             }
         }
 
