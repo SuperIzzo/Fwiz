@@ -11317,27 +11317,17 @@ void test_cse_integration() {
     // CSE-I3: roundtrip — write --cse output to tmp .fw, load back, solve correctly.
     // The reference value: A ≈ 15.88 degrees for triangle(a=4, B=20, b=5, c=8.568).
     //
-    // 2026-05-08: M1 (sin/cos second inverse equations) cascade grew --derive
-    // --cse output from 158 → 654 lines (4× branch expansion). The roundtrip
-    // load+solve on the 654-line .fw exceeds 60s wall-clock — this is a
-    // genuine perf regression, not a test-strictness issue, and warrants a
-    // dedicated follow-up cycle. For this cycle: bounded `timeout` wrapper
-    // around the popen so the test fails-fast cleanly; if the wrapper trips
-    // before output, the test passes-with-cascade-trigger. If output arrives
-    // (cascade size becomes acceptable in a future cycle), correctness is
-    // re-validated. Future.md #12g trigger: investigate roundtrip perf on
-    // M1-cascaded derive --cse output (load+solve quadratic-or-worse).
+    // 2026-05-09 (#12g): Strategy-4 perf guard landed; the 654-line cascade now
+    // round-trips in well under a second (was 30 s+ pre-guard). The previous
+    // timeout-bounded escape clause is gone — correctness is required.
     {
         // Capture --cse output and write to /tmp/cse_rt.fw
         FILE* f = popen(
             "./bin/fwiz --derive --cse 'examples/triangle(A=?, a=4, B=20, c, b)' 2>/dev/null > /tmp/cse_rt.fw",
             "r");
         if (f) pclose(f);
-        // Bounded roundtrip — `timeout 10s` cap. If the cascade is too large
-        // for a 10-second budget, the popen returns empty; we accept that as
-        // the cascade-trigger pass per the comment above.
         FILE* g = popen(
-            "timeout 10 ./bin/fwiz '/tmp/cse_rt.fw(A=?, b=5, c=8.568)' 2>/dev/null | head -1",
+            "./bin/fwiz '/tmp/cse_rt.fw(A=?, b=5, c=8.568)' 2>/dev/null | head -1",
             "r");
         std::string line;
         if (g) {
@@ -11345,13 +11335,10 @@ void test_cse_integration() {
             if (fgets(buf, sizeof(buf), g)) line = buf;
             pclose(g);
         }
-        // Either: (a) roundtrip completed and A ~ 15-16 was solved (correctness
-        // path), or (b) the 10s timeout fired (cascade-trigger path — Future.md #12g).
-        bool ok = line.empty()
-               || (line.find("A") != std::string::npos
-                   && (line.find("15.") != std::string::npos
-                    || line.find("16.") != std::string::npos));
-        ASSERT(ok, "CSE-I3: roundtrip valid fwiz OR M1-cascade-bound timeout (got: '" + line + "')");
+        const bool ok = line.find("A") != std::string::npos
+                     && (line.find("15.") != std::string::npos
+                      || line.find("16.") != std::string::npos);
+        ASSERT(ok, "CSE-I3: roundtrip must solve A ~ 15-16 (got: '" + line + "')");
     }
 
     // CSE-I4: bare --derive byte-identical to current baseline.

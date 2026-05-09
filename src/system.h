@@ -2595,6 +2595,14 @@ private:
                 // Skip if both equations have different conditions — their domains
                 // may not overlap (e.g., x>=0 and x<0 in piecewise abs)
                 if (equations[i].condition && equations[j].condition) continue;
+                // 12g perf guard: skip pairs where neither RHS contains the
+                // target. Equating two RHS values where neither references
+                // target yields no constraint on target — pure waste of an
+                // O(tree) substitute + simplify + solve_for_all. Pre-existing
+                // O(N^2) Strategy 4 was blowing up post-Periodicity M1 (4x
+                // equation amplification on triangle --derive --cse).
+                if (!contains_var(equations[i].rhs, target) &&
+                    !contains_var(equations[j].rhs, target)) continue;
                 // Optionally substitute known bindings to detect tautological equations
                 auto maybe_sub = [&](const ExprPtr& e) -> ExprPtr {
                     if (!sub_bindings) return e;
