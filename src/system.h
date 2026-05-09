@@ -257,6 +257,39 @@ struct SolveBudgetExceededError : std::exception {
     return out;
 }
 
+// Periodicity Detection (Future #12):
+// `trig_period(name)` — symbolic-table lookup mapping a periodic builtin
+// function name to its period as ExprPtr. Returns nullptr for non-periodic
+// names. ExprArena::Scope must be active (uses Expr::Num / Expr::BinOpExpr).
+[[nodiscard]] inline ExprPtr trig_period(const std::string& fn_name) {
+    if (fn_name == "sin" || fn_name == "cos")
+        return Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Var("pi"));
+    if (fn_name == "tan")
+        return Expr::Var("pi");
+    return nullptr;
+}
+
+// `detect_trig_origin(target, equations)` — scan the equations list for an
+// equation of shape `result = FUNC_CALL(name in {sin,cos,tan}, args=[Var(target)])`.
+// Returns the function name when matched (so trig_period can be looked up),
+// or empty string otherwise. Compound-arg cases (sin(2*x+1)) deferred to
+// Future #12a.
+[[nodiscard]] inline std::string detect_trig_origin(
+        const std::string& target,
+        const std::vector<Equation>& eqs) {
+    for (const auto& eq : eqs) {
+        const ExprPtr rhs = eq.rhs;
+        if (!rhs || rhs->type != ExprType::FUNC_CALL) continue;
+        if (rhs->args.size() != 1) continue;
+        const ExprPtr arg = rhs->args[0];
+        if (!arg || arg->type != ExprType::VAR) continue;
+        if (arg->name != target) continue;
+        if (rhs->name == "sin" || rhs->name == "cos" || rhs->name == "tan")
+            return rhs->name;
+    }
+    return "";
+}
+
 class FormulaSystem {
 public:
     mutable ExprArena arena;
@@ -620,9 +653,14 @@ abs(x) / x = undefined iff x = 0
     // Each maps a function name to its .fw section content.
     static const std::map<std::string, std::string>& builtin_function_defs() {
         // static const: std::map runtime-init, not constexpr-able in C++17
+        // sin/cos: two inverse equations cover the second principal-cycle
+        // branch (sin: pi - asin(r); cos: 2*pi - acos(r)). Tan stays single
+        // (period = branch shift, single family). Spaces around operators
+        // are required by the .fw lexer's tokenization (whitespace-tolerant
+        // but reviewer-flagged as a safety detail).
         static const std::map<std::string, std::string> defs = {
-            {"sin",  "[sin(x) -> result] @extern sin; x = asin(result)"},
-            {"cos",  "[cos(x) -> result] @extern cos; x = acos(result)"},
+            {"sin",  "[sin(x) -> result] @extern sin; x = asin(result); x = pi - asin(result)"},
+            {"cos",  "[cos(x) -> result] @extern cos; x = acos(result); x = 2 * pi - acos(result)"},
             {"tan",  "[tan(x) -> result] @extern tan; x = atan(result)"},
             {"asin", "[asin(x) -> result] @extern asin; x = sin(result)"},
             {"acos", "[acos(x) -> result] @extern acos; x = cos(result)"},
@@ -1640,7 +1678,8 @@ abs(x) / x = undefined iff x = 0
     // Build a function inverter that resolves via .fw sub-system definitions.
     // Given f(inner) = rhs, loads f's sub-system and solves for the input variable.
     [[nodiscard]] FuncInverter make_func_inverter() const {
-        return [this](const std::string& func_name, const ExprPtr& rhs) -> ExprPtr {
+        return [this](const std::string& func_name, const ExprPtr& rhs) -> std::vector<ExprPtr> {
+            std::vector<ExprPtr> branches;
             try {
                 auto& sub = load_sub_system(func_name);
                 // Find the section with positional args (the function definition)
@@ -1650,30 +1689,29 @@ abs(x) / x = undefined iff x = 0
                     // The return variable is sec.return_var (or "result")
                     const std::string input_var = sec.positional_args[0];
                     const std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
-                    // Solve: given return_var = rhs, find input_var
-                    // Look through the sub-system's equations for one that has input_var on the LHS
-                    // not std::find_if: body returns from the enclosing function with simplify+substitute result
+                    // Collect ALL inverse equations (multiple inverses for sin/cos
+                    // give the second principal-cycle branch — Future #12).
                     for (auto& eq : sub.equations) {
-                        // cppcheck-suppress useStlAlgorithm
-                        if (eq.lhs_var == input_var) {
-                            // eq: input_var = f(return_var)
-                            // Substitute return_var → rhs
-                            return simplify(substitute(eq.rhs, return_var, rhs));
-                        }
+                        if (eq.lhs_var == input_var)
+                            branches.push_back(simplify(substitute(eq.rhs, return_var, rhs)));
                     }
-                    // Try solving algebraically: return_var = g(input_var) → input_var = g⁻¹(rhs)
-                    for (auto& eq : sub.equations) {
-                        if (eq.lhs_var == return_var && contains_var(eq.rhs, input_var)) {
-                            auto result = solve_for(Expr::Var(return_var), eq.rhs, input_var);
-                            if (result)
-                                return simplify(substitute(result, return_var, rhs));
+                    // Fall back to algebraic inversion if no explicit inverse equations
+                    if (branches.empty()) {
+                        for (auto& eq : sub.equations) {
+                            if (eq.lhs_var == return_var && contains_var(eq.rhs, input_var)) {
+                                auto result = solve_for(Expr::Var(return_var), eq.rhs, input_var);
+                                if (result) {
+                                    branches.push_back(simplify(substitute(result, return_var, rhs)));
+                                    break;
+                                }
+                            }
                         }
                     }
                     break;  // only check first section with positional args
                 }
             // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system load or solve failure → no inverse available
             } catch (const std::runtime_error&) {}
-            return nullptr;  // no inverse found
+            return branches;
         };
     }
 
@@ -1798,8 +1836,23 @@ abs(x) / x = undefined iff x = 0
                 combined = combined.unite(ValueSet::eq(r));
             return combined;
         }
-        if (!exact_results.empty())
+        if (!exact_results.empty()) {
+            // Periodicity Detection (Future #12): when target's source equation
+            // is a single periodic builtin call (sin/cos/tan), wrap each root
+            // as a PeriodicFamily with the symbolic period.
+            const std::string trig_name = detect_trig_origin(target, equations);
+            if (!trig_name.empty()) {
+                if (ExprPtr period = trig_period(trig_name)) {
+                    std::vector<PeriodicFamily> fams;
+                    fams.reserve(exact_results.size());
+                    std::transform(exact_results.begin(), exact_results.end(),
+                                   std::back_inserter(fams),
+                                   [period](double r) { return PeriodicFamily{r, period}; });
+                    return ValueSet::periodic(std::move(fams));
+                }
+            }
             return ValueSet::discrete(exact_results);
+        }
         if (has_constraints)
             return constraints;
 

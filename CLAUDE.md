@@ -57,7 +57,7 @@ Header-only, no external dependencies. Source in `src/`, examples in `examples/`
 
 **Pattern matcher:** `match_pattern()` with commutative flattened matching. Variables in patterns are wildcards; builtin constants match literally. Supports N-term additive permutation search and multiplicative coefficient extraction.
 
-**ValueSet:** Unified representation for conditions, ranges, and solutions. Intervals + discrete points + set operations (intersect, union, filter). `covers_reals()` for rewrite rule exhaustiveness checking.
+**ValueSet:** Unified representation for conditions, ranges, and solutions. Intervals + discrete points + periodic families (since 2026-05-08, Future.md #12) for trig solutions: `{double base; ExprPtr period}` parameterized by integer `k`. Set operations: intersect, union, filter. `covers_reals()` for rewrite rule exhaustiveness checking.
 
 **Undefined:** Symbolic `undefined` keyword (`Var("undefined")`) for domain boundaries. Propagates through arithmetic. Rewrite rules can declare `x/x = undefined iff x = 0` for exhaustiveness checking.
 

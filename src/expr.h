@@ -139,9 +139,34 @@ struct Interval {
     }
 };
 
+// Forward decls for ValueSet::periodic_ field (Expr / ExprPtr defined below).
+struct Expr;
+using ExprPtr = Expr*;
+
+// PeriodicFamily — one branch of a trig solution set. `base` is the
+// numeric principal-branch root (hot-path containment via fmod). `period`
+// is the symbolic period (e.g. 2*pi for sin/cos, pi for tan), kept as
+// ExprPtr so render emits `pi` not `3.1415...`. evaluate(*period) projects
+// to a numeric for membership / dedup checks.
+struct PeriodicFamily {
+    double base;
+    ExprPtr period;
+};
+
+// Forward decls used by ValueSet member functions defined inline below
+// (contains() projects period to numeric; to_string() renders period).
+[[nodiscard]] inline Checked<double> evaluate(const Expr& e);
+inline std::string expr_to_string(const Expr& e);
+// fmt_exact_double lives in fit.h (depends on expr_recognize_constants).
+// to_string() calls it for periodic-family base rendering so `pi / 6` is
+// recognized; falls back to fmt_num when no arena is active.
+[[nodiscard]] std::string fmt_exact_double(double v,
+        const std::map<std::string, double>& extra_constants);
+
 class ValueSet {
     std::vector<Interval> intervals_;
     std::vector<double> discrete_;
+    std::vector<PeriodicFamily> periodic_;
     NumberDomain domain_ = NumberDomain::REAL;
 
 public:
@@ -210,18 +235,44 @@ public:
         return s;
     }
 
+    // Periodic family factory — used by resolve_all when the equation is a
+    // single FUNC_CALL of a periodic builtin (sin, cos, tan). Each entry in
+    // `fams` is one principal-cycle root + its symbolic period.
+    static ValueSet periodic(std::vector<PeriodicFamily> fams) {
+        ValueSet s;
+        s.periodic_ = std::move(fams);
+        return s;
+    }
+
     // Queries
-    [[nodiscard]] bool empty() const { return intervals_.empty() && discrete_.empty(); }
+    [[nodiscard]] bool empty() const {
+        return intervals_.empty() && discrete_.empty() && periodic_.empty();
+    }
 
     [[nodiscard]] bool contains(double v) const {
         if (std::any_of(intervals_.begin(), intervals_.end(),
                 [v](const Interval& iv) { return iv.contains(v); })) return true;
-        return std::any_of(discrete_.begin(), discrete_.end(),
-            [v](double d) { return std::abs(d - v) < EPSILON_ZERO; });
+        if (std::any_of(discrete_.begin(), discrete_.end(),
+            [v](double d) { return std::abs(d - v) < EPSILON_ZERO; })) return true;
+        // Periodic membership: project period to numeric, normalize the
+        // residue (v - base) mod period to [-period/2, period/2), test |rem|
+        // against EPSILON_ZERO * period. Skip families whose period does not
+        // project finite (defensive — every in-tree period is 2*pi or pi).
+        return std::any_of(periodic_.begin(), periodic_.end(),
+            [v](const PeriodicFamily& pf) {
+                const double p = evaluate(*pf.period).value_or_nan();
+                if (!std::isfinite(p) || p <= 0) return false;
+                double rem = std::fmod(v - pf.base, p);
+                if (rem >= p / 2.0) rem -= p;
+                else if (rem < -p / 2.0) rem += p;
+                return std::abs(rem) < EPSILON_ZERO * p;
+            });
     }
 
     [[nodiscard]] const std::vector<Interval>& intervals() const { return intervals_; }
     [[nodiscard]] const std::vector<double>& discrete() const { return discrete_; }
+    [[nodiscard]] const std::vector<PeriodicFamily>& periodic() const { return periodic_; }
+    [[nodiscard]] bool has_periodic() const { return !periodic_.empty(); }
     [[nodiscard]] NumberDomain domain() const { return domain_; }
 
     // Set operations
@@ -277,8 +328,10 @@ public:
         return result;
     }
 
-    // Is this a purely discrete set (no intervals)?
-    [[nodiscard]] bool is_discrete() const { return intervals_.empty(); }
+    // Is this a purely discrete set (no intervals, no periodic families)?
+    [[nodiscard]] bool is_discrete() const {
+        return intervals_.empty() && periodic_.empty();
+    }
 
     // Does this set cover all real numbers (-inf, +inf)?
     // Checks if intervals + discrete points leave no gaps.
@@ -333,6 +386,43 @@ public:
             const std::string s = "{" + join_with_sep(discrete_, ", ",
                 [](double d) { return fmt_num(d); }) + "}";
             parts.push_back(s);
+        }
+
+        // Periodic families (Future #12). Render each as
+        // `<base> + k * <period>, k in Z`. base recognised via fmt_exact_double
+        // (so `pi / 6` surfaces); period is symbolic from inception. Render-time
+        // dedup collapses {b1,p1} ≡ {b2,p2} when periods agree numerically AND
+        // (b1-b2) lies on the integer-multiple-of-p1 lattice. Pairwise; small N
+        // (typically 1-2 families per equation).
+        if (!periodic_.empty()) {
+            std::vector<PeriodicFamily> kept;
+            kept.reserve(periodic_.size());
+            for (const auto& pf : periodic_) {
+                const double p_new = evaluate(*pf.period).value_or_nan();
+                bool dup = false;
+                if (std::isfinite(p_new) && p_new > 0) {
+                    for (const auto& k : kept) {
+                        const double p_old = evaluate(*k.period).value_or_nan();
+                        if (!std::isfinite(p_old) || p_old <= 0) continue;
+                        if (std::abs(p_new - p_old) >= EPSILON_ZERO * std::max(p_new, p_old))
+                            continue;
+                        double rem = std::fmod(pf.base - k.base, p_old);
+                        if (rem >= p_old / 2.0) rem -= p_old;
+                        else if (rem < -p_old / 2.0) rem += p_old;
+                        if (std::abs(rem) < EPSILON_ZERO * p_old) { dup = true; break; }
+                    }
+                }
+                if (!dup) kept.push_back(pf);
+            }
+            // fmt_exact_double allocates Expr nodes via the arena to
+            // recognise pi/6 etc. Every in-tree call site of to_string()
+            // executes under an active ExprArena::Scope (see main.cpp:257
+            // solve_fmt_scope; tests use the global test_arena scope).
+            for (const auto& pf : kept) {
+                const std::string base_str   = fmt_exact_double(pf.base, {});
+                const std::string period_str = expr_to_string(*pf.period);
+                parts.push_back(base_str + " + k * " + period_str + ", k in Z");
+            }
         }
 
         if (parts.size() == 1) return parts[0];
@@ -2323,9 +2413,14 @@ struct Solution {
 };
 
 // Function inverter: given f(inner) = rhs, produce inner = f⁻¹(rhs).
-// Returns the inverted RHS expression, or nullptr if no inverse is known.
+// Returns the inverted RHS expression(s), or empty vector if no inverse is
+// known. May return MULTIPLE inverses when the sub-system defines multiple
+// inverse equations for the same input variable (e.g., sin(x) → both
+// `x = asin(result)` AND `x = pi - asin(result)`). Used by solve_by_inversion
+// to emit one Solution per branch — required by Periodicity Detection (Future
+// #12) and by abs / sqrt-style multi-branch inverses.
 // Set by FormulaSystem to resolve via .fw sub-system definitions.
-using FuncInverter = std::function<ExprPtr(const std::string& func_name, const ExprPtr& rhs)>;  // std::function: boundary erasure — typed thread_local registered from system.h, must be storable in a typed variable
+using FuncInverter = std::function<std::vector<ExprPtr>(const std::string& func_name, const ExprPtr& rhs)>;  // std::function: boundary erasure — typed thread_local registered from system.h, must be storable in a typed variable
 
 inline FuncInverter& solve_func_inverter_() {
     static thread_local FuncInverter inverter;
@@ -2376,12 +2471,20 @@ inline void solve_set_func_inverter(FuncInverter fn) {
     }
 
     // lhs = f(inner) where f has an inverse → inner = f⁻¹(rhs)
+    // FuncInverter returns ALL inverse branches (sin → 2 branches, cos → 2,
+    // tan → 1, others → 1). One Solution emitted per branch.
     if (lhs->type == ExprType::FUNC_CALL && lhs->args.size() == 1
         && contains_var(lhs->args[0], target)) {
         const auto& inverter = solve_func_inverter_();
         if (inverter) {
-            auto new_rhs = inverter(lhs->name, rhs);
-            if (new_rhs) return recurse(lhs->args[0], new_rhs);
+            auto branches = inverter(lhs->name, rhs);
+            std::vector<Solution> all;
+            for (auto& new_rhs : branches) {
+                if (!new_rhs) continue;
+                auto sols = recurse(lhs->args[0], new_rhs);
+                all.insert(all.end(), sols.begin(), sols.end());
+            }
+            if (!all.empty()) return all;
         }
     }
 

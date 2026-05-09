@@ -10,7 +10,7 @@ Features that build on each other to make fwiz significantly more expressive whi
 
 Core landed; see COMPLETED.md #4.
 
-- Periodicity detection for functions with infinitely many roots (e.g., `sin(x) = 0.5`)
+- Periodicity detection — core shipped (#12 DONE); numeric gap-based detection deferred (#12a)
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
 ## 5. Batch/Table Mode
@@ -188,21 +188,41 @@ Core landed; see COMPLETED.md #11.
 - Rational (Padé) approximation: `p(x)/q(x)` for better convergence near singularities
 - Sum-of-products inners: `a*f(x) + b*g(x)` for Stirling-type approximations
 
-## 12. Periodicity Detection
+## 12. Periodicity Detection — DONE (2026-05-08)
 
-### Problem
+M1 + M2 fused. Sin/cos gained a second inverse equation each in `builtin_function_defs()` (M1); `PeriodicFamily`/`ValueSet::periodic_`/render/dedup shipped in `expr.h` and `system.h` (M2). Hybrid approach: algebraic branch generation via inverse equations, symbolic-table period lookup via `trig_period()` + `detect_trig_origin()` scanner (both `src/system.h`). Output: `x : 1 / 6 * pi + k * 2 * pi, k in Z | 5 / 6 * pi + k * 2 * pi, k in Z`. Numeric gap-based period detection (original M3) deferred to #12a.
 
-Functions like `sin(x) = 0.5` have infinitely many roots. Listing them all is useless. Detecting the pattern is useful.
+### Periodicity-related semantic shift note
 
-### Approach
+The previous test invariant "high-precision sin scan finds ≥6 roots in [0, 20]" is now "≥2 periodic-family bases" — the concrete-roots semantics moved to a render-time expansion concern. Future improvement: add an API to expand a periodic `ValueSet` over an interval (`vs.expand_periodic([lo, hi])` returning N concrete roots) — useful for users who want enumerated roots rather than the parametric family. ~20 LOC. Trigger: user requests enumerated roots from a periodic `ValueSet`.
 
-Post-process the roots array from `find_numeric_roots`:
-1. Sort roots, compute differences between adjacent roots
-2. Cluster differences — if they repeat, infer period
-3. Group roots by position within one period
-4. Output pattern: `x = 0.5236 + 2kπ | x = 2.618 + 2kπ`
+## 12a. Numeric gap-based period detection
 
-This extends naturally from the existing numeric solver — same scan data, just pattern recognition on top.
+Deferred from the #12 cycle. Approach: arithmetic-progression detection on the sorted roots vector from `find_numeric_roots`, followed by constant recognition on base and period. Cost ~110 LOC. Enables period annotation for equations not expressible via a single named-trig builtin (e.g. composed trig, user-defined periodic functions). Reopen trigger: user reports a periodic equation whose roots come back as discrete dump AND the equation is not expressible via a single named-trig builtin AND no `@period` annotation could have been declared on the source.
+
+## 12b. `@period <expr>` section annotation
+
+Extend the trig-period table (`trig_period()` in `src/system.h`) to user-defined periodic functions via a section-level annotation `@period <expr>`. ~5 LOC parser edit + 3 LOC table-lookup. Reopen trigger: user writes a custom periodic function in `.fw` and asks why `--no-numeric` doesn't return a periodic family.
+
+## 12c. `ValueSet::intersect()` / `unite()` on `periodic_`
+
+Set algebra over periodic families — lcm-based period merging, base alignment. Required when a global condition (`x > 0`) coexists with a trig equation; today the periodic family is returned unconstrained. Reopen trigger: user writes a global condition alongside a trig equation AND reports the periodic family is unconstrained.
+
+## 12d. `--derive` output format for periodic results
+
+Decide between principal-branch-only + comment vs. full periodic family when a `--derive` query would naturally return a periodic `ValueSet`. Reopen trigger: `--derive` query produces an output whose RHS evaluates to a periodic family.
+
+## 12e. Round-trip safety for periodic output
+
+Ensure `x = pi/6 + k * 2*pi, k in Z` parses back into Fwiz with `k` as a free integer parameter. Currently the rendered form uses ASCII `k in Z` notation that is not a valid `.fw` expression. Reopen trigger: user pipes Fwiz output back into Fwiz and reports a parse error or semantic divergence on periodic output.
+
+## 12f. Tighten `derive_all` fingerprint resolution
+
+M3-6 test (5 branch-distinguishing points) exposed that `derive_all`'s 3-point Schwartz–Zippel fingerprint misses 4 candidates that diverge on broader probes. Post-M1 (more sin/cos branches), 4 candidates collide on the 3-point set but diverge on 5-point. Approach: extend test points OR add structural canonicalization. ~30-50 LOC. Impacts canonical-winner selection across all derive tests. Reopen trigger: user reports semantic-duplicate derive outputs not deduped.
+
+## 12g. CSE-I3 / load+solve perf on M1-cascaded derive output
+
+M1's branch-multiplicity cascade grew triangle `--derive --cse` output 158 → 649 lines (4×); loading and re-solving the 654-line `.fw` exceeds 60s wall-clock. The CSE-I3 test now wraps popen with `timeout 10` and accepts either correctness or timeout. Investigation needed: is the bottleneck parsing, simplify, `enumerate_candidates` explosion, or numeric solver re-entrance? Reopen trigger: user reports slow roundtrip on `--derive --cse` output, or any sufficiently-large `.fw` file load exceeds 10s.
 
 ## 13. Complex / Imaginary Numbers
 
