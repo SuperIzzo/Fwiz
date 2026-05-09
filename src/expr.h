@@ -372,7 +372,7 @@ public:
     }
 
     // Periodic families (Future #12). Render each dedup'd family as
-    // `<base> + k * <period>, k in Z`. base recognised via fmt_exact_double
+    // `<base> + k * <period>  # k in Z`. base recognised via fmt_exact_double
     // (so `pi / 6` surfaces); period is symbolic from inception. Render-time
     // dedup collapses {b1,p1} ≡ {b2,p2} when periods agree numerically AND
     // (b1-b2) lies on the integer-multiple-of-p1 lattice. Pairwise; small N
@@ -409,7 +409,10 @@ public:
         for (const auto& pf : kept) {
             const std::string base_str   = fmt_exact_double(pf.base, {});
             const std::string period_str = expr_to_string(*pf.period);
-            lines.push_back(base_str + " + k * " + period_str + ", k in Z");
+            // 12e: trailing annotation uses fwiz comment syntax (`#`)
+            // so the line body is a valid fwiz expression — `x = <body>`
+            // round-trips through load_string without a parse error.
+            lines.push_back(base_str + " + k * " + period_str + "  # k in Z");
         }
         return lines;
     }

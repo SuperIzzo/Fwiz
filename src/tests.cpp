@@ -12336,6 +12336,67 @@ void test_periodicity_12h_main_pass1_dedup_parity() {
            std::string("12h dedup parity: CLI uses '=' separator (got: ") + out + ")");
 }
 
+// 12e: Round-trip safety. Each line returned by periodic_render_lines() is a
+// valid fwiz expression body — `x = <body>` parses without error via
+// load_string(). The trailing `# k in Z` is a fwiz inline comment, not part
+// of the expression. Reopen trigger from Future.md #12e: user pipes Fwiz
+// output back into Fwiz and reports a parse error.
+void test_periodicity_12e_roundtrip_parse() {
+    SECTION("Periodicity 12e: periodic body re-parses as fwiz expression");
+
+    std::remove("/tmp/per_12e_sin.fw");
+    write_fw("/tmp/per_12e_sin.fw", "result = sin(x)\n");
+    FormulaSystem sys;
+    sys.load_file("/tmp/per_12e_sin.fw");
+    auto vs = sys.resolve_all("x", {{"result", 0.5}});
+    ASSERT(vs.has_periodic(),
+           "12e: setup — sin(x)=0.5 produces periodic families");
+
+    auto lines = vs.periodic_render_lines();
+    ASSERT(!lines.empty(),
+           "12e: setup — at least one render line");
+    for (const auto& line : lines) {
+        // The parseable shape: `x = <line>`. The `# k in Z` annotation
+        // is a comment and does not enter the expression.
+        const std::string source = "x = " + line + "\n";
+        bool parsed = true;
+        std::string err;
+        try {
+            FormulaSystem rt;
+            rt.load_string(source, "<12e-roundtrip>");
+        } catch (const std::exception& e) {
+            parsed = false;
+            err = e.what();
+        }
+        ASSERT(parsed,
+               std::string("12e: line round-trips: '") + line +
+                   "' (parse error: " + err + ")");
+    }
+
+    // Same check for tan (single periodic family).
+    write_fw("/tmp/per_12e_tan.fw", "result = tan(x)\n");
+    FormulaSystem sys_tan;
+    sys_tan.load_file("/tmp/per_12e_tan.fw");
+    auto vs_tan = sys_tan.resolve_all("x", {{"result", 1.0}});
+    ASSERT(vs_tan.has_periodic(), "12e: tan(x)=1 produces periodic");
+    auto tan_lines = vs_tan.periodic_render_lines();
+    for (const auto& line : tan_lines) {
+        const std::string source = "x = " + line + "\n";
+        bool parsed = true;
+        std::string err;
+        try {
+            FormulaSystem rt;
+            rt.load_string(source, "<12e-roundtrip-tan>");
+        } catch (const std::exception& e) {
+            parsed = false;
+            err = e.what();
+        }
+        ASSERT(parsed,
+               std::string("12e: tan line round-trips: '") + line +
+                   "' (parse error: " + err + ")");
+    }
+}
+
 // Regression guard: x^2 = 4 must NOT trigger periodic detection.
 void test_periodicity_regression_quadratic() {
     SECTION("Periodicity regression: x^2 = 4 stays discrete");
@@ -12655,6 +12716,7 @@ int main() {
     test_periodicity_12h_render_lines_method();
     test_periodicity_12h_main_pass1_per_family_equals();
     test_periodicity_12h_main_pass1_dedup_parity();
+    test_periodicity_12e_roundtrip_parse();
     test_periodicity_regression_quadratic();
 
     std::cout << "\n===============\n";
