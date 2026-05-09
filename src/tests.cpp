@@ -7090,25 +7090,47 @@ void test_numeric_integration() {
 void test_numeric_precision() {
     SECTION("Numeric Precision Flag");
 
-    // --precision affects sample count (more samples → finds more roots)
+    // --precision affects sample count: tightly-clustered roots that
+    // low-density scanning brackets multiple-per-sample-interval (and
+    // therefore misses), while high-density resolves each one.
+    //
+    // Pre-#12j this section used `sin(x) = 0.5` over [0, 20], whose 7
+    // principal-cycle roots are well-spaced and density-sensitive under
+    // the pre-M1 algebraic path. Post-M2 (Future #12), the trig case is
+    // resolved as 2 periodic families regardless of sampling density —
+    // the test became vacuous (lo_total == hi_total == 2 for all densities).
+    //
+    // Replacement: a degree-5 polynomial with 5 roots clustered at 0.05
+    // spacing inside [1.0, 1.2] over a [0, 4] domain. The query target
+    // is 1e-9 (non-zero, to force Strategy 6 numeric — y=0 short-circuits
+    // to algebraic factor-zeroing). At samples=5 the scanner brackets
+    // multiple roots per sample interval and finds only 3 of 5; at
+    // samples=100 it finds all 5 — restoring the density-moves-count
+    // invariant.
     {
-        write_fw("/tmp/tnp_sin.fw", "y = sin(x)\nx >= 0\nx <= 20\n");
+        write_fw("/tmp/tnp_quintic.fw",
+            "y = (x-1) * (x-1.05) * (x-1.1) * (x-1.15) * (x-1.2)\n"
+            "x >= 0\nx <= 4\n");
         FormulaSystem sys_lo, sys_hi;
         sys_lo.numeric_mode = sys_hi.numeric_mode = true;
-        sys_lo.numeric_samples = 10;  // very low — will miss roots
-        sys_hi.numeric_samples = 500; // high — finds all
-        sys_lo.load_file("/tmp/tnp_sin.fw");
-        sys_hi.load_file("/tmp/tnp_sin.fw");
-        auto r_lo = sys_lo.resolve_all("x", {{"y", 0.5}});
-        auto r_hi = sys_hi.resolve_all("x", {{"y", 0.5}});
-        // Post-M2 (Future #12), trig results may be wrapped as a periodic
-        // carrier (one PeriodicFamily per principal-cycle root). Count both.
-        const size_t lo_total = r_lo.discrete().size() + r_lo.periodic().size();
-        const size_t hi_total = r_hi.discrete().size() + r_hi.periodic().size();
-        ASSERT(hi_total >= lo_total,
-            "numeric: higher precision finds >= roots");
-        ASSERT(hi_total >= 2,
-            "numeric: high precision finds at least the 2 principal-cycle sin roots");
+        sys_lo.numeric_samples = 5;    // very low — brackets clustered roots
+        sys_hi.numeric_samples = 100;  // high — resolves each root
+        sys_lo.load_file("/tmp/tnp_quintic.fw");
+        sys_hi.load_file("/tmp/tnp_quintic.fw");
+        auto r_lo = sys_lo.resolve_all("x", {{"y", 1e-9}});
+        auto r_hi = sys_hi.resolve_all("x", {{"y", 1e-9}});
+        const size_t lo_count = r_lo.discrete().size();
+        const size_t hi_count = r_hi.discrete().size();
+        ASSERT(hi_count > lo_count,
+            "numeric: higher precision finds strictly more roots ("
+            + std::to_string(lo_count) + " vs " + std::to_string(hi_count) + ")");
+        ASSERT(hi_count == 5,
+            "numeric: high precision finds all 5 roots of the quintic (got "
+            + std::to_string(hi_count) + ")");
+        // All numeric scan results are flagged approximate (~), not exact (=).
+        auto it = sys_hi.numeric_results_.find("x");
+        ASSERT(it != sys_hi.numeric_results_.end() && !it->second,
+            "numeric: degree-5 numeric results flagged ~ (not =)");
     }
 }
 
