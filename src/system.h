@@ -2087,7 +2087,13 @@ private:
     }
 
     // --- Formula call extraction ---
-
+    // These helpers are public so that the free function `parse_cli_query`
+    // (Future #21, nested form) can reuse the same token-level primitive
+    // `.fw`-file equation parsing uses (see `parse_line` at the call site
+    // around system.h:2340). They are pure functions over tokens — no
+    // instance state — so exposing them does not widen the class API
+    // surface in any meaningful sense.
+public:
     [[nodiscard]] static size_t find_matching_rparen(const std::vector<Token>& tok, size_t lparen_pos) {
         int depth = 1;
         // justified: token-cursor — returns the matching offset
@@ -2208,6 +2214,7 @@ private:
         return {result, calls};
     }
 
+private:
     // Parse a condition string like "x > 0" or "x > 0 && x < 100"
     std::optional<Condition> parse_condition(const std::string& cond_str) {
         if (cond_str.empty()) return std::nullopt;
@@ -3567,6 +3574,13 @@ struct CLIQuery {
     std::vector<CLIDiffQuery> diff_queries;  // Future #6: diff(...)=? targets
     std::map<std::string, double> bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
+    // Future #21 (nested form): top-level args that are themselves formula
+    // calls — `outer(result=?, inner(z=?x, p=3))`. Parsed via the same
+    // `extract_formula_calls` token-level primitive `.fw` files use, then
+    // injected into `sys.formula_calls` by main.cpp before the first solve
+    // dispatch. The synthetic alias (`x` above) routes the inner call's
+    // result into the parent scope as a regular variable.
+    std::vector<FormulaCall> nested_calls;
 };
 
 [[nodiscard]] inline CLIQuery parse_cli_query(const std::string& input,
@@ -3647,6 +3661,55 @@ struct CLIQuery {
     for (auto& arg : args) {
         arg = trim(arg);
         if (arg.empty()) continue;
+
+        // Future #21 (nested form): a top-level arg may itself be a formula
+        // call, e.g. `nc_inner(z=?x, p=3)`. The cheap shape check is "starts
+        // with bare-IDENT immediately followed by `(`". If it matches, lex
+        // the arg and run `extract_formula_calls` — the same token-level
+        // primitive `.fw`-file parsing uses — to harvest a `FormulaCall`.
+        // Failures fall through to the regular per-arg dispatch (preserves
+        // backward compat for legitimate `var=expr` args whose RHS happens
+        // to look call-like).
+        {
+            // Inline shape pre-check: /^[A-Za-z_][A-Za-z0-9_]*\(/
+            // arg.empty() guarded by `continue` above, so arg[0] is safe here.
+            bool looks_call = false;
+            if (std::isalpha(static_cast<unsigned char>(arg[0])) || arg[0] == '_') {
+                size_t k = 1;
+                while (k < arg.size()
+                       && (std::isalnum(static_cast<unsigned char>(arg[k])) || arg[k] == '_'))
+                    k++;
+                if (k < arg.size() && arg[k] == '(') looks_call = true;
+            }
+            if (looks_call) {
+                auto tok = Lexer(arg).tokenize();
+                auto [mod_tok, calls] = FormulaSystem::extract_formula_calls(tok);
+                if (!calls.empty()) {
+                    for (auto& fc : calls) {
+                        // Parse-time alias collision check: `output_var` must
+                        // not already be claimed by an outer query alias or
+                        // a previously-injected nested call.
+                        const std::string& alias = fc.output_var;
+                        const bool collides_outer = std::any_of(
+                            q.queries.begin(), q.queries.end(),
+                            [&alias](const auto& outer) { return outer.alias == alias; });
+                        if (collides_outer)
+                            throw std::runtime_error(
+                                "Nested-call alias collision: '" + alias
+                                + "' is already an outer query alias");
+                        const bool collides_prev = std::any_of(
+                            q.nested_calls.begin(), q.nested_calls.end(),
+                            [&alias](const auto& prev) { return prev.output_var == alias; });
+                        if (collides_prev)
+                            throw std::runtime_error(
+                                "Nested-call alias collision: '" + alias
+                                + "' is already used by another nested call");
+                        q.nested_calls.push_back(std::move(fc));
+                    }
+                    continue;
+                }
+            }
+        }
 
         const size_t eq = arg.find('=');
         if (eq == std::string::npos) {

@@ -40,7 +40,8 @@ int main(int argc, const char* argv[]) {
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
                   << "         fwiz --verify all triangle(A=40, B=60, C=80)\n"
-                  << "         fwiz --derive triangle(C=?, a=a, b=b, c=c)\n";
+                  << "         fwiz --derive triangle(C=?, a=a, b=b, c=c)\n"
+                  << "         fwiz 'examples/nested_demo(result=?, nested_inner(z=?x, p=3))'\n";
         return 1;
     }
 
@@ -128,13 +129,25 @@ int main(int argc, const char* argv[]) {
         const bool has_verify = !verify_arg.empty();
         const bool allow_missing = explore || explore_full || has_verify || derive_mode || fit_mode;
         const bool allow_symbolic = derive_mode || fit_mode;
-        auto query = parse_cli_query(query_str, allow_missing, allow_symbolic);
+
         FormulaSystem sys;
         sys.trace.level = level;
         sys.numeric_mode = numeric_mode;
         sys.approximate_mode = approximate_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
+
+        // ExprArena scope for parse_cli_query is required by Future #21
+        // (nested form): a nested-call binding like `inner(p=3)` parses
+        // `Expr::Num(3)` into the active arena, and the resulting
+        // `FormulaCall` is later moved into `sys.formula_calls`. Allocating
+        // those nodes in `sys.arena` ensures they outlive parse_cli_query
+        // and remain valid through every subsequent solve / derive pass
+        // (load_file / resolve / derive_all all open nested scopes on the
+        // same arena).
+        const ExprArena::Scope cli_scope(sys.arena);
+
+        auto query = parse_cli_query(query_str, allow_missing, allow_symbolic);
 
         if (query.filename.empty()) {
             // Query-first format: inline source or stdin
@@ -157,6 +170,15 @@ int main(int argc, const char* argv[]) {
         } else {
             sys.load_file(query.filename, query.section);
         }
+
+        // Future #21 (nested form): inject CLI-supplied nested formula calls
+        // into the loaded system. Strategy 3 (FORMULA_FWD) and strategy 5
+        // (FORMULA_REV) read `formula_calls` at solve time, so the inner call
+        // is resolved through the same path as `.fw`-file-declared calls. The
+        // synthetic alias on the inner `=?` (e.g. `inner(z=?x, ...)` produces
+        // `output_var = "x"`) routes the inner result into the parent scope.
+        for (auto& fc : query.nested_calls)
+            sys.formula_calls.push_back(std::move(fc));
 
         // --- Derive mode ---
         if (derive_mode) {

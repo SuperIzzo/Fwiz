@@ -5859,6 +5859,114 @@ void test_formula_call_additional() {
     }
 }
 
+// ---- Nested CLI formula calls (Future #21, nested form) ----
+//
+// `parse_cli_query` previously did a string-level `arg.find('=')` on each
+// top-level arg, which mangled nested-call args like `triangle(A=?x, a=3)` —
+// the find() hit the `=` inside the nested call. The fix detects nested-call
+// shape after the depth-0 comma split and routes it through the existing
+// `extract_formula_calls` token-level primitive (the same path .fw files use).
+// `q.nested_calls` carries the parsed FormulaCall to main.cpp, which injects
+// it into `sys.formula_calls` before the first solve dispatch.
+void test_nested_cli_calls() {
+    SECTION("Nested CLI formula calls (#21)");
+
+    // T1: explicit alias — basic nested call parse + end-to-end resolve.
+    //     nc_outer(result=?, nc_inner(z=?x, p=3))
+    //     nc_inner: z = p + 1 → 4; nc_outer: result = x * 2 → 8
+    {
+        write_fw("/tmp/nc_inner.fw", "z = p + 1\n");
+        write_fw("/tmp/nc_outer.fw", "result = x * 2\n");
+        auto q = parse_cli_query("nc_outer(result=?, nc_inner(z=?x, p=3))");
+        ASSERT(q.nested_calls.size() == 1, "T1: parsed one nested call");
+        ASSERT_EQ(q.nested_calls[0].file_stem, "nc_inner", "T1: file_stem = nc_inner");
+        ASSERT_EQ(q.nested_calls[0].query_var, "z", "T1: query_var = z");
+        ASSERT_EQ(q.nested_calls[0].output_var, "x", "T1: output_var = x (alias)");
+        ASSERT(q.nested_calls[0].bindings.count("p") == 1, "T1: p binding present");
+        ASSERT(q.queries.size() == 1, "T1: one outer query");
+        ASSERT_EQ(q.queries[0].variable, "result", "T1: outer queries 'result'");
+
+        FormulaSystem sys;
+        sys.load_file("/tmp/nc_outer.fw");
+        for (const auto& fc : q.nested_calls) sys.formula_calls.push_back(fc);
+        ASSERT_NUM(sys.resolve("result", q.bindings), 8, "T1: (3+1)*2 = 8");
+    }
+
+    // T2: 2-deep CLI nesting — temporarily disabled. Implementer found that
+    // a nested call appearing as the RHS of a binding (`a=nc_inner_p(z=?y,
+    // p=1)`) is rejected by `parse_call_args` (system.h:~2150), which feeds
+    // the binding RHS to `Parser.parse_expr()` — and Parser does not accept
+    // `=?` inside expressions. Fixing this requires modifying either
+    // `parse_call_args` or `extract_formula_calls` to recursively extract
+    // nested calls from binding RHS tokens before parsing — which the brief
+    // explicitly forbids ("Do NOT modify existing extract_formula_calls or
+    // parse_call_args primitives — if they don't work, STOP."). Reported to
+    // orchestrator. T2 will be re-enabled with the agreed fix.
+
+    // T3: alias collision between a nested-call output_var and an existing
+    //     outer query alias. Must fail at parse time with explicit error.
+    //     nc_outer(result=?x, nc_inner(z=?x, p=3))  → both expose alias 'x'.
+    //
+    // Order matters: the outer 'x' query alias is parsed FIRST (top-level
+    // args are walked in source order); the nested-call alias 'x' collides
+    // with the already-recorded outer alias.
+    {
+        bool threw = false;
+        std::string msg;
+        try {
+            (void)parse_cli_query("nc_outer(result=?x, nc_inner(z=?x, p=3))");
+        } catch (const std::runtime_error& e) {
+            threw = true;
+            msg = e.what();
+        }
+        ASSERT(threw, "T3: alias collision throws at parse time");
+        ASSERT(msg.find("'x'") != std::string::npos || msg.find("x") != std::string::npos,
+               "T3: error message names the colliding alias 'x'");
+        ASSERT(msg.find("collision") != std::string::npos
+               || msg.find("conflict") != std::string::npos
+               || msg.find("collide") != std::string::npos,
+               "T3: error message uses 'collision' / 'conflict' wording");
+    }
+
+    // T4: missing sub-system file fails with an explicit "file not found"
+    //     style error at solve time. Parse succeeds (FormulaCall constructed).
+    //     LLMs will emit wrong file stems; the error must be actionable.
+    {
+        // Ensure the bogus file definitely does not exist.
+        std::remove("/tmp/bogus_file_xyz.fw");
+        auto q = parse_cli_query(
+            "nc_outer(result=?, bogus_file_xyz(z=?x, p=3))");
+        ASSERT(q.nested_calls.size() == 1, "T4: parse succeeds (1 nested call)");
+        FormulaSystem sys;
+        sys.load_file("/tmp/nc_outer.fw");
+        for (const auto& fc : q.nested_calls) sys.formula_calls.push_back(fc);
+        std::string msg = get_error([&]() {
+            (void)sys.resolve("result", q.bindings);
+        });
+        ASSERT(!msg.empty(), "T4: missing sub-system file throws");
+        // Either the file-open error wording or the wrapping "Cannot solve"
+        // path is acceptable — both are actionable for an LLM caller.
+        ASSERT(msg.find("bogus_file_xyz") != std::string::npos
+               || msg.find("Cannot") != std::string::npos
+               || msg.find("not found") != std::string::npos
+               || msg.find("Could not open") != std::string::npos,
+               "T4: error mentions stem or 'not found' / 'Cannot' / 'Could not open'");
+    }
+
+    // T5: regression — non-nested CLI queries parse identically (no behavior
+    //     change to the existing `name=?` / `name=value` per-arg path).
+    {
+        auto q = parse_cli_query("triangle(A=?, a=4, B=20, c=5)",
+                                 /*allow_no_queries*/false,
+                                 /*allow_symbolic*/false);
+        ASSERT(q.nested_calls.empty(), "T5: no nested calls populated");
+        ASSERT_EQ(q.queries[0].variable, "A", "T5: outer query unchanged");
+        ASSERT_NUM(q.bindings.at("a"), 4, "T5: a=4 unchanged");
+        ASSERT_NUM(q.bindings.at("B"), 20, "T5: B=20 unchanged");
+        ASSERT_NUM(q.bindings.at("c"), 5, "T5: c=5 unchanged");
+    }
+}
+
 // ---- Spurious zero fix additional tests ----
 
 void test_solve_for_zero_guard() {
@@ -12555,6 +12663,7 @@ int main() {
     test_formula_call_chained();
     test_formula_call_errors();
     test_formula_call_additional();
+    test_nested_cli_calls();
 
     // Verify mode
     test_approx_equal();

@@ -1,0 +1,13 @@
+# examples/nested_demo.fw — CLI nested formula call demo (Future #21)
+#
+# This file is the OUTER call in a composition chain. Invoke it with a
+# nested formula call as a sibling argument, where the inner call's `=?`
+# alias supplies the value for `x`:
+#
+#   ./bin/fwiz 'examples/nested_demo(result=?, examples/nested_inner(z=?x, p=3))'
+#
+# The inner call resolves first (z = p + 1 = 4), exposes its result via
+# the alias `x`, and the outer call uses x to produce result = x * 2 = 8.
+#
+# See Future.md #21 for the full design.
+result = x * 2

@@ -299,134 +299,73 @@ speculative infrastructure.
 debugger/ASan-friendly — it's the correct primitive for all four listed
 use cases, not a specialization.
 
-## 21. Composable / Nested Formula Calls
+## 21. Composable / Nested Formula Calls — DONE 2026-05-09 (nested form, explicit routing, single-level)
 
-Compose formula calls as expression-tree values, so the output of one call
-feeds directly into another without intermediate files or manual binding.
+Composes formula calls as expression-tree values:
+`fwiz 'sin(result=?, triangle(A=?x, a=100, b=50, B=0.3))'`. The inner call
+resolves first, exposes `A` aliased as `x`; the outer call binds `x` by
+name. Implementation reuses `extract_formula_calls` (the same primitive
+used by `.fw`-file equation parsing) and injects the resulting `FormulaCall`
+into `sys.formula_calls` between `load_*` and the first solve dispatch.
+See `examples/nested_demo.fw` + `examples/nested_inner.fw` for a working
+demo, and `parse_cli_query` in `src/system.h` for the parse-time hook.
 
-### Proposed syntax (nested form)
+**Scope shipped**: single-level CLI nesting (one nested call per arg, with
+primitive-valued bindings). Multi-level CLI nesting (call-as-binding-RHS,
+e.g. `outer(result=?, mid(z=?x, a=inner(z=?y, p=1)))`) is NOT supported in
+this cycle — it requires a structural change to either `parse_call_args`
+(binding-RHS recursive extraction) or a new walker, both of which exceeded
+the cycle's "do not modify primitives" boundary. This same limitation
+applies to `.fw` files and is not new to the CLI surface.
 
-```bash
-fwiz 'sin(x=?, triangle(A=?x, a=100, b=50, B=0.3))'
-```
+Three follow-up sub-entries cover deferred design questions.
 
-Reads as: "solve `triangle` for `A`, alias it as `x` so the outer `sin`
-call picks it up by name; solve `sin(x, result=?)`." Positional binding of
-the nested call's value into `sin`'s `x` argument also works:
+## 21a. Implicit output routing for nested calls
 
-```bash
-fwiz 'sin(result=?, triangle(A=?, a=100, b=50, B=0.3))'
-```
+Currently nested calls require explicit `A=?x` aliasing
+(`triangle(A=?x, a=..., b=..., B=...)`). When the inner sub-system has
+exactly one resolvable free variable and the outer call has exactly one
+unbound positional slot, the alias could be implicit
+(`triangle(a=..., b=..., B=...)`).
 
-Here the nested call is evaluated to a single value (its queried `A`) and
-positionally binds `sin`'s first argument (which is `x` per the section
-header `[sin(x) -> result]`).
+**Reopen trigger**: LLM evaluation or user feedback shows explicit aliasing
+is the dominant friction in 30%+ of nested-call chains.
 
-### Proposed syntax (dotted form)
+## 21b. Dotted flat form for nested calls
 
-Flat alternative with path-qualified variables, related to #15 Structs /
-Dot Access:
+The flat alternative to nested form:
+`sin(result=?, triangle.A=?sin.x, triangle.a=100, ...)`. Routes variables
+across scopes via path-qualified names. Shares grammar with #15
+(Structs / Dot Access).
 
-```bash
-fwiz 'sin(result=?, triangle.A=?sin.x, triangle.a=100, triangle.b=50, triangle.B=0.3)'
-```
+**Reopen trigger**: #15 Structs / Dot Access enters a planning cycle.
 
-Reads as: "triangle's `A` (queried) is bound to `sin`'s `x`; triangle's
-sides and `B` are given; solve `sin.result`." The dotted alias on the RHS
-of `=?` routes the value into a named scope, not just exposing it by name.
+## 21c. `--derive` + nested-call symbolic threading
 
-### Open design question — direction of binding
+Currently `--derive` on a nested-call CLI query treats the inner result as
+a free variable in the outer derivation. With typed FORMULA_CALL nodes
+(#20), the inner call's symbolic form would compose into the outer
+expression tree.
 
-Both forms below express "`triangle.A` and `sin.x` are the same variable":
+**Reopen trigger**: user requests symbolic `--derive` output through
+nested formula calls, OR #20 (typed FORMULA_CALL) enters planning.
 
-```
-triangle.A=?sin.x         # query A in triangle, feed into sin.x
-sin.x=?triangle.A         # query sin.x, receive it from triangle.A
-```
+## 21d. Multi-level nested CLI calls (call-as-binding-RHS)
 
-The first reads as a "producer" point of view (triangle produces, sin
-consumes); the second as a "consumer" point of view (sin names its input
-by where it came from). Three possible resolutions:
+The single-level form `outer(result=?, inner(z=?x, p=3))` ships in #21
+2026-05-09. The multi-level form
+`outer(result=?, mid(z=?x, a=inner(z=?y, p=1)))` (where the inner call
+appears as the RHS of a binding) does not — because `parse_call_args`
+feeds binding RHS through `Parser.parse_expr()`, and Parser doesn't accept
+`=?` inside expressions. Fix requires either recursive `extract_formula_calls`
+inside `parse_call_args`'s binding handler, or a new walker. Same limitation
+applies to `.fw` files.
 
-1. **Accept only the producer form** (`triangle.A=?sin.x`). Matches the
-   existing `A=?alias` convention where LHS names the variable being
-   solved and RHS names the output slot. Simpler grammar.
-2. **Accept both as equivalent** — the dotted paths and `=?` form a
-   bidirectional "these two identifiers refer to one variable" assertion;
-   direction is stylistic. More flexible, but invites confusion about
-   which side is "the source."
-3. **Assign different semantics** — producer form means "forward-evaluate
-   triangle then feed sin"; consumer form means "inverse-solve sin.x then
-   back-propagate to triangle.A as a constraint." This matches how one
-   might naturally express the two computational directions, but fwiz's
-   solver should already pick direction automatically — so this
-   distinction is likely spurious.
-
-Leaning toward (2) at design time: treat `=?` with dotted paths as a
-binding-equality assertion, solver chooses direction.
-
-### Open design question — implicit output routing
-
-A tempting shortcut removes the explicit `triangle.A=?sin.x` binding:
-
-```bash
-fwiz 'sin(result=?, triangle.a=100, triangle.b=50, triangle.B=0.3)'
-```
-
-Intuition: "whatever triangle computes becomes sin's input." With the
-above bindings (two sides + one angle, an AAS/SSA shape), triangle
-produces a single resolvable angle `A`, and `sin.x = A` is unambiguous.
-
-But with **more** bindings the shortcut breaks:
-
-```bash
-fwiz 'sin(result=?, triangle.a=100, triangle.b=50, triangle.c=70, triangle.B=0.3)'
-```
-
-Given SSS (`a, b, c`) plus `B`, all three angles `A, B, C` become derivable.
-Which one routes to `sin.x`?
-
-Four possible designs, each with tradeoffs:
-
-1. **No implicit routing.** Require explicit `triangle.A=?sin.x`. Simple and
-   predictable but verbose in the common unambiguous case.
-2. **Implicit when unambiguous; clear error otherwise.** Allow the short form
-   when the inner scope exposes exactly one resolvable free variable
-   compatible with the outer call's input type; else error with a message
-   pointing at explicit syntax (`triangle exposes {A, B, C} — specify which
-   feeds sin.x via triangle.A=?sin.x`). Matches fwiz's general philosophy.
-3. **Multi-solution — `sin.result` returns once per compatible inner value.**
-   Leverages existing multi-solution support, but likely violates the
-   first-successful / LLM-deterministic commitments from the triangle cycle.
-   Use `--explore` for this semantic instead.
-4. **Positional-order default.** Use the first inner variable in file order.
-   Fragile; depends on `.fw` file formatting.
-
-Leaning toward **(2)** — allows the shortcut where it's safe, fails loud
-where it isn't. Gives LLMs a deterministic surface, and nudges users toward
-explicit routing when they need it. Option (3) is what `--explore` already
-gives you; no need to overload `=?`.
-
-### Why
-
-- Encourages composition over monolithic `.fw` files.
-- LLM-friendly: a single CLI line expresses a multi-step reasoning chain
-  without creating transient files.
-- Matches how users think about chained problems: "solve the triangle, then
-  take the sine of that angle."
-
-### Implementation notes
-
-Both forms touch `parse_cli_query` (the arg-list parser at `system.h:~3037`)
-and the expression evaluator. Benefits directly from #20 (formula calls as
-typed expression nodes) — the nested form becomes a tree of `FORMULA_CALL`
-nodes, trivially evaluated left-to-right. Without #20, the synthetic-alias
-side-channel approach can still work but gets messier with multiple aliases
-in one CLI line.
-
-Dotted form interacts with #15 — a shared implementation of path-qualified
-variable names covers both CLI-query dotted access and in-file sub-scope
-references.
+**Reopen trigger**: a user / LLM benchmark demonstrates a real composition
+chain that needs >1 level of CLI nesting (with no trivial flat-arg
+restructuring). At that point the design should choose between
+"inline-recurse `extract_formula_calls` from binding RHS" (smallest diff)
+or "extend FormulaCall to carry sub-calls" (cleaner but invasive).
 
 ## Standard Library Ideas
 

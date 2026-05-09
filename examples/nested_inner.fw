@@ -1,0 +1,5 @@
+# examples/nested_inner.fw — Inner half of nested_demo.fw composition
+#
+# Trivial sub-system used to demonstrate CLI nested formula calls.
+# See `nested_demo.fw` for the full invocation example.
+z = p + 1
