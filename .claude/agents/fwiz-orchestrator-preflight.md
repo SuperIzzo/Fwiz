@@ -6,6 +6,16 @@ Sibling files: `fwiz-orchestrator.md` (core), `fwiz-orchestrator-protocols.md` (
 
 ---
 
+## Instruction-vs-recent-commit collision check (session start)
+
+Trigger: user's first instruction in a fresh session names a specific cycle slug, milestone, or feature ("Run Cycle N (slug)", "Implement {feature}").
+
+Before doing anything else, run `git log --oneline -5` and check whether the named item appears in any of those commit subjects. If yes, STOP — the instruction is likely stale (copy-pasted from an old `next-priorities.md` recommendation that has since shipped). Surface the collision: "{item} appears to have shipped in commit {hash}. Working tree state is X. Possible meanings: (a) you want me to redo it, (b) you want the next item from the audit roadmap, (c) you're checking on its state. Which?"
+
+Cheaper than 10+ minutes of working-tree forensics on the wrong assumption. Canonical miss: 2026-05-09 — user typed "Run Cycle 8 (T7 — libFuzzer harness)" stale from the 2026-05-07 next-priorities text; Cycle 8 had already shipped as `4252b25` two days earlier; orchestrator detected at the working-tree-inspection stage but only after several tool calls that this pre-flight would have short-circuited.
+
+---
+
 ## Pre-flight verification — new-infrastructure cycles
 
 Trigger: cycle introduces NEW build/runtime infrastructure (a new binary target, a new harness, a new toolchain entry point).

@@ -27,7 +27,7 @@ Trigger: brief (master-plan or freshly authored) imposes two independent constra
 
 **Shape 1 — placement vs grep-filter**: brief contains a count assertion AND a `grep -v <annotation_token>` filter aiming at zero AND a stated annotation placement. If the declaration line itself contains the filter token (e.g. `std::function`), an annotation placed on the **preceding line** leaves the declaration line unfiltered — count and filter become mutually unsatisfiable. Satisfiable shapes: (a) trailing comment on the declaration line itself (filter scrubs the same line); (b) different filter token (`// keep:` instead of `// std::function:`). Canonical miss: Cycle 5 S3 std::function triage 2026-05-06 — implementer silently chose trailing-comment style.
 
-**Shape 2 — scope vs count**: cleanup-cycle brief specifies a strict acceptance count ("245 → 0 findings") AND a file-enumeration scope ("stay within these 6 headers"). Reconcile: does the count reflect ONLY findings in the enumerated files, or does it include findings in out-of-scope files? If the count includes out-of-scope findings, the two constraints are mutually unsatisfiable — the implementer must either widen scope or accept residual findings. Satisfiable shapes: (a) **count matches enumeration** — adjust the count to exclude out-of-scope findings (`245 → 232` for 6 headers + `13 carried` for `main.cpp`); (b) **enumeration matches count** — widen the file list (`6 headers + main.cpp`); (c) **two-tier acceptance** — "MUST FIX in {enumerated}" + "BONUS-fix if auto-fix sweeps into {wider}". Canonical miss: Cycle 7.5 clang-tidy residual cleanup 2026-05-07 — `main.cpp` held 13 of 245; auto-fix swept it during the TU walk; implementer kept the edits to honor the strict count and silently violated the file list.
+**Shape 2 — scope vs count**: cleanup-cycle brief specifies a strict acceptance count ("245 → 0 findings") AND a file-enumeration scope ("stay within these 6 headers"). Reconcile: does the count reflect ONLY findings in the enumerated files, or does it include findings in out-of-scope files? If the count includes out-of-scope findings, the two constraints are mutually unsatisfiable — the implementer must either widen scope or accept residual findings. Satisfiable shapes: (a) **count matches enumeration** — adjust the count to exclude out-of-scope findings (`245 → 232` for 6 headers + `13 carried` for `main.cpp`); (b) **enumeration matches count** — widen the file list (`6 headers + main.cpp`); (c) **two-tier acceptance** — "MUST FIX in {enumerated}" + "BONUS-fix if auto-fix sweeps into {wider}". Canonical miss: Cycle 7.5 clang-tidy residual cleanup 2026-05-07 — `main.cpp` held 13 of 245; auto-fix swept it during the TU walk; implementer kept the edits to honor the strict count and silently violated the file list. **Default policy when both are present without explicit reconciliation**: file lists are ADVISORY, completion criterion is BLOCKING — implementer correctly satisfies count by exceeding the file list. To make the file list itself BLOCKING, brief must say so explicitly with rationale (e.g. "must NOT touch main.cpp because it carries downstream API contracts").
 
 ### Stale-diagnostic protocol — when reusing prior-cycle data instead of fresh research
 
@@ -62,6 +62,12 @@ Skip RESEARCH and DESIGN cleanly and go directly to IMPLEMENT. This is the legit
 ---
 
 ## Implementer-coordination protocols
+
+### Carry-forward note misdiagnosis — toolchain probe before applying
+
+Trigger: applying a fix described by a prior cycle's carry-forward note (Future.md sub-issue text, `next-priorities.md` issue list, etc.).
+
+Carry-forward notes are written under cycle-close pressure and may misdiagnose the real constraint. Before applying the fix as described, run a 1-minute toolchain probe on the actual reproducer — does the prescribed change pass `make` / `make test-clang` / `make analyze-fast`? If the probe surfaces a different diagnosis than the note, take the cleaner half (the part that's still correct) and document the misdiagnosis in the commit body so future readers don't repeat it. Canonical: Periodicity #12i 2026-05-09 — carry-forward called the missing `inline` an "ODR-shape mismatch"; adding `inline` actually tripped clang's `-Wundefined-inline` because the use site precedes the definition. Orchestrator probed, reverted the inline addition, kept the duplicate-decl removal half, and added a clarifying comment block in the source explaining the asymmetry is correct C++.
 
 ### Pre-flight test-site flagging — contract-changing migrations
 
@@ -127,6 +133,12 @@ Note: under the tiered-oracle policy this overlap window is now **rare** (per-cy
 - **Not allowed**: writing `next-priorities.md` for the next cycle before current cycle's review completes. The review may produce SHIP-DESIRABLE items that belong in next-priorities.
 
 Canonical: derive-ordering cycle 2026-04-20T00:50 — user asked "check if there are more tautological entries" mid-REVIEW (analyze still running). Orchestrator ran the reproducer, captured 159-line output, wrote 6-category research brief. When review completed, next-priorities.md referenced the already-written brief cleanly. ~30 min wall-clock saved vs serial; zero risk of cross-phase context contamination because RESEARCH is strictly read-only on the current cycle's artifacts.
+
+### User-edited artifact as directive vehicle
+
+Trigger: between sessions (or mid-session via system-reminder), the user edits a workflow artifact (most often `next-priorities.md`, occasionally `design-proposal.md`); the new session's brief instruction is short or absent ("continue", "run the follow-ups", or no brief at all).
+
+Treat the edited artifact as a directive update: its current contents OVERRIDE any stale recommendations from prior cycles, including the orchestrator's own prior `Recommended next cycle` text. Do NOT re-prompt the user to re-state the brief — the edits ARE the brief. Sequence: (1) read the artifact in full; (2) treat the "Top priorities" / "Issues" / explicit-fix sections as the cycle's master plan; (3) decide split between orchestrator self-fix (criterion-a/b) and implementer spawn per the standard rule; (4) log the artifact's mtime + a one-line "directive source: user-edited next-priorities.md" entry at CYCLE START. If the user-edited artifact contradicts a still-pending DEBATABLE proposal from the prior meta-review, the user-edit wins (silent acceptance of the prior proposal's resolution OR silent override). Canonical: Periodicity follow-up arc 2026-05-09 — user edited `next-priorities.md` to enumerate 5 follow-up issues (#12h, #12g, #12i, #12j, #12f) with explicit fix specs; orchestrator executed them as a single super-cycle (3 self-fixes + 2 implementer spawns), not 5 separate cycles. The artifact-as-directive interpretation was the right call (alternative — re-spawning RESEARCH for each — would have wasted ~5 researcher rounds).
 
 ### Follow-up micro-cycles
 

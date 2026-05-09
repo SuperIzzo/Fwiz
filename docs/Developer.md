@@ -614,3 +614,12 @@ Tests are grouped by concern, not by code:
 11. Recursion (depth guard, factorial)
 12. Pre-refactor safety nets (strategy coverage, builtin exhaustive)
 13. Simplifier improvements (rule interactions, flattening targets)
+
+### Commit message conventions
+
+The commit title is what every GitHub viewer sees first — make it describe the **user-facing change**, not the internal cycle slug.
+
+- **Lead with the WHAT.** Title should describe what the commit changes from a user/code perspective ("Add main.cpp dispatch arms for periodic ValueSet results", "Strategy 4 perf guard — 30s → 1.8s on triangle CSE roundtrip", "Replace vacuous trig precision test with quintic"). Outsiders without the audit-roadmap or `next-priorities.md` context can still tell what changed.
+- **Cycle/issue references go at the END of the title in parentheses, OR in the commit body.** `"... (Periodicity #12g)"` or `"... (Cycle 8)"` is fine as a trailing tag; do NOT lead with `"Cycle 8 — ..."` or `"#12g — ..."`. The audit roadmap is internal-tracking metadata, not the headline.
+- **Body is for the why and the cycle context.** Detailed cycle linkage, Future.md reopen triggers, and any `clang-tidy: green` / `clang-tidy: pending` annotations live in the body. Body convention: a 1–3 sentence summary, then sections (Strategy / What changed / Per-cycle gates / LOC delta / Closes / Co-Authored-By).
+- **Co-Authored-By** trailer at the bottom for orchestrator-driven commits.

@@ -157,6 +157,12 @@ Before declaring a cycle complete:
 
 → Full procedure (clang-tidy debt commands, archival paths, log-rotation procedure, multi-cycle archival): `fwiz-orchestrator-ops.md` §Cycle-Completion Checklist + §Artifact retention.
 
+## Commit Message Conventions — TL;DR
+
+Title leads with the **user-facing WHAT**, not the internal cycle slug. Cycle/issue references go at the END of the title in parens (`"... (Periodicity #12g)"`) or in the body. GitHub viewers don't have the audit-roadmap context — `"Strategy 4 perf guard — 30s → 1.8s"` is meaningful; `"Periodicity #12g — Strategy 4 perf guard"` buries the lede.
+
+→ Full convention: `docs/Developer.md` §Commit message conventions.
+
 ## The Minimalism Principle
 
 Check when synthesizing designs: every line earns its place; input → output, tools wrap around it; .fw rewrite rules over C++ specializations; abstract patterns over specific cases; Remove > Add (a general pattern replacing two specializations beats adding a third); tiny fast core — arena allocator, cache-friendly, no heap chasing.

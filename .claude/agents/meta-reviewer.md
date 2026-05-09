@@ -68,6 +68,7 @@ Look across cycles for recurring issues:
 - **Ignored recommendations**: your previous recommendations weren't applied → escalate to user
 - **Context inflation**: artifact sizes growing cycle over cycle → need compression
 - **Anti-rubber-stamp dormancy** (the meta-reviewer's analog of the rubber-stamp critic): pre-escalation recommendations that have ridden 3+ consecutive meta-reviews without action become **dormant** — stop re-surfacing until either a NEW surface-shape appears (different failure mode/agent/context) OR the user explicitly re-raises. 3 un-acted recommendations is itself information; re-emitting the same item every cycle degrades signal-to-noise. Log "DORMANT" once instead of re-listing. Canonical: untrusted-content harness leakage dormanted Cycle 8 after 4 cycles / 11+ surfaces.
+- **Post-dormancy re-raise escalation**: when the user explicitly re-raises a dormant item AND the surface count has grown beyond the dormancy threshold (e.g. > 15 surfaces / 10 cycles), do NOT just re-add it to the DEBATABLE list as an open recommendation. Surface with a **pre-formatted action draft** (e.g. for upstream feedback: a complete feedback-note text the user can paste) and request explicit decline-to-file confirmation. Either path closes the recommendation: filed → tracked as completed; declined → retired with commit-hash pointer to the decline. Canonical: 2026-05-09 — untrusted-content leakage user-explicit re-raise after Cycle 8 dormancy, 16+ surfaces / 10 cycles, escalation to draft-with-decline-request.
 
 ### 8. Apply Fixes
 
