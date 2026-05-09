@@ -43,6 +43,18 @@ Note: contract-changing migrations also require the critic-accepted/rejected ite
 
 ---
 
+## Pre-flight raw-token-walker scan (new-token introductions)
+
+Trigger: cycle introduces new `TokenType` members (`LBRACKET`, `LBRACE`, etc.) AND any non-lexer source file walks tokens raw.
+
+Run: `grep -nE 'TokenType::(LPAREN|RPAREN|LBRACKET|RBRACKET|LBRACE|RBRACE)' src/*.h | grep -v lexer.h`
+
+Every hit is a potential consumer of the new token's symmetry that may need updating. List hits in the implementer brief with the **bracket-symmetry invariant**: "if your function tracks one bracket pair's depth, it must track all bracket pairs the lexer can emit." Without this, an implementer landing new tokens will miss raw-token-walkers that look correct in isolation but truncate / mis-parse symmetrically (e.g. a paren-only depth scanner that breaks on the first inner COMMA when a vec literal appears).
+
+Validates: Cycle B M3 vec/mat 2026-05-10 — `parse_call_args` (`system.h:2163-2168`) tracked `LPAREN`/`RPAREN` only; reviewer caught at REVIEW with concrete reproducer `f(v=[1,2,3], result=?)` truncating at the first inner `,`. Pre-flight grep would have surfaced the consumer at IMPLEMENT spawn time.
+
+---
+
 ## Domain-sensitive test data
 
 Trigger: design specifies numeric test points (fingerprint probes, property-based sampling, numeric-solver seeds).
