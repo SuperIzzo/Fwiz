@@ -118,6 +118,10 @@ template<class Range, class Sep, class Fn>
     return s;
 }
 
+// ============================================================
+// Section: Set theory (ValueSet, Interval, PeriodicFamily, Condition)
+// ============================================================
+
 // ============================================================================
 //  ValueSet — unified representation for conditions, ranges, and solutions
 // ============================================================================
@@ -453,6 +457,10 @@ public:
     }
 };
 
+// ============================================================
+// Section: AST definition (Expr struct, ExprType, BinOp, factories)
+// ============================================================
+
 // ============================================================================
 //  Expression arena (contiguous allocation for cache locality)
 // ============================================================================
@@ -723,6 +731,10 @@ inline const std::map<std::string, double>& builtin_constants() {
 [[nodiscard]] inline bool is_undefined(const ExprPtr& e) {
     return e && e->type == ExprType::VAR && e->name == "undefined";
 }
+
+// ============================================================
+// Section: Symbolic algebra (simplify, evaluate, evaluate_symbolic, rewrite engine)
+// ============================================================
 
 // ============================================================================
 //  Tree queries
@@ -2141,6 +2153,10 @@ struct RewriteRulesGuard {
     return e;
 }
 
+// ============================================================
+// Section: Linear algebra (vec_mat_matmul, vec_mat_inv, vec_mat_transpose, vec_mat_det, helpers)
+// ============================================================
+
 // ---- Vec/Mat predicates (M3) ----
 //
 // `vec`/`mat` are FUNC_CALL sugar (no new ExprType). The element-wise
@@ -2511,6 +2527,10 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     }
     return cur;
 }
+
+// ============================================================
+// Section: Symbolic calculus (symbolic_diff, symbolic_integrate, BuiltinMeta, IBP, u-sub)
+// ============================================================
 
 // ============================================================================
 //  Per-builtin metadata registry (Future #49) — shared by symbolic_diff
@@ -3573,6 +3593,10 @@ inline void solve_set_func_inverter(FuncInverter fn) {
     auto sols = solve_for_all(lhs, rhs, target);
     return sols.empty() ? nullptr : sols[0].expr;
 }
+
+// ============================================================
+// Section: Numerical solvers (newton_solve, bisection, adaptive_simpson, find_numeric_roots, adaptive_scan)
+// ============================================================
 
 // ============================================================================
 //  Numeric root-finding (for nonlinear equations)

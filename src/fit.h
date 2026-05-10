@@ -58,6 +58,10 @@ template<class F>
     return samples;
 }
 
+// ============================================================
+// Section: Numerical primitives (Vandermonde, least squares, polynomial eval)
+// ============================================================
+
 // ============================================================================
 //  Small dense matrix operations (for Vandermonde systems up to ~11x11)
 // ============================================================================
@@ -184,6 +188,10 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
     return std::abs(c - r) < FIT_COEFF_SNAP_TOL ? r : c;
 }
 
+// ============================================================
+// Section: Per-model fitters (polynomial, power, exp, log, sin, reciprocal)
+// ============================================================
+
 // Fit a polynomial of given degree to samples
 [[nodiscard]] inline FitResult fit_polynomial(const std::vector<FitSample>& samples, int degree) {
     FitResult result;
@@ -228,6 +236,10 @@ inline void compute_fit_stats(FitResult& result, const std::vector<FitSample>& s
     }
     return best;
 }
+
+// ============================================================
+// Section: Constant recognition (recognize_fraction, constant_form_to_expr, fmt_exact_double)
+// ============================================================
 
 // ============================================================================
 //  Rational and irrational number recognition
@@ -792,6 +804,10 @@ struct ConstantForm {
         result.expr = frac;
     return result;
 }
+
+// ============================================================
+// Section: Composition and orchestration (fit_base, compose_level, fit_all)
+// ============================================================
 
 constexpr int FIT_DEFAULT_DEPTH = 5;
 

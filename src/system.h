@@ -411,6 +411,8 @@ public:
         return vars;
     }
 
+    // ────────────── Subsection: Loading and parsing ──────────────
+
     // Stored sections from multi-system files: [name(args) -> return]
     struct Section {
         std::string name;
@@ -631,6 +633,8 @@ public:
         return lines;
     }
 
+    // ────────────── Subsection: Builtins and rewrite rules ──────────────
+
     // Load lines with section selection (shared by load_file and load_string)
     // Built-in rewrite rules — loaded automatically, replace hardcoded C++ simplifier rules.
     // These are the .fw equivalents; the file stdlib/builtin.fw mirrors this for documentation.
@@ -776,6 +780,8 @@ abs(x) / x = undefined iff x = 0
             rewrite_exhaustive_flags_.begin(),
             [](const RewriteRuleGroup& g) { return g.exhaustive; });
     }
+
+    // ────────────── Subsection: Loading and parsing (continued — formula calls, sub-systems) ──────────────
 
     // Walk an expression, find FUNC_CALL nodes that aren't builtins, and convert them
     // to formula calls using positional arg metadata from the sub-system's section header.
@@ -1201,6 +1207,8 @@ abs(x) / x = undefined iff x = 0
         }
     }
 
+    // ────────────── Subsection: CLI orchestration helpers ──────────────
+
     [[nodiscard]] static bool approx_equal(double a, double b) {
         if (std::isnan(a) || std::isnan(b)) return false;
         if (std::isinf(a) || std::isinf(b)) return a == b;
@@ -1409,6 +1417,8 @@ abs(x) / x = undefined iff x = 0
         const auto* recognized = expr_recognize_constants(distributed, aliases);
         return expr_to_string(recognized);
     }
+
+    // ────────────── Subsection: Derive ──────────────
 
     // Derive single result (backwards compatible)
     [[nodiscard]] std::string derive(const std::string& target,
@@ -1869,6 +1879,8 @@ abs(x) / x = undefined iff x = 0
         return out;
     }
 
+    // ────────────── Subsection: Resolution / solving ──────────────
+
     // Build a function inverter that resolves via .fw sub-system definitions.
     // Given f(inner) = rhs, loads f's sub-system and solves for the input variable.
     [[nodiscard]] FuncInverter make_func_inverter() const {
@@ -2068,6 +2080,8 @@ abs(x) / x = undefined iff x = 0
     }
 
 private:
+    // ────────────── Subsection: private solver ──────────────
+
     // Unified trace-render helper. Trace sites call this with a double `v`
     // (the numeric value being shown) and EITHER a direct symbolic source
     // (`sym`) OR a key into `solved_symbolic_`. Resolution order:
@@ -2385,6 +2399,8 @@ public:
     }
 
 private:
+    // ────────────── Subsection: private parsing helpers ──────────────
+
     // Parse a condition string like "x > 0" or "x > 0 && x < 100"
     std::optional<Condition> parse_condition(const std::string& cond_str) {
         if (cond_str.empty()) return std::nullopt;
@@ -2590,6 +2606,8 @@ private:
         try { cond = parse_condition(cond_part); } catch (const std::runtime_error&) {}
         equations.push_back({lhs, p.parse_expr(), std::move(cond), is_bidirectional});
     }
+
+    // ────────────── Subsection: private solver ──────────────
 
     // --- Sub-system loading ---
 

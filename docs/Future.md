@@ -852,7 +852,7 @@ Option 1 is more idiomatic with the codebase's existing helper-extraction patter
 
 **Reopen trigger:** any second simplifier function in expr.h growing a head-of-function correctness guard with comment-only justification; OR a future cycle's grader re-flagging `flatten_multiplicative` under the same diagnosis.
 
-## #R8. Refactor: `class FormulaSystem` intra-class section dividers
+## #R8. Refactor: `class FormulaSystem` intra-class section dividers — DONE 2026-05-10
 
 **From:** Cycle Cleanup-Bundle blind-spot critic (file-scope, src/system.h). file-explainer scored vague-but-correct on Components and Relationships: the file's top-level layout is clean (5 sections with `// ============ ============`-style dividers) but the central `class FormulaSystem` (~3400 LOC, lines 293–3700) has 5 conceptually separable sub-areas (Builtins / Loading-Parsing / Resolution-Solving / Derive / CLI orchestration helpers) interleaved without internal section delimiters. A reader cannot identify "where loading ends and solving begins" without reading method bodies.
 
@@ -987,7 +987,7 @@ This is the architecture-scope sibling of **#R8** (FormulaSystem intra-class sec
 
 **Locked:** No — open for the visionary's tier classification. This is borderline wrapper-tool (since the user's vision emphasises "tiny fast core, infinite extendability via .fw rules" — a clean engine API would advance that), and borderline parked (the extraction is multi-cycle and currently has no concrete trigger).
 
-## #R13. Refactor: `expr.h` 6-concern wall-of-code (file-scope split candidate, sharpens T4.1)
+## #R13. Refactor: `expr.h` 6-concern wall-of-code (file-scope split candidate, sharpens T4.1) — DONE 2026-05-10 (interim section dividers only; full split deferred per reopen-trigger)
 
 **From:** Cycle blind-spot 2026-05-10 file-scope batch (first file-scope ANALYZE in the staged sweep). Floor verdict on **Pattern axis: vague-but-correct/vague** — gate fails per worst-of-two on this axis.
 
@@ -1017,7 +1017,7 @@ Order of operations matters. The split must preserve dependency direction (per e
 
 **Locked:** No — open for the visionary's tier classification. Borderline parked (multi-cycle, no immediate trigger; the cheaper interim — section dividers in expr.h — can fire first); borderline in-scope (the user's vision emphasises tiny fast core, and file-scope split-by-responsibility advances modularity without changing semantics).
 
-## #R14. Refactor: `fit.h` cohesion-friction at sub-1000-LOC (new finding from file-scope; below split threshold)
+## #R14. Refactor: `fit.h` cohesion-friction at sub-1000-LOC (new finding from file-scope; below split threshold) — DONE 2026-05-10
 
 **From:** Cycle blind-spot 2026-05-10 file-scope batch. Floor verdict on **Pattern axis: vague-but-correct/vague** — borderline gate failure (worst-of-two = Gemma's wall-of-code flag).
 
