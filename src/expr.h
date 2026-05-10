@@ -2027,7 +2027,7 @@ struct RewriteRulesGuard {
     if (l->type == ExprType::BINOP && is_additive(l->op)) {
         std::vector<std::pair<double, ExprPtr>> terms;
         flatten_additive(l, 1.0, terms);
-        bool all_cancel = true;
+        bool all_terms_divide_cleanly = true;
         std::vector<ExprPtr> divided;
         for (auto& [coeff, base] : terms) {
             if (!base) { // constant term
@@ -2039,11 +2039,11 @@ struct RewriteRulesGuard {
             auto d = simplify_div(term, r);
             // Check if the division actually cancelled (no DIV remaining at top)
             if (d->type == ExprType::BINOP && d->op == BinOp::DIV) {
-                all_cancel = false; break;
+                all_terms_divide_cleanly = false; break;
             }
             divided.push_back(d);
         }
-        if (all_cancel && !divided.empty()) {
+        if (all_terms_divide_cleanly && !divided.empty()) {
             ExprPtr result = divided[0];
             // not std::accumulate: skip-first; rewriting via std::next(begin, 1) is less readable than the indexed form
             for (size_t i = 1; i < divided.size(); i++)
@@ -2054,10 +2054,10 @@ struct RewriteRulesGuard {
     }
 
     // Cross-term cancellation: flatten both sides, cancel matching bases
-    double lc = 1.0, rc = 1.0;
+    double l_scalar = 1.0, r_scalar = 1.0;
     std::vector<std::pair<ExprPtr, double>> lf, rf;
-    flatten_multiplicative(l, lc, lf);
-    flatten_multiplicative(r, rc, rf);
+    flatten_multiplicative(l, l_scalar, lf);
+    flatten_multiplicative(r, r_scalar, rf);
     bool changed = false;
     for (auto& [lb, le] : lf) {
         if (!lb) continue;
@@ -2081,8 +2081,8 @@ struct RewriteRulesGuard {
         }
     }
     if (changed) {
-        auto top = rebuild_multiplicative(lc, lf);
-        auto bot = rebuild_multiplicative(rc, rf);
+        auto top = rebuild_multiplicative(l_scalar, lf);
+        auto bot = rebuild_multiplicative(r_scalar, rf);
         if (is_one(bot)) return top;
         if (is_neg_one(bot)) return Expr::Neg(top);
         return Expr::BinOpExpr(BinOp::DIV, top, bot);

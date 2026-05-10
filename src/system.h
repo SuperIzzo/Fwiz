@@ -358,7 +358,7 @@ public:
         ~BudgetGuard() { solve_budget_depth_--; }
     };
 
-    static void charge_budget() {
+    static void enforce_solve_budget() {
         if (solve_budget_depth_ == 0) return; // uninitialized (direct test calls)
         if (--solve_budget_remaining_ < 0) throw SolveBudgetExceededError();
     }
@@ -2152,7 +2152,7 @@ private:
         // to their own gate below for single-variable equations.
         int winning_expr_group = -1;
         enumerate_candidates(target, [&](const Candidate& c) {
-            charge_budget(); // Part C: insurance — per-candidate-evaluation
+            enforce_solve_budget(); // Part C: insurance — per-candidate-evaluation
             if (c.type == CandidateType::EXPR) {
                 if (winning_expr_group >= 0 && c.source_group != winning_expr_group)
                     return true; // moved to a new source group — stop enumeration
@@ -2455,7 +2455,7 @@ private:
         // Not inside parentheses. Optional comma before if/iff.
         std::string eq_part = line;
         std::string cond_part;
-        bool is_iff = false;
+        bool is_bidirectional = false;
         {
             int pd = 0;
             // justified: char-cursor with line[i+N] / line[i-1] / line.substr(0, i)
@@ -2473,7 +2473,7 @@ private:
                     while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
                         eq_part.pop_back();
                     cond_part = line.substr(i + 4);
-                    is_iff = true;
+                    is_bidirectional = true;
                     break;
                 }
 
@@ -2547,7 +2547,7 @@ private:
             auto rhs_expr = rp.parse_expr();
             std::optional<Condition> cond_ast;
             bool cond_ok = true;
-            if (is_iff && !cond_part.empty()) {
+            if (is_bidirectional && !cond_part.empty()) {
                 try { cond_ast = parse_condition(trim(cond_part)); }
                 catch (const std::runtime_error& e) {
                     cond_ok = false;
@@ -2588,7 +2588,7 @@ private:
         std::optional<Condition> cond;
         // NOLINTNEXTLINE(bugprone-empty-catch) — malformed condition at load time → treat as unconditional
         try { cond = parse_condition(cond_part); } catch (const std::runtime_error&) {}
-        equations.push_back({lhs, p.parse_expr(), std::move(cond), is_iff});
+        equations.push_back({lhs, p.parse_expr(), std::move(cond), is_bidirectional});
     }
 
     // --- Sub-system loading ---
@@ -3290,7 +3290,7 @@ private:
             const std::set<std::string>& visited, int depth,
             const Condition* eq_condition,
             DeadEndSet& dead_ends) const {
-        charge_budget(); // Part C: insurance
+        enforce_solve_budget(); // Part C: insurance
 
         // Re-entrance guard: prevent infinite recursion on coupled systems
         static thread_local std::set<std::string> numeric_active_;
@@ -3552,7 +3552,7 @@ private:
 
         bool solved = false;
         enumerate_candidates(target, [&](const Candidate& c) {
-            charge_budget(); // Part C: insurance — per-candidate-evaluation
+            enforce_solve_budget(); // Part C: insurance — per-candidate-evaluation
             // Check condition BEFORE solving if all vars are known
             if (c.condition && !check_condition(*c.condition, bindings)) {
                 trace.step("  condition failed (pre-check), skipping", depth + 1);
@@ -3640,7 +3640,7 @@ private:
                      std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
                      bool& had_nan_inf, std::set<std::string>& missing,
                      DeadEndSet& dead_ends) const {
-        charge_budget(); // Part C: insurance — should never trip given Part A
+        enforce_solve_budget(); // Part C: insurance — should never trip given Part A
         // Resolve all free variables in the expression
         std::set<std::string> vars;
         collect_vars(expr, vars);

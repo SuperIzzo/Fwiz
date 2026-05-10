@@ -909,7 +909,7 @@ No code moves; just structural delimiters. Box-drawing-character style (`──�
 **Reopen trigger:** any future cycle's file-scope critic re-flagging src/system.h Components or Relationships score; OR a third internal-section refactor at scale (e.g. if FormulaSystem grows past 4000 LOC and a sub-area emerges as a split candidate).
 
 
-## #R9. Refactor: `try_resolve_numeric` `charge_budget()` call-site clarity
+## #R9. Refactor: `try_resolve_numeric` `charge_budget()` call-site clarity — DONE 2026-05-10
 
 **From:** Cycle blind-spot 2026-05-10 F6-F10 batch (function-scope, F8). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Gemma confabulated `charge_budget()` as a "Local variable" with role "Executes budget management logic" — pattern-matched past missing names per the verdict matrix's "wrong-on-detail/specific" diagnosis. The function calls `charge_budget()` at its head as a side-effect-only checkpoint; on comment-stripped read, no name signals "this is a budget guard, not a local with side effects."
 
@@ -925,7 +925,7 @@ Recommend Option A — naming carries the intent without comments.
 
 **Reopen trigger:** post-rename, blind-spot re-runs `try_resolve_numeric` → mechanics scores match/specific on Gemma without confabulation. Alternatively: any future blind-spot cycle flags the same name pattern in another function.
 
-## #R10. Refactor: `parse_line` `is_iff` flag DSL-token semantic misread
+## #R10. Refactor: `parse_line` `is_iff` flag DSL-token semantic misread — DONE 2026-05-10
 
 **From:** Cycle blind-spot 2026-05-10 F11-F15 batch (function-scope, F11). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Gemma described `is_iff` as "A flag indicating whether the line structure suggests an 'if-then-if' conditional relationship." The DSL token `iff` is "if-and-only-if" (bidirectional condition); Gemma pattern-matched the doubled `f` to "if-then-if" — a confabulation that's substantively wrong about the language semantics.
 
@@ -941,7 +941,7 @@ Recommend renaming the local to `is_bidirectional` to match the destination fiel
 
 **Reopen trigger:** post-rename, blind-spot re-runs `parse_line` → Gemma mechanics scores match/specific on Gemma without "if-then-if" misreading. Alternatively: any future blind-spot cycle flags a similar DSL-token-vs-C++-identifier collision in another function.
 
-## #R11. Refactor: `simplify_div` `all_cancel` and `lc`/`rc` semantic-name confabulation
+## #R11. Refactor: `simplify_div` `all_cancel` and `lc`/`rc` semantic-name confabulation — DONE 2026-05-10
 
 **From:** Cycle blind-spot 2026-05-10 F11-F15 batch (function-scope, F15). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Two confabulations on Gemma:
 
