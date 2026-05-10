@@ -146,7 +146,13 @@ Trigger: cycle ships with a compromise on SHIP-DESIRABLE behavior.
 
 The follow-up is a named **micro-cycle**: tiny research artifact (often <1 page) answering a specific question from the ship commit; no planner/critic/visionary round unless the fix is architectural; one implementer spawn with one or more reviewer-pre-spec'd narrow targets bundled; commit separately, referencing the ship commit.
 
-**Reviewer elision in micro-cycles** is permitted ONLY when ALL of: (a) every item was reviewer-pre-spec'd in the prior cycle's review-notes (no new design surface this cycle); (b) total LOC ≤ ~80; (c) behavioral changes (non-doc, non-test items) have reviewer-equivalent diligence baked into the implementer's verification (grep-proof of invariants, RGR on testable items). If any of (a)/(b)/(c) fails, spawn the reviewer. Default for full cycles remains: reviewer always fires. Canonical: polish-pass cycle `fe8e91e` — 7 items all from prior review-notes, ~80 LOC, item 5 (dirty-flag) verified by grep that `equations` is never cleared/erased/resized.
+**Reviewer elision in micro-cycles** is permitted under TWO patterns:
+
+(1) **Reviewer-pre-spec'd polish pass** — ALL of: (a) every item was reviewer-pre-spec'd in the prior cycle's review-notes (no new design surface this cycle); (b) total LOC ≤ ~80; (c) behavioral changes (non-doc, non-test items) have reviewer-equivalent diligence baked into the implementer's verification (grep-proof of invariants, RGR on testable items). Canonical: polish-pass cycle `fe8e91e` — 7 items all from prior review-notes, ~80 LOC, item 5 (dirty-flag) verified by grep that `equations` is never cleared/erased/resized.
+
+(2) **Production-code delta = 0** — when the cycle ships zero non-test, non-docs production code (canonical: OQ5 hardening micro-cycle 2026-05-10 — test-only, +60 LOC in `src/tests.cpp`, no production change). Reviewer trio is overhead with no surface to evaluate. Self-review (read test, conventions check, cppcheck inline) substitutes. Doc-updater + perf-auditor are skipped silently. The implementer's self-discipline (RGR, fresh-env verification, conventions) is the gate. Codified in Cycle 1 M1 meta-review 2026-05-10 to prevent reflex-spawning when an instance forgets the case.
+
+If any condition in either pattern fails, spawn the reviewer. Default for full cycles remains: reviewer always fires.
 
 ### Multi-cycle audit roadmap — per-cycle artifact archival
 
