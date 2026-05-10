@@ -1503,6 +1503,18 @@ inline void flatten_additive(ExprPtr e, double sign,
     return result ? result : Expr::Num(0);
 }
 
+// If e is a structural int-fraction, emit it as a single factor as-is and return true.
+// Preserves DIV(Num, Num) shape that derive output relies on — must run before any
+// DIV decomposition path would split it into numerator/denominator factors.
+[[nodiscard]] inline bool try_emit_int_frac_factor(
+    const ExprPtr& e,
+    std::vector<std::pair<ExprPtr, double>>& factors)
+{
+    if (!is_int_frac(e)) return false;
+    factors.push_back({e, 1.0});
+    return true;
+}
+
 // Flatten a MUL chain into (base, exponent) factors.
 // Only flattens through MUL, not DIV (to preserve division structure).
 // Numeric constants are collected into a single coefficient.
@@ -1510,11 +1522,7 @@ inline void flatten_multiplicative(ExprPtr e,
                                    double& coeff,
                                    std::vector<std::pair<ExprPtr, double>>& factors) {
     assert(e && "flatten_multiplicative: null expression");
-    // Structural fraction first — must short-circuit before DIV decomposition would split it apart
-    if (is_int_frac(e)) {
-        factors.push_back({e, 1.0});
-        return;
-    }
+    if (try_emit_int_frac_factor(e, factors)) return;
     if (e->type == ExprType::NUM) {
         coeff *= e->num;
     } else if (e->type == ExprType::UNARY_NEG) {

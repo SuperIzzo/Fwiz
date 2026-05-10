@@ -786,7 +786,7 @@ abs(x) / x = undefined iff x = 0
     // Walk an expression, find FUNC_CALL nodes that aren't builtins, and convert them
     // to formula calls using positional arg metadata from the sub-system's section header.
     // Returns the expression with formula calls replaced by their output variables.
-    [[nodiscard]] ExprPtr extract_positional_calls(const ExprPtr& e, const std::string& eq_lhs,
+    [[nodiscard]] ExprPtr extract_positional_calls(const ExprPtr& e,
                                      std::vector<FormulaCall>& calls) {
         if (!e) return e;
         if (e->type == ExprType::FUNC_CALL
@@ -836,7 +836,7 @@ abs(x) / x = undefined iff x = 0
                 // justified: parallel iteration with min(e->args.size(), pos_args.size())
                 for (size_t i = 0; i < e->args.size() && i < pos_args.size(); i++) {
                     // Recursively process nested calls in the argument
-                    auto arg = extract_positional_calls(e->args[i], eq_lhs, calls);
+                    auto arg = extract_positional_calls(e->args[i], calls);
                     call.bindings[pos_args[i]] = arg;
                 }
 
@@ -850,18 +850,18 @@ abs(x) / x = undefined iff x = 0
 
         // Recurse into sub-expressions
         if (e->type == ExprType::UNARY_NEG)
-            return Expr::Neg(extract_positional_calls(e->child, eq_lhs, calls));
+            return Expr::Neg(extract_positional_calls(e->child, calls));
         if (e->type == ExprType::BINOP)
             return Expr::BinOpExpr(e->op,
-                extract_positional_calls(e->left, eq_lhs, calls),
-                extract_positional_calls(e->right, eq_lhs, calls));
+                extract_positional_calls(e->left, calls),
+                extract_positional_calls(e->right, calls));
         if (e->type == ExprType::FUNC_CALL) {
             std::vector<ExprPtr> args;
             args.reserve(e->args.size());
             // not std::transform: extract_positional_calls mutates the captured `calls` vector via reference
             for (auto& a : e->args)
                 // cppcheck-suppress useStlAlgorithm
-                args.push_back(extract_positional_calls(a, eq_lhs, calls));
+                args.push_back(extract_positional_calls(a, calls));
             return Expr::Call(e->name, args);
         }
         return e;
@@ -871,7 +871,7 @@ abs(x) / x = undefined iff x = 0
     void resolve_positional_calls() {
         for (auto& eq : equations) {
             std::vector<FormulaCall> new_calls;
-            eq.rhs = extract_positional_calls(eq.rhs, eq.lhs_var, new_calls);
+            eq.rhs = extract_positional_calls(eq.rhs, new_calls);
             // not std::transform: move-append into a different container; std::move_iterator is less readable here
             for (auto& c : new_calls)
                 // cppcheck-suppress useStlAlgorithm

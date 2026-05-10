@@ -838,7 +838,7 @@ N≥3 met (with `precedence` being the closest analogue). Rule promoted directly
 
 **Status (Cycle Cleanup-Bundle, 2026-05-10):** **shipped.** Cleanup-bundle's A2 implemented this refactor exactly as proposed. Cycle Cleanup-Bundle blind-spot critic re-ran `liate_priority` at all three tiers — clean throughout (T1 mechanics now passes; was wrong-on-detail in M3). Visionary audit may close this entry on next firing.
 
-## #R7. Refactor: `flatten_multiplicative` int-frac short-circuit position-priority
+## #R7. Refactor: `flatten_multiplicative` int-frac short-circuit position-priority — DONE 2026-05-10
 
 **From:** Cycle Cleanup-Bundle blind-spot critic (function-scope, random codebase sample). Haiku-B at T1+T2 scored vague-but-correct on the `is_int_frac(e)` short-circuit at function head — without the comment, the position-priority over the DIV-decomposition branch reads as "test-then-push" optimization rather than what it is (a *correctness* guard: DIV decomposition would split `3/4` into "factor 3 exp 1, factor 4 exp -1", losing the structural-fraction shape that derive output relies on). T3 passes only because the comment "must short-circuit before DIV decomposition would split it apart" lifts the rationale. Soft load-bearing-comment instance — the structural cause is real (correctness invariant) but addressable.
 
@@ -1069,7 +1069,7 @@ No code moves. Goal: a file-explainer reading fit.h cold can navigate the 4 regi
 
 **Locked:** No — open for the visionary's tier classification. Cheap, low-risk, single-cycle work — likely in-scope.
 
-## #R15. Refactor: `extract_positional_calls` — `nuanced-refactor-candidate` — dead `eq_lhs` parameter
+## #R15. Refactor: `extract_positional_calls` — `nuanced-refactor-candidate` — dead `eq_lhs` parameter — DONE 2026-05-10
 
 **From:** Cycle blind-spot 2026-05-10 F21-F25 function-scope batch. Floor (Haiku + Gemma) **passed** the comprehension gate on both axes (purpose, mechanics) cleanly. However, **Haiku surfaced a principled hedge that Gemma did not flag**: on the `eq_lhs` parameter, Haiku's mechanics response said *"role: cannot be determined — it is passed through to recursive calls but never read or modified in the visible body."*
 
