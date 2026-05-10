@@ -1238,26 +1238,27 @@ template<typename Fn>
 }
 
 // ============================================================================
-//  CSE substitution — replace structural-equal subtrees with named Var nodes
+//  Structural subtree replacement — replace named subtrees with Var nodes
 // ============================================================================
 //
-// Used by --cse derive output: given an expression and an ordered list of
-// (helper_name, helper_subtree) pairs, replace every occurrence of a helper
-// subtree (matched by structural equality) with `Var(helper_name)`.
+// Given an expression and an ordered list of (name, subtree) pairs, replace
+// every occurrence of a subtree (matched by structural equality) with
+// `Var(name)`. Two consumers in-tree: --cse derive output (CSE pipeline) and
+// u-substitution in `try_u_sub_integrate` (single-pair generic replace).
 //
 // Walk is post-order (children first). After children are rewritten, the
-// helper check is performed on `e` directly (not a reconstructed node), so an
-// outer helper still matches even after its children have been rewritten.
+// match check is performed on `e` directly (not a reconstructed node), so an
+// outer match still hits even after its children have been rewritten.
 //
 // Pointer-equality short-circuit on the no-match path: fwiz's factory pattern
 // (Expr::BinOpExpr/Neg/Call) ALWAYS reconstructs a fresh node, so without this
-// guard a tree with no helper matches still pays O(|tree|) allocations. The
-// guard returns the original `e` when (a) no child changed by pointer identity
-// AND (b) no helper subtree equals the current node.
-[[nodiscard]] inline ExprPtr cse_replace(ExprPtr e,
-        const std::vector<std::pair<std::string, ExprPtr>>& helpers) {
+// guard a tree with no match still pays O(|tree|) allocations. The guard
+// returns the original `e` when (a) no child changed by pointer identity AND
+// (b) no replacement target equals the current node.
+[[nodiscard]] inline ExprPtr replace_subtree_by_name(ExprPtr e,
+        const std::vector<std::pair<std::string, ExprPtr>>& replacements) {
     return tree_map(e, [&](ExprPtr node) -> ExprPtr {
-        for (auto& [name, sub] : helpers)
+        for (auto& [name, sub] : replacements)
             if (expr_equal(node, sub)) return Expr::Var(name);
         return node;
     });
@@ -3152,9 +3153,8 @@ static_assert(LIATE_MIN_RANK_FOR_IBP_SYNTHESIS >= static_cast<int>(LiateRank::Tr
         if (!g_prime || is_zero(g_prime)) continue;
         auto residual = try_cancel(e_ptr, g_prime);
         if (!residual) continue;
-        // Express residual in terms of u — replace every subtree equal to g
-        // with Var(u_name). cse_replace does exactly this with structural eq.
-        const ExprPtr residual_in_u = cse_replace(residual, {{u_name, g}});
+        // Express residual in terms of u — replace each g-subtree with Var(u_name).
+        const ExprPtr residual_in_u = replace_subtree_by_name(residual, {{u_name, g}});
         // If residual still references `var` directly, this candidate fails:
         // u-sub requires the integrand reduce to f(u) du.
         if (contains_var(*residual_in_u, var)) continue;

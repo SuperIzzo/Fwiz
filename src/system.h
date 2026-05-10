@@ -90,7 +90,7 @@ struct SolveBudgetExceededError : std::exception {
 //
 // Topological order: the selected helpers are then re-sorted by node count
 // ascending so smaller dependencies appear first. When each helper's RHS is
-// later re-walked through `cse_replace` against earlier helpers, it picks up
+// later re-walked through `replace_subtree_by_name` against earlier helpers, it picks up
 // nested references (e.g. `t2 = sin(t1)` when `t1 = x^2`).
 //
 // `occupied` is a name set the allocator must avoid (existing variables,
@@ -1724,13 +1724,13 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             for (size_t i = 0; i < helpers.size(); i++) {
                 std::vector<std::pair<std::string, ExprPtr>> const earlier(
                     helpers.begin(), helpers.begin() + static_cast<long>(i));
-                auto rhs = cse_replace(helpers[i].second, earlier);
+                auto rhs = replace_subtree_by_name(helpers[i].second, earlier);
                 out_helpers->push_back(
                     helpers[i].first + " = " + format_derived(rhs, aliases));
             }
             // Substitute helpers into each main equation.
             std::transform(for_format.begin(), for_format.end(), for_format.begin(),
-                [&helpers](ExprPtr expr) { return cse_replace(expr, helpers); });
+                [&helpers](ExprPtr expr) { return replace_subtree_by_name(expr, helpers); });
         } else {
             // No-CSE path: format directly from sorted_exprs (zero overhead).
             for_format.reserve(sorted_exprs.size());

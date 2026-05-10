@@ -748,15 +748,15 @@ M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)
 
 Readability-driven refactor candidates filed by the blind-spot critic. Each carries a **From** (source cycle + grader-tier failure), a **Proposed** (concrete change), and a **Reopen trigger**. The visionary audit tier-classifies these on the next cycle.
 
-## #R1. Refactor: `try_u_sub_integrate` cse_replace naming hijack
+## #R1. Refactor: `try_u_sub_integrate` cse_replace naming hijack — DONE 2026-05-11
 
-**From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on `cse_replace(residual, {{u_name, g}})` — the helper's name signals "common-subexpression extraction" but the call site uses it as a generic structural-equality replace (g-subtree → Var(u_name)). T3 passes only because the comment explicitly says "cse_replace does exactly this with structural eq" — load-bearing comment papering over a naming mismatch.
+**Shipped 2026-05-11**: `cse_replace` renamed to `replace_subtree_by_name`; function parameter `helpers` → `replacements`; section header at expr.h:1240-1256 rewritten to reflect the generic contract (CSE + u-sub both consume); load-bearing comment at try_u_sub_integrate (expr.h:3155-3156) collapsed since the new name carries the meaning. 11 touch sites across 3 files. All tests green (3279/3279).
 
-**Proposed:** Promote `cse_replace` to a more general name reflecting its actual contract — e.g. `tree_replace_subtree` or `replace_subtree_by_name` — keeping `cse_extract` (which IS CSE-specific) named as is. OR add a thin wrapper alias `replace_subtree(tree, name, target)` used at the u-sub call site. Either lift the load-bearing comment off the call site by making the name tell the truth.
+**From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on `cse_replace(residual, {{u_name, g}})` — the helper's name signaled "common-subexpression extraction" but the call site used it as a generic structural-equality replace.
 
-**Pattern coverage:** Single-site for now (`try_u_sub_integrate` is the only non-CSE consumer). Per agent profile (N≥3 for rule extraction), this stays as a per-function refactor item. If a third symbolic pass starts using `cse_replace` for non-CSE rewrites (likely in M3 IBP), promote to a rename rule.
+**Resolved by:** Pure rename per primary proposal. Tests stay (rename-followers). Name now reads truthful at every site.
 
-**Reopen trigger:** Any third call site using `cse_replace` for non-CSE structural rewriting; OR any future cycle's blind-spot critic re-flagging the cse_replace usage in `try_u_sub_integrate`.
+**Reopen trigger:** Any future cycle's blind-spot critic re-flagging the structural-replace usage anywhere in the codebase.
 
 ## #R2. Refactor: `resolve_integral_calls` 4-arg control-flow restructure
 

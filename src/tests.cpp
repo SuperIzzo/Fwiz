@@ -11721,7 +11721,7 @@ void test_cse_unit() {
 
     // CSE-U2: single-helper substitution.
     // Input: sin(x^2) + cos(x^2). Helper: t1 = x^2.
-    // Expected: cse_replace produces sin(t1) + cos(t1).
+    // Expected: replace_subtree_by_name produces sin(t1) + cos(t1).
     {
         auto x  = Expr::Var("x");
         auto x2 = Expr::BinOpExpr(BinOp::POW, x, Expr::Num(2));
@@ -11729,7 +11729,7 @@ void test_cse_unit() {
                       Expr::Call("sin", { x2 }),
                       Expr::Call("cos", { x2 }));
         std::vector<std::pair<std::string, ExprPtr>> helpers = { {"t1", x2} };
-        std::string s = expr_to_string(cse_replace(e, helpers));
+        std::string s = expr_to_string(replace_subtree_by_name(e, helpers));
         ASSERT(s.find("sin(t1)") != std::string::npos,
                "CSE-U2: sin(x^2) → sin(t1) (got: " + s + ")");
         ASSERT(s.find("cos(t1)") != std::string::npos,
@@ -11838,10 +11838,10 @@ void test_cse_unit() {
         ASSERT(expr_to_string(helpers[0].second) == "x^2",
                "CSE-U6: helpers[0] = x^2 (got: " + expr_to_string(helpers[0].second) + ")");
         // Second helper raw RHS may still contain x^2; the design's spec is that
-        // when the implementation FORMATS helpers[1], it cse_replaces with helpers[0..i-1].
+        // when the implementation FORMATS helpers[1], it replaces helpers[0..i-1] subtrees by name.
         // Simulate the implementation step:
         std::vector<std::pair<std::string, ExprPtr>> earlier = { helpers[0] };
-        std::string s = expr_to_string(cse_replace(helpers[1].second, earlier));
+        std::string s = expr_to_string(replace_subtree_by_name(helpers[1].second, earlier));
         ASSERT(s == "sin(t1)",
                "CSE-U6: helpers[1] formatted with earlier helpers = sin(t1), NOT sin(x^2) (got: " + s + ")");
     }
@@ -11926,9 +11926,9 @@ void test_cse_unit() {
         // helpers[1] substituted with [helpers[0]] must reference helpers[0]'s
         // assigned name (t1) — proves the subtree relationship survives re-sort.
         std::string outer_substituted = expr_to_string(
-            cse_replace(helpers[1].second, {helpers[0]}));
+            replace_subtree_by_name(helpers[1].second, {helpers[0]}));
         ASSERT(outer_substituted.find("t1") != std::string::npos,
-               "CSE-V2: helpers[1] references t1 after cse_replace (got: " +
+               "CSE-V2: helpers[1] references t1 after replace_subtree_by_name (got: " +
                outer_substituted + ")");
     }
 }
