@@ -1,7 +1,7 @@
 ---
 name: fwiz-orchestrator
 description: Orchestrates the multi-phase Fwiz development workflow (RESEARCH -> DESIGN -> IMPLEMENT -> REVIEW -> PLAN-NEXT)
-tools: Agent(researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer, blind-spot-critic, log-arc-reflector, plan-ideator, plan-critic), Read, Glob, Grep, Bash, Write, Edit
+tools: Agent(researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer, blind-spot-critic, log-arc-reflector, plan-ideator, plan-critic, code-explainer-purpose, code-explainer-mechanics, file-explainer, architecture-explainer), Read, Glob, Grep, Bash, Write, Edit
 model: opus
 permissionMode: acceptEdits
 memory: project
@@ -182,7 +182,7 @@ When review completes or user asks "what's next": (1) read `.fwiz-workflow/revie
 
 ## Phase 6: META-REVIEW (End of Cycle)
 
-**Prelude — Blind-Spot Critic (auto-fire).** Before spawning the meta-reviewer, spawn the **blind-spot-critic** agent against the cycle's diff. It samples 7 eligible functions (2 longest in the diff, 2 random from the diff, 3 random from anywhere in the codebase), runs Haiku-grader explanation tests at three context tiers, and on failure files refactor items into `docs/Future.md` plus extracts patterns into `docs/Code-Style.md`. Score record lands in `.fwiz-workflow/blind-spot-scores.md`.
+**Prelude — Blind-Spot Critic (auto-fire, 3-step orchestrator-mediated dance).** Before spawning the meta-reviewer, run the **blind-spot-critic** in two passes with the orchestrator spawning Haiku graders between them — sub-agents cannot spawn sub-sub-agents in this harness (validated 2026-05-10).
 
 Determine the diff base. On first run, `.fwiz-workflow/last-blind-spot-commit` doesn't exist — fall back to `HEAD~1`:
 
@@ -193,18 +193,25 @@ if [ -f "$LAST_BS" ]; then
 else
   BASE=HEAD~1
 fi
-# blind-spot-critic uses: git diff $BASE..HEAD -- src/*.h src/*.cpp
 ```
 
-Pass `BASE` to the agent in the spawn brief.
+**Step 1 — SAMPLE pass.** Spawn `blind-spot-critic` with `MODE: SAMPLE` and `BASE=$BASE`. It samples 7 functions (2 longest in diff, 2 random in diff, 3 random codebase), 1 file (largest in diff with rotation), 1 architecture pass (skip-when-unchanged). For each it strips comments, prepares 3 tiers (T1 body-only, T2 +signatures, T3 +comments), runs **Gemma graders inline via Bash** (`tools/calibrate-grader.py`), and emits `.fwiz-workflow/blind-spot-sampling.md` with all Haiku prompts to dispatch.
 
-This catches the **negative-signal complement** — code that isn't broken but isn't readable. The meta-reviewer reviews the cycle's process; the blind-spot-critic reviews the cycle's output for opacity. Together they cover both axes of cycle quality.
+**Step 2 — Orchestrator-mediated Haiku spawning.** Read the sampling artifact. For each `Haiku prompt: <key> [grader: <agent>]` listed, spawn the named grader (`code-explainer-purpose`, `code-explainer-mechanics`, `file-explainer`, `architecture-explainer`) with the listed prompt body. The orchestrator's frontmatter `tools: Agent(...)` MUST list the four Haiku graders. Collect responses into `.fwiz-workflow/blind-spot-responses.md` keyed by the same identifiers. Optionally also spawn each prompt with the same agents but `model: opus` override at spawn time and record under `## Opus responses` (supplementary tier).
 
-After the blind-spot-critic returns, update `.fwiz-workflow/last-blind-spot-commit`:
+Practical batching: use parallel Agent spawns where possible (multiple invocations in one assistant message). 7 functions × 3 tiers × 2 prompts = up to 42 Haiku spawns + 42 Opus-override spawns. At ~6-10s per Haiku spawn this is ~5-7 min wall-clock with parallelism. If wall-clock concern dominates, consider running Opus-side only on the smaller sample set (e.g., the 2 longest-in-diff functions).
+
+**Step 3 — ANALYZE pass.** Spawn `blind-spot-critic` with `MODE: ANALYZE`. It reads BOTH `blind-spot-sampling.md` (prompts + Gemma responses) and `blind-spot-responses.md` (Haiku + Opus responses). Scores per the verdict matrix, runs the intervention loop (Gemma-only via Bash for in-loop checks), files refactor items into `docs/Future.md` `## Refactors`, extracts rules into `docs/Code-Style.md`, appends to `.fwiz-workflow/blind-spot-scores.md`, returns summary.
+
+This catches the **negative-signal complement** — code that isn't broken but isn't readable. Together with the meta-reviewer (process axis), it covers both axes of cycle quality.
+
+After the ANALYZE pass returns, update `.fwiz-workflow/last-blind-spot-commit`:
 
 ```bash
 git rev-parse HEAD > .fwiz-workflow/last-blind-spot-commit
 ```
+
+Then archive both sampling and responses artifacts to the cycle's archive folder so next cycle's SAMPLE starts fresh.
 
 Skip the prelude only if the diff has zero eligible functions (no `src/*.h`/`src/*.cpp` changes, or all changes are in trivial getters/setters). For full-codebase audits, see `/blind-spot-sweep` (user-triggered).
 
