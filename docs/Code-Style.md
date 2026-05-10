@@ -314,6 +314,22 @@ The box-drawing-character style (`──────`) visually subordinates the
 
 **Origin:** Cycle Cleanup-Bundle — file-explainer scored vague-but-correct on Components and Relationships for src/system.h (4037 LOC; central `class FormulaSystem` at lines 293–3700 has 5 conceptually separable sub-areas with no internal section delimiters).
 
+### Rule (provisional): unprompted "wall of code" or "mashed concerns" on a multi-region file is structural signal, even when comprehension correctness is preserved
+
+**Convention:** when a file-scope test passes Purpose / Components / Relationships at match or vague-but-correct but a floor grader **independently surfaces** the file as "wall of code" / "monolithic" / "mashed concerns" / "tightly interwoven" without being prompted on those terms, treat the unprompted flag as a Pattern-axis failure even if the other three axes pass. The grader was asked to explain the file, not to review its structure — but offered structural critique anyway. That offer is the signal.
+
+**Anti-pattern:** dismissing the flag because the grader's substantive read is correct ("Gemma got the components right, so the wall-of-code line is just rhetoric"). The whole comprehension-gate principle is that a less-capable reader's surfaced concerns track the readability floor; rationalising them away is the failure mode the gate exists to catch.
+
+**Operational test:** the file-scope ANALYZE batch on 2026-05-10 ran `file-explainer` on 4 files (`expr.h`, `system.h`, `fit.h`, `main.cpp`). On 3 of 4 files (`expr.h`, `system.h`, `fit.h`), Gemma offered "wall of code" / "monolithic-mixed-concerns" verbatim, unprompted. Haiku offered the same on `system.h` (also unprompted, "monolithic-mixed-concerns") but tolerated `expr.h` and `fit.h`. The file with the cleanest verdict (`main.cpp`) was the only one neither grader flagged. **The unprompted-concern rate (3/4 = 75%) IS the signal.**
+
+The disagreement Haiku-vs-Gemma on `expr.h` and `fit.h` is itself diagnostic: where Haiku's broader-context reading tolerates the structure but Gemma's working-memory-taxed reading flags it, the floor (worst-of-two = Gemma) decides. This produced refactor items #R13 (expr.h, size+cohesion → split-track) and #R14 (fit.h, sub-split-size cohesion → section dividers).
+
+**How to read this rule:** "wall of code" and "mashed concerns" are *floor-grader vocabulary signals* — when they appear unprompted, the gate fails on the Pattern axis regardless of the other three. The diagnosis (split, dividers, rename) follows from the size + concern-count: large file with many concerns → split (#R13 path); small file with multiple regions → dividers (#R14 path); class-internal sub-areas → intra-class dividers (#R8 path). The pattern's *signal* is universal; the *response* is sized to the file.
+
+**Status:** **provisional** — single sweep's evidence (4 files, 3 unprompted flags). Promotion to adopted requires a second batch with the same pattern, or a follow-up batch that confirms fewer flags after #R8 / #R13 / #R14 landed (rule's diagnostic mechanism validated by negative result post-fix).
+
+**Origin:** Cycle 2026-05-10 — file-scope blind-spot ANALYZE (first full-batch file-scope test in the staged sweep). 3 of 4 files surfaced unprompted "wall of code" / "monolithic-mixed-concerns" / "wall of code" / "tightly couples" verdicts from Gemma; system.h was confirmed by Haiku, expr.h and fit.h showed Haiku-Gemma disagreement (with Haiku Notes admitting incomplete reading on expr.h, providing soft alignment with Gemma's flag).
+
 ## Architecture rules
 
 Codebase-wide structural rules. Appended by the blind-spot critic when architecture-scope tests reveal a comprehension failure (architecture-explainer can't reliably identify codebase purpose / module roles / dependency graph / pattern). Architecture rules with deeper "this is how the codebase works" content also land in `docs/Developer.md`.

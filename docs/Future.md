@@ -986,3 +986,85 @@ This is the architecture-scope sibling of **#R8** (FormulaSystem intra-class sec
 3. The orchestrator considers an arc proposal (`/plan-campaign`) for a public-API surface — this entry becomes its starting point.
 
 **Locked:** No — open for the visionary's tier classification. This is borderline wrapper-tool (since the user's vision emphasises "tiny fast core, infinite extendability via .fw rules" — a clean engine API would advance that), and borderline parked (the extraction is multi-cycle and currently has no concrete trigger).
+
+## #R13. Refactor: `expr.h` 6-concern wall-of-code (file-scope split candidate, sharpens T4.1)
+
+**From:** Cycle blind-spot 2026-05-10 file-scope batch (first file-scope ANALYZE in the staged sweep). Floor verdict on **Pattern axis: vague-but-correct/vague** — gate fails per worst-of-two on this axis.
+
+- **Haiku** (file-explainer with full body, comments stripped, 3861 LOC): scored Pattern as "Not a 'wall of code' but a large monolithic file appropriate for header-only design," confidence "mostly-clear", but Notes explicitly flag size (`exceeds comfortable single-pass reading`) and that "Sections on flattening, simplification loops, quadratic decomposition, differentiation/integration operators ... remain unread. Complete coherence verification would require reading the full file." Haiku tolerated the structure but explicitly admits incomplete reading.
+- **Gemma** (same prompt, same body): scored Pattern as **"a 'wall of code' where concerns are heavily mashed together"** with 6 distinct mashed concerns enumerated unprompted: AST Definition, Numerical/Set Theory (`ValueSet`), Symbolic Algebra, Symbolic Calculus, Numerical Solvers, Linear Algebra. Verbatim: *"feels like a monolithic library rather than a cleanly separated set of modules."*
+
+Worst-of-two on Pattern axis = Gemma's wall-of-code flag. Per the comprehension-gate principle, **the floor's flag is authoritative**; Haiku's tolerance does not override.
+
+**Diagnosis:** **size + cohesion**, in that order. The 3861 LOC has reached the threshold where even file-explainer reads cannot complete in a single pass (Haiku's own admission). Within that size, Gemma read 6 distinct concerns — and the existing architecture rule already names ~3000 LOC as the split-by-responsibility threshold (`docs/Code-Style.md` §"a codebase whose two largest files together exceed ~80% of source LOC"). expr.h sits 28% over that threshold.
+
+**Proposed (low-priority, design-track — sharpens existing T4.1):**
+
+The existing T4.1 trigger names `numeric.h` extraction from `system.h` first, `query.h` second. **This entry adds: `expr.h` is also a multi-concern split candidate.** Concretely, Gemma's 6 enumerated concerns suggest 2-3 extractable surfaces:
+
+1. **`valueset.h`** — extract `ValueSet` + `Interval` + `PeriodicFamily` + `Condition`/`CondClause`. ValueSet is a self-contained set-theoretic library used by rewrite-rule exhaustiveness checking and numeric-solver range narrowing. Imports nothing from expr.h that doesn't go through ExprPtr.
+2. **`calculus.h`** — extract `symbolic_diff`, `symbolic_integrate`, `try_u_sub_integrate`, `try_ibp_integrate`, `BuiltinMeta` registry. Tightly coupled to Expr (uses ExprArena, builds AST), so this is a header-include split, not a deep dependency cleave. The benefit: a developer reading `expr.h` no longer encounters integration on the way to evaluation.
+3. **(Optional) `linalg.h`** — extract `vec_mat_matmul`, `vec_mat_inv`, `vec_mat_transpose`, `vec_mat_det`. Smallest of the three concerns (~150 LOC).
+
+Order of operations matters. The split must preserve dependency direction (per existing architecture rule): each new file imports from `expr.h` only, never the other way. ValueSet extraction is the cheapest test (clean boundary, no calculus/linalg coupling); calculus extraction is the heaviest (450+ LOC across the diff/integrate surfaces and growing per Future #16/#48/#49); linalg is borderline (small enough that file-scope cohesion may not require split).
+
+**Pattern coverage:** 1 codebase site. The pattern of "single header file containing 6+ enumerated concerns" applies only to expr.h today. system.h's "monolithic-mixed-concerns" is already addressed by #R8 (cheap interim) + T4.1 (split path).
+
+**Reopen trigger:** Either of:
+1. **#R8 ships** (FormulaSystem section dividers) AND a follow-up file-scope critic re-runs expr.h → Pattern still scores "wall of code" by either floor grader. Section dividers in expr.h itself (analogous to #R8's intra-class style applied to free-function regions) is the cheaper interim test before any extraction.
+2. **T4.1's `numeric.h` extraction lands**, validating that single-file extraction works in this codebase, AND a contributor/agent independently asks "where does ValueSet end and Expr arithmetic begin in expr.h?" — the question is itself the reopen condition.
+3. **expr.h grows past ~4500 LOC** (further +600 from current 3861). At that size the size-only argument crosses the line independent of cohesion.
+
+**Locked:** No — open for the visionary's tier classification. Borderline parked (multi-cycle, no immediate trigger; the cheaper interim — section dividers in expr.h — can fire first); borderline in-scope (the user's vision emphasises tiny fast core, and file-scope split-by-responsibility advances modularity without changing semantics).
+
+## #R14. Refactor: `fit.h` cohesion-friction at sub-1000-LOC (new finding from file-scope; below split threshold)
+
+**From:** Cycle blind-spot 2026-05-10 file-scope batch. Floor verdict on **Pattern axis: vague-but-correct/vague** — borderline gate failure (worst-of-two = Gemma's wall-of-code flag).
+
+- **Haiku** (file-explainer with full body, 999 LOC): scored Pattern as **"Pipeline-stage library"** with confidence "mostly-clear" — read it as well-organized for what it is. Notes flag "cognitive friction" of "6+ fitter implementations in parallel" and "interleaving of coefficient snapping + constant recognition + AST building throughout each fitter."
+- **Gemma** (same prompt): scored Pattern as **"monolithic utility header — a single file containing a large collection of specialized mathematical tools"** + "the sheer volume of specialized functions ... makes it feel like a 'wall of code' rather than a cleanly separated module."
+
+Disagreement on Pattern: Haiku tolerated as "Pipeline-stage library," Gemma flagged "wall of code." Worst-of-two = Gemma. Haiku's "cognitive friction" Notes provide soft alignment with Gemma's read — both surfaced cohesion concern, just at different severity.
+
+**Important calibration:** fit.h is **999 LOC** — well below the architecture rule's ~3000 LOC split threshold. This is **NOT a split candidate** under existing rules. The flag is **cohesion-at-sub-split-size** — a different category from #R13 (which has both size AND cohesion).
+
+**Diagnosis:** **structure**, not size. The file lacks intra-file section delimiters between its 4 logical regions:
+1. **Numerical primitives** (Vandermonde, least-squares, polynomial eval).
+2. **Per-model fitters** (polynomial, power, exp, log, sin, reciprocal — 6 self-contained functions with similar internal flow).
+3. **Constant recognition** (`recognize_fraction`, `constant_form_to_expr`, `expr_recognize_constants`, `fmt_exact_double`).
+4. **Composition orchestration** (`fit_base`, `compose_level`, `fit_all`, `sort_and_dedup`).
+
+A file-explainer reading fit.h cold encounters these four concerns interleaved without visual separation. Haiku names the friction explicitly: "A reader must mentally track 6+ fitter implementations in parallel."
+
+**Proposed (cheap, single-pass — analogous to #R8 but at file-scope rather than intra-class):**
+
+Add 4 file-level section dividers at the boundaries of the 4 regions, in the same `// ============ ============`-style as system.h's existing top-level dividers:
+
+```cpp
+// ============================================================
+// Section: Numerical primitives (Vandermonde, least squares, eval)
+// ============================================================
+
+// ============================================================
+// Section: Per-model fitters (polynomial / power / exp / log / sin / reciprocal)
+// ============================================================
+
+// ============================================================
+// Section: Constant recognition (fractions, sqrt/log constants, AST)
+// ============================================================
+
+// ============================================================
+// Section: Composition and orchestration (fit_base, compose_level, fit_all)
+// ============================================================
+```
+
+No code moves. Goal: a file-explainer reading fit.h cold can navigate the 4 regions without parsing function bodies. This mirrors the existing intra-class section-dividers rule (`docs/Code-Style.md` §"intra-class section dividers in classes exceeding ~1500 LOC") applied to a file with multi-region cohesion-friction.
+
+**Pattern coverage:** 1 codebase site at this size threshold. expr.h would benefit from the same treatment but at a different scale (#R13 covers expr.h's case with deeper proposed action). system.h has top-level dividers already; #R8 covers the intra-class case there.
+
+**Reopen trigger:** Either of:
+1. **Dividers ship** AND a follow-up file-scope critic re-runs fit.h → Pattern still scores "wall of code" or worse on either floor grader. Then the diagnosis was wrong; reopen as a deeper structural concern.
+2. **fit.h grows past ~1500 LOC** without dividers landing — escalate to split candidate (analogous to expr.h's trajectory).
+3. **A second sub-1500-LOC file in the codebase** flags the same structure-without-size pattern in a future cycle. At N≥2 distinct sites, promote to a file-organisation rule (currently below the rule-extraction threshold; this is a single-file refactor item).
+
+**Locked:** No — open for the visionary's tier classification. Cheap, low-risk, single-cycle work — likely in-scope.
