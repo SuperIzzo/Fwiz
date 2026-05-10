@@ -188,7 +188,53 @@ less capable" is the failure mode that defeats the test.
 
 Function-scope rules. Appended by the blind-spot critic when function-scope Haiku-grader tests reveal a recurring readability failure. Each entry includes its origin cycle and the function whose failure prompted the rule.
 
-_(none yet — populated by blind-spot-critic on first qualifying failure.)_
+### Rule: load-bearing comments must point at a structural cause, not paper over a naming or control-flow defect
+
+**Convention:** when a function passes the comprehension gate at T3 (with comments) but fails at T1/T2 because a comment explicitly tells the reader "what's really happening" (e.g. "cse_replace does exactly this with structural eq", "fall through to numeric path", "see also …"), the comment is a refactor signal. The *first* response is to remove the structural cause — rename, restructure, or extract — so the comment becomes redundant. Only when the structural cause is genuinely unfixable (e.g. cross-cutting algorithmic context) does the comment stay as load-bearing.
+
+**Anti-pattern:** the comment is the first line of defence. Two examples in Cycle I-M2:
+- `try_u_sub_integrate` calling `cse_replace` for non-CSE structural rewriting, with a comment saying so. The rename (or wrapper) is the structural fix; the comment is the symptom.
+- `resolve_integral_calls` 4-arg branch's `if (val) { if (finite) return; /* fall through */ } else { return diff; }` asymmetric early-return, where the comment names the asymmetry. Extracting an explicit dispatch helper is the structural fix.
+
+**Reason:** T3-only-passes mean a reader without the comment cannot follow. Comments rot, drift, get stripped by IDE flows, and are skipped by Haiku-grade readers under context pressure. Code that reads correctly without leaning on comments is durable; code that requires a comment to disambiguate the next step is not.
+
+**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` and `resolve_integral_calls` 4-arg branch (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable.
+
+### Rule: heuristic-priority / rank functions returning small magic ints should use a named-constant `enum class`
+
+**Convention:** when a function's purpose is to assign a priority / rank / score from a small fixed set of categories (LIATE rank, operator precedence, taxonomy depth, etc.), the integer values returned must be defined in a named-constant `enum class` near the function. The function body uses `static_cast<int>(EnumName::Category)` (or the `int` underlying type directly when the enum's underlying type is `int`); the call site continues to compare ints. The enum *is* the table; the comment-table burden disappears.
+
+**Anti-pattern:** the comment block above the function names a category-to-int mapping that the function body then duplicates inline as raw integer returns. A reader without the comment cannot justify why "logarithmic returns 5" — the value is pure magic. Two cycles in a row, the load-bearing-comment-anti-pattern fires on this exact shape.
+
+Concretely (example from Cycle I-M3, src/expr.h `liate_priority`):
+
+```cpp
+// BEFORE — magic ints, table in comment
+//   Logarithmic    → 5
+//   Inverse-trig   → 4
+//   ...
+[[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
+    if (e.name == "log") return 5;
+    if (e.name == "asin" || ...) return 4;
+    ...
+}
+
+// AFTER — named constants, table is the enum
+enum class LiateRank : int {
+    None = 0, Exponential = 1, Trigonometric = 2,
+    Algebraic = 3, InverseTrig = 4, Logarithmic = 5,
+};
+[[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
+    if (e.name == "log") return static_cast<int>(LiateRank::Logarithmic);
+    ...
+}
+```
+
+**Reason:** small-int returns from a heuristic-scoring function are a recognised readability hazard — the int value carries no semantic outside the function, the comparison-at-call-site uses the int but doesn't care which value, and the comment that maps int↔category is the only thing keeping the function legible. Replacing the int with a named enum carries semantic at the return site, eliminates the comment-as-load-bearing-spec, and keeps call-site comparison as int (so no caller change is required when the enum is added).
+
+**Pattern coverage at extraction:** 3 sites — `liate_priority` (this finding), `precedence` in expr.h:1081 (returns 0-5 for operator precedence; constant `5` falls out as the literal "atom" precedence), `canonicity_score` in expr.h:1357 (returns `pair<int, int>` for derive ordering — partial fit, the int values are computed not magic, but the *ordering convention* across return sites is comment-driven and would benefit from named constants for "tie-break direction"). N≥3 met.
+
+**Origin:** Cycle I-M3 — Haiku-B failure on `liate_priority` (T1=wrong-on-detail because rank values 5/4/3/2/1 are inline-magic without the LIATE-table comment).
 
 ## File-organisation rules
 
@@ -200,7 +246,21 @@ Examples of rules that would live here once empirically derived:
 - "A header file mixing AST type definitions with solver-strategy implementations should be split."
 - "Files with unrelated top-level concerns (parser + solver + formatter in one file) violate file-cohesion."
 
-_(none yet — populated by blind-spot-critic file-scope tests.)_
+### Rule (provisional): non-contiguous milestone surfaces in a >2000-line file require cross-reference comments at each end
+
+**Convention:** when a single feature-milestone (Future.md item, design-proposal milestone, or analogous unit of work) ships symbolic and numeric — or otherwise paired — halves in two physically separated regions of the same file, each region's section header must name the other region by line-anchor and one-line role description.
+
+Concretely (example from Cycle I-M2, src/expr.h §"Symbolic integration"):
+- Symbolic block header: `// Numeric counterpart: adaptive_simpson (line ~3329) — definite-integral fallback when symbolic_integrate returns nullptr.`
+- Numeric block header: `// Paired with symbolic_integrate (line ~2690 in §Symbolic integration); dispatch is resolve_integral_calls in system.h.`
+
+**Anti-pattern:** symbolic and numeric halves of the same milestone shipped in non-adjacent regions of a 3500-LOC header with no cross-reference. A `file-explainer` reading either half does not realise the other exists; the design pattern (symbolic-then-numeric fallback) is invisible at the file level.
+
+**Reason:** files in this codebase grow monotonically (header-only design + interleaved feature areas). Once a file passes ~2000 LOC, milestone surfaces start interleaving with other concerns. Cross-references restore the structural pairing without requiring a file split. Code-as-prose for navigation when code-as-structure isn't enough.
+
+**Status:** **adopted** — Cycle I-M3 validated the rule under live use: M3's §"Symbolic integration" header comment (expr.h lines 2716-2762) embeds M1+M2+M3 milestone notes in a single comment block, and the M3 cycle ran without re-flagging the section. The cross-reference back from `adaptive_simpson` (line ~3329) to §Symbolic integration remains R4 (Future.md, open) — the rule's mechanism (cross-reference at each end) is partially in place but not symmetrically. The rule itself is durable; promotion from provisional to adopted reflects the absence of regression under one additional cycle of churn.
+
+**Origin:** Cycle I-M2 — file-explainer scored vague-but-correct on Components/Relationships/Pattern for src/expr.h §Symbolic integration extension (lines 2616–2878 + 3329–3391, separated by ~430 LOC). Cycle I-M3 — validated; no regression, M3 surface follows the rule.
 
 ## Architecture rules
 

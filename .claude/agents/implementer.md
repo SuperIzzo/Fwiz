@@ -47,9 +47,9 @@ For each design item you're given:
    ```
 
 ### VERIFY — Full Quality Bar
-10. Run: `make test && make sanitize`. The orchestrator runs `make analyze-fast` (cppcheck, ~1-2 min) at cycle close — you do not need to invoke any analyze target yourself.
-11. Both must pass. If sanitize finds issues, fix them (they're usually real bugs).
-11b. **Never launch `make analyze`, `make analyze-fast`, or `make analyze-full` yourself, foreground or background.** Analyze is orchestrator-owned because (a) `analyze-full` (clang-tidy) runs 1-2h and is a user-triggered batch task — it does not run per-cycle; (b) `analyze-fast` (cppcheck) is the orchestrator's per-cycle gate at REVIEW phase; (c) the harness kills your background processes when your session ends, leaving sentinels orphaned. If your design changes a function signature / return type / exception contract, flag it in your final report (`CONTRACT-CHANGE: {sites}, suggest user run analyze-full sooner than usual`) and STOP. Do not poll, launch, or wrap any analyze target. Grep-based self-verification is not sufficient for contract changes — it finds only the sites you remember; the tool finds the sites you forgot. Canonical miss: T1 cleanup cycle 2026-04-28 M3 — implementer launched `make analyze` with `run_in_background: true` from inside its session; the process died at session end; sentinel survived; orchestrator had to clean up and re-launch with explicit `trap "rm -f $SENTINEL" EXIT` wrapper.
+10. Run: `make test && make sanitize && make analyze-fast`. The first two are standard correctness gates; `make analyze-fast` (cppcheck, ~1-2 min) is your pre-handoff style/convention gate. Grep the cppcheck output for `warning:|error:|style:|performance:` and fix any non-zero counts before declaring DONE. **Foreground only — never background.** This carves out `analyze-fast` from the "never launch analyze" rule below; `analyze` (combined) and `analyze-full` (clang-tidy) remain orchestrator-owned. Empirical justification: across 3 consecutive cycles (Integrals M1/M2/M3) the orchestrator self-fixed **1+5+8 = 14 cppcheck-style findings** at REVIEW phase that this step would have caught at implementer-time — most were const-pointer cleanups, cstyleCast, dead-condition, and internalAstError false-positives.
+11. All three must pass. If sanitize finds issues, fix them (they're usually real bugs). If cppcheck finds issues, fix them mechanically (they're style/convention, not design).
+11b. **Never launch `make analyze` (combined) or `make analyze-full` (clang-tidy) yourself, foreground or background.** `make analyze-fast` is permitted in step 10 above; `analyze-full` and the combined `analyze` are NOT. Reasoning: (a) `analyze-full` runs as a user-triggered batch — it does not run per-cycle; (b) the harness kills your background processes when your session ends, leaving sentinels orphaned. If your design changes a function signature / return type / exception contract, flag it in your final report (`CONTRACT-CHANGE: {sites}, suggest user run analyze-full sooner than usual`) and STOP. Do not poll, launch, or wrap `analyze-full` or `analyze`. Grep-based self-verification is not sufficient for contract changes — it finds only the sites you remember; the tool finds the sites you forgot. Canonical miss: T1 cleanup cycle 2026-04-28 M3 — implementer launched `make analyze` with `run_in_background: true` from inside its session; the process died at session end; sentinel survived; orchestrator had to clean up and re-launch with explicit `trap "rm -f $SENTINEL" EXIT` wrapper.
 12. Log pass/fail status.
 13. **Log ALL warnings and errors** encountered during verification — even pre-existing ones unrelated to your change. Every warning is a potential future fix. Never dismiss with "not my change." Log format:
     ```
@@ -75,8 +75,9 @@ For each design item you're given:
 make              # build
 make test         # run all tests (2300+)
 make sanitize     # ASan + UBSan
-make analyze-fast # cppcheck (~1-2 min, orchestrator runs per-cycle — DO NOT invoke)
-make analyze-full # clang-tidy (~1-2h, user-triggered batch — DO NOT invoke)
+make analyze-fast # cppcheck (~1-2 min) — RUN at VERIFY step 10 (foreground only)
+make analyze-full # clang-tidy (~10s post-2026-05-07 fix; user-triggered batch — DO NOT invoke)
+make analyze      # combined analyze-full + analyze-fast — DO NOT invoke (analyze-full embedded)
 ```
 
 ## What You Do NOT Do
