@@ -55,6 +55,18 @@ Validates: Cycle B M3 vec/mat 2026-05-10 — `parse_call_args` (`system.h:2163-2
 
 ---
 
+## Pre-flight structural-claim verification (design synthesis)
+
+Trigger: Final Design synthesis contains a "naturally skips / no parent-side change required / existing infrastructure handles transparently" structural claim that piggybacks on consumer behavior the design has NOT individually audited. Common shapes: "FUNC_CALL-in-lhs naturally skipped by `is_var()` checks", "additive overload preserves N call sites", "new sentinel propagates through existing flatten passes unchanged".
+
+Run an orchestrator-side `grep -nE` for every consumer of the channel the claim relies on, BEFORE spawning the implementer. For each hit: classify as (a) **natural skip** — existing predicate/type-check makes the consumer transparent to the new shape (e.g. `is_var()` returns false for FUNC_CALL), (b) **needs explicit branch** — consumer must be updated, (c) **ambiguous** — consumer may interact, defer to implementer's discovery. Append the hit-list to the implementer brief as a "Structural-claim verification" section: "Claim X audited at design synthesis — N hits, M natural skips, K need explicit branches: {list}. Cite these when extending."
+
+The critic-side rule "Cite a verified call site when proposing a structural change" (critic.md) is the agent-side analog; this orchestrator-side companion is the safety net when the critic's verdict is structurally right but stops at "verify the claim" rather than enumerating each consumer. Saves implementer ~15-25 LOC of defensive coding (each transparent consumer is one less guard the implementer feels obligated to add).
+
+Validates: Cycle 2026-05-10 Future #53 — orchestrator grep'd 5 consumers of `CondClause.lhs` before declaring FUNC_CALL-in-lhs encoding safe; 3 of 5 (`to_valueset` lines 1717+1722, `compute_rewrite_groups` system.h:752) naturally skipped via existing `is_var()` checks. The 2 hits needing explicit branches (`check_condition` dispatch, `condition_to_string` output) were the ONLY ones the implementer touched; production diff came in at 51 LOC against a 70-LOC budget. Without the pre-flight, the implementer would have either over-guarded (defensive checks at every consumer) or under-guarded (missed one). One critic adjacent positive instance — encoded because procedural (sequencing + grep checklist, not anecdotal) and the pattern is the design-synthesis analog of consumer-enumeration on contract-changing migrations.
+
+---
+
 ## Domain-sensitive test data
 
 Trigger: design specifies numeric test points (fingerprint probes, property-based sampling, numeric-solver seeds).

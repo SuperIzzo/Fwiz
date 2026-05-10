@@ -32,7 +32,7 @@ Append every significant action to `.fwiz-workflow/orchestrator-log.md` — the 
 
 Log every: agent spawn (prompt summary + context in/out), bash command (with why + fg/bg), phase transition (trigger), synthesis decision (what you kept/changed/discarded), user decision, duplicate-operation avoided. Be honest — log errors and misjudgments.
 
-**Auto-mode logging discipline.** Under auto-mode (continuous execution, fewer user round-trips), action density rises and the gap between actions shrinks; the temptation to skip the log entry "until the next pause" is strong. Resist it. The cycle's orchestrator-log is the meta-reviewer's PRIMARY evidence stream — silent post-IMPLEMENT phases mean the meta-review depends on assistant text in `next-priorities.md` instead of timestamped action records, and second-hand summaries can't be cross-verified. Concrete rule: every agent spawn AND every agent return gets a log entry, regardless of mode. If you find yourself entering Phase 4 (REVIEW) without a closing IMPLEMENT entry on disk, append one before spawning the review trio. Canonical miss: Symbolic Differentiation cycle 2026-04-27 — orchestrator-log stopped at the IMPLEMENT-spawn entry; the IMPLEMENT-complete, doc-updater + perf-auditor returns, analyze launch, reviewer return, and orchestrator self-fix were all undocumented in the log; meta-review reconstructed them from `next-priorities.md` summary instead of contemporaneous evidence.
+**Auto-mode logging discipline.** Under auto-mode (continuous execution, fewer user round-trips), action density rises and the gap between actions shrinks; the temptation to skip the log entry "until the next pause" is strong. Resist it. The cycle's orchestrator-log is the meta-reviewer's PRIMARY evidence stream — silent post-IMPLEMENT phases mean the meta-review depends on assistant text in `next-priorities.md` instead of timestamped action records, and second-hand summaries can't be cross-verified. Concrete rule: every agent spawn AND every agent return gets a log entry, regardless of mode. If you find yourself entering Phase 4 (REVIEW) without a closing IMPLEMENT entry on disk, append one before spawning the review trio. **The bundled-CYCLE-CLOSE pattern is the recurring failure mode**: when 3 review agents return roughly together, the temptation is to write ONE close entry summarizing all three; this loses per-agent return timestamps + per-agent fix attribution + the implementer return that preceded them. Each agent return is its own entry, even if all three happen within 60 seconds. Canonical misses: Symbolic Differentiation cycle 2026-04-27 (IMPLEMENT-complete + doc-updater/perf-auditor returns + analyze launch + reviewer return + orchestrator self-fix all undocumented; meta-review reconstructed from `next-priorities.md`); Cycle A evaluate_symbolic 2026-05-09 (same shape; phase-summary entries rolled up 4-5 events each); Future #53 cycle 2026-05-10 (40-minute gap between DESIGN-COMPLETE 22:35 and CYCLE-CLOSE 23:15 contained implementer spawn + return, 3 review-agent spawns + returns, 1 orchestrator self-fix — all absent; only the post-hoc CYCLE-CLOSE bundle survived). Three cycles, same shape — rule is right, discipline is the failure mode. **Concrete defensive procedure: before spawning each NEW phase (IMPLEMENT, REVIEW, PLAN-NEXT), grep `orchestrator-log.md` for an entry matching the prior phase's return ("IMPLEMENTER-RETURN", "REVIEW-RETURN") since the previous spawn-or-start timestamp. If absent, append it now from your tool-call history before proceeding.** This is a 10-second guard against the bundled-close pattern.
 
 ## Phase Flow
 
@@ -80,6 +80,8 @@ If the re-evaluation surfaces a non-trivial pivot (the named item should be defe
 ## Phase 2: DESIGN
 
 → For cascade forecast (type-qualifier migrations), autonomous DESIGN (skipping the 3-agent phase), and master-plan execution (skipping RESEARCH+DESIGN entirely), see `fwiz-orchestrator-protocols.md` §Design-time protocols.
+
+→ Pre-flight structural-claim verification — when Final Design relies on "naturally skips via existing X" piggyback claims, grep all consumers BEFORE implementer spawn. See `fwiz-orchestrator-preflight.md` §Pre-flight structural-claim verification (design synthesis).
 
 When user approves research, spawn three agents **sequentially** (each reads previous output):
 
@@ -130,6 +132,8 @@ When user approves design (or a milestone from master-plan.md), for each item sp
 - **Diagnostic rounds** (2× BLOCKED): spawn the **debugger** agent, then mini design revisit if findings invalidate an assumption.
 - **Phase overlap** — running next-cycle research while `make analyze-full` is in flight.
 - **Follow-up micro-cycles** — when a cycle ships with SHIP-DESIRABLE remaining.
+
+**Stale-diagnostic verification.** If a system-reminder, IDE language-server message, or other out-of-band diagnostic surface reports compile errors AFTER the implementer has declared GREEN with all gates passing (test + sanitize + analyze-fast), do NOT immediately escalate to fixes. The implementer's gates are the source of truth; IDE/clangd caches lag the on-disk build state. **First verify with a direct tool run** — `clang++ -fsyntax-only -std=c++17 -Isrc src/tests.cpp` (or the equivalent for the reported file). If the direct run is clean, the surface is cache-lag (file an orchestrator-log note and proceed). If the direct run reproduces, treat as a real regression (BLOCKED + diagnostic round). Without this guard, a stale surface triggers 2-5 tool calls of false-positive forensics. Canonical: Future #53 cycle 2026-05-10 — IDE surface reported compile errors post-GREEN; direct `clang -fsyntax-only` confirmed clean; ~3 tool calls wasted before the verification step was applied.
 
 ## Phase 4: REVIEW
 
@@ -215,7 +219,12 @@ git rev-parse HEAD > .fwiz-workflow/last-blind-spot-commit
 
 Then archive both sampling and responses artifacts to the cycle's archive folder so next cycle's SAMPLE starts fresh.
 
-Skip the prelude only if the diff has zero eligible functions (no `src/*.h`/`src/*.cpp` changes, or all changes are in trivial getters/setters). For full-codebase audits, see `/blind-spot-sweep` (user-triggered).
+**Skip protocol — three authorized triggers** (any one suffices, log rationale to `orchestrator-log.md`):
+1. **Zero eligible functions** — no `src/*.h`/`src/*.cpp` changes, or all changes are in trivial getters/setters.
+2. **Just-converged sweep + small diff** — most recent `/blind-spot-sweep` (or batch series) closed CLEAN with the critic explicitly recommending a scope shift (e.g. "function-scope exhausted, pivot needed") AND the current cycle's diff has ≤ ~5 eligible functions. Re-running yields marginal signal at meaningful context cost. The skip is per-cycle, not arc-level — next non-small cycle resumes the prelude.
+3. **Cycle just shipped the blind-spot infrastructure itself** — when the cycle's diff is internal to the blind-spot agents/commands (not the codebase under test), running the prelude on itself loops.
+
+For full-codebase audits, see `/blind-spot-sweep` (user-triggered). Log the skip decision with which trigger fired and a one-line risk-management note ("blind-spot can be re-run via `/blind-spot-sweep` next cycle if predicate machinery reshapes"). Canonical anchor for trigger 2: Future #53 cycle 2026-05-10 — 6 sequential batches just closed CLEAN over F16-F30, critic recommended scope shift, #53 diff had ~5 eligible functions; orchestrator skipped with rationale; meta-review confirmed the skip was sound but the protocol was underspecified.
 
 After PLAN-NEXT, spawn **meta-reviewer** to audit the workflow itself. **NOT optional, NOT user-triggered** — fires automatically at cycle end. Skipping accumulates workflow debt. If user declines ("not now"), log the decline. Execution: give meta-reviewer all `.fwiz-workflow/*.md` artifacts + all `.claude/agents/*.md` profiles; ask for cycle analysis (what worked, what didn't, why) and specific profile edits. Apply clear wins (prompt fixes, model changes) immediately; present debatable changes to the user.
 
