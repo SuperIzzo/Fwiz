@@ -924,3 +924,41 @@ Recommend Option A — naming carries the intent without comments.
 **Pattern coverage:** 4 call sites in `system.h`, all using the same idiom with the same `// Part C: insurance` annotation. No other functions in the codebase have a similar side-effect-only checkpoint pattern that surfaced in the blind-spot scan.
 
 **Reopen trigger:** post-rename, blind-spot re-runs `try_resolve_numeric` → mechanics scores match/specific on Gemma without confabulation. Alternatively: any future blind-spot cycle flags the same name pattern in another function.
+
+## #R10. Refactor: `parse_line` `is_iff` flag DSL-token semantic misread
+
+**From:** Cycle blind-spot 2026-05-10 F11-F15 batch (function-scope, F11). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Gemma described `is_iff` as "A flag indicating whether the line structure suggests an 'if-then-if' conditional relationship." The DSL token `iff` is "if-and-only-if" (bidirectional condition); Gemma pattern-matched the doubled `f` to "if-then-if" — a confabulation that's substantively wrong about the language semantics.
+
+**Diagnosis (T1-only):** domain-token-vs-C++-identifier collision. The DSL keyword `iff` is intrinsic and load-bearing (appears in `.fw` files everywhere; can't be renamed). But the C++ flag `is_iff` inherits the cryptic two-letter abbreviation, and a reader without DSL context misreads the semantic. The identifier carries no English-language signal of bidirectionality.
+
+**Proposed:**
+- **Rename** the C++ flag `is_iff` → `is_bidirectional` (or `iff_bidirectional`). The `.fw` keyword `iff` is preserved (DSL-level invariant); only the C++ identifier reflecting it changes. Touches `parse_line` (one local + one Equation field write) and the `Equation` struct's `bidirectional` field — which is already named correctly! So actually only `parse_line`'s local needs renaming.
+- Verify the `Equation` struct field is already `bidirectional` (it is — see line 483: `equations.push_back({lhs, p.parse_expr(), std::move(cond), is_iff})` writes `is_iff` into a struct slot whose member is `bidirectional`). The asymmetry (local `is_iff` → field `bidirectional`) is itself the smell — pick one name.
+
+Recommend renaming the local to `is_bidirectional` to match the destination field. Touches 4 lines in `parse_line` (declaration + 3 reads).
+
+**Pattern coverage:** 1 site in `system.h` (`parse_line`). The `Equation::bidirectional` field is already correctly named. The only opacity is the local-flag-name asymmetry. Below the cross-cycle rule-extraction threshold; tracked as a single-function rename.
+
+**Reopen trigger:** post-rename, blind-spot re-runs `parse_line` → Gemma mechanics scores match/specific on Gemma without "if-then-if" misreading. Alternatively: any future blind-spot cycle flags a similar DSL-token-vs-C++-identifier collision in another function.
+
+## #R11. Refactor: `simplify_div` `all_cancel` and `lc`/`rc` semantic-name confabulation
+
+**From:** Cycle blind-spot 2026-05-10 F11-F15 batch (function-scope, F15). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Two confabulations on Gemma:
+
+1. **`all_cancel`** described as "A flag indicating whether all terms in the additive expression `l` simplify to zero." The flag's actual role: tracks whether every additive term of `l` divides cleanly into `r` (i.e. the resulting per-term `simplify_div` did NOT return a residual `DIV` node). "Cancel" was misread as "evaluate-to-zero" rather than "factors-cancel-out."
+
+2. **`lc` / `rc`** described as "leading coefficient" of `l` / `r`. The actual role: multiplicative-coefficient accumulator from `flatten_multiplicative()` — not "leading" in any polynomial sense, but the running scalar product carried out of the factorization. "lc" pattern-matched to "leading coefficient" because it's a familiar mathematical term.
+
+A downstream agent reading Gemma's interpretation would conclude: "`all_cancel` is true when the sum collapses to zero" (wrong — would never branch on this code path correctly). And "`lc`/`rc` are the leading polynomial coefficients" (wrong — they're scalar carry-out from multiplicative flattening).
+
+**Diagnosis (T1-only):** semantic-name overload. `all_cancel` carries two readings ("everything cancels-to-zero" vs "every term divides cleanly out"); `lc` is too short to disambiguate "leading coefficient" from "left coefficient" (and even "left coefficient" wouldn't be quite right — it's a scalar accumulator, not a polynomial coefficient).
+
+**Proposed (rename-driven):**
+- **`all_cancel` → `all_terms_divide_cleanly`** (or `every_term_simplified`). The new name explicitly says "every term, when divided by `r`, produced a non-DIV result" — no ambiguity with the cancel-to-zero reading. Touches 4 lines (declaration + 1 mutation + 1 read in `if` + scope of usage).
+- **`lc` → `l_scalar` / `rc` → `r_scalar`** (or `l_coeff_acc` / `r_coeff_acc`). Avoids the "leading polynomial coefficient" pattern-match entirely. Touches 4 lines (2 declarations + 2 reads in `rebuild_multiplicative`).
+
+**Pattern coverage:** 1 site in `expr.h::simplify_div`. The `all_cancel` naming pattern doesn't appear elsewhere in the codebase. `lc`/`rc` two-letter accumulator names appear in similar shape (`mc` in `solve_for_all` is the same pattern — multiplicative-carry scalar — and Gemma described `mc` correctly there as "running numeric coefficient accumulation"). The difference: `mc` is named near a comment-stripped expansion in F14 where the mathematical context shapes the read; `lc`/`rc` are at file scope of `simplify_div` where the surrounding pattern is multiplicative-flattening which could plausibly be polynomial work.
+
+**Below the cross-cycle rule-extraction threshold** but worth tracking — alongside #R10 (`is_iff`), this is the second confabulation in this batch on identifier-semantics, and the third across 15 sampled (F8 `charge_budget`, F11 `is_iff`, F15 `all_cancel`/`lc`/`rc`). Pattern: cryptic abbreviations or short names that pattern-match to nearest-common-meaning trip Gemma's reading. Logged as soft pattern; rule extraction defers until a 4th instance appears in a future cycle.
+
+**Reopen trigger:** post-rename, blind-spot re-runs `simplify_div` → Gemma mechanics scores match/specific without `all_cancel` zero-misread or `lc`/`rc` polynomial-misread. Alternatively: any future blind-spot cycle flags `all_cancel` semantics in another function (or similar two-letter coefficient names).
