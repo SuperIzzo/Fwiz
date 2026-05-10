@@ -30,7 +30,23 @@ Given a research brief describing a problem and possible strategies, produce a c
      - **Tree rewrite passes**: `tree_map` / `tree_map_leaf` (expr.h) are post-order primitives with pointer-equality short-circuit. New tree-walking machinery is presumptively redundant unless the pattern can't be expressed as a `.fw` rewrite rule.
      - **Solver bindings carrier for symbolic forms**: `solved_symbolic_` (`map<string, ExprPtr>`, system.h:386) is already the parallel ExprPtr track. Propose new carriers only after confirming this one is insufficient.
    - Canonical miss: Cycle A evaluate_symbolic 2026-05-09 — planner proposed parallel `symbolic_constants()` registry for `i` recognition; critic showed `builtin_constants()` NaN-binding + existing literal-match guard delivered the same semantic with one entry. Anchor checklist would have caught it pre-critic.
-4. **Produce a plan** with concrete steps
+
+   - **Consumer enumeration for new sentinels / tokens / types.** When you introduce ANY of: a new sentinel value (NaN-Num, undefined-Var leaf, etc.), a new `TokenType` member, or a new `ExprType` member, enumerate every existing consumer of the upstream channel that may need updating. Concrete grep targets:
+     - **New sentinel value**: grep every reader of the channel — e.g. NaN-Num: `flatten_additive`, `flatten_multiplicative`, `simplify_once_impl`, `evaluate`, `evaluate_symbolic`, `is_zero`, `is_active_builtin`. List each: "needs update / no change required" with reason.
+     - **New `TokenType`**: `grep -nE 'TokenType::(LPAREN|RPAREN|LBRACKET|RBRACKET|LBRACE|RBRACE)' src/*.h | grep -v lexer.h` — every raw-token-walker is a candidate consumer. Apply the bracket-symmetry invariant: if a function tracks one bracket pair's depth, it must track all bracket pairs the lexer can emit.
+     - **New `ExprType` member**: every `switch (e->type)` site with `case COUNT_:` and no `default:` — these will fail to compile until updated. Locate them in advance and list the per-case expected behavior in the design.
+     Without this enumeration, downstream consumers silently retain the OLD contract and the bug surfaces at IMPLEMENT or REVIEW (Cycle A: NaN-Num silent absorption in `flatten_additive`, caught at IMPLEMENT Mid-GREEN; Cycle B: `parse_call_args` LBRACKET-blind depth scanner, caught at REVIEW). Two consecutive cycles surfaced the same gap shape — this enumeration is the targeted prevention.
+
+4. **Produce a plan** with concrete steps. Use **nested TODO lists** within each step to track sub-items discovered during design exploration — mirrors how working through a problem actually reveals sub-problems. Format:
+   ```
+   ### Step 3: Add LBRACKET/RBRACKET tokens
+   - [ ] lexer.h: add to TokenType enum
+   - [ ] lexer.h: extend single_char() table
+   - [ ] **Discovered during exploration:**
+     - [ ] parse_call_args depth scanner needs symmetric tracking (system.h:2163)
+     - [ ] tests.cpp:1472 expect_throw will need migration
+   ```
+   Items discovered during the design pass live alongside the original step, not in a separate backlog. The orchestrator's Phase 0 re-evaluation may pick up small TODO items from prior cycles' designs as squeeze-in candidates.
 
 ## Output Format
 
@@ -44,6 +60,7 @@ For each implementation step:
 - **Complexity**: trivial / moderate / hard
 - **LOC estimate**: include comment/docstring lines at Fwiz's density: **~1.5:1 comment:code for new primitives with rationale blocks** (fingerprint_expr, Checked<T>, new solver strategy), **~0.5:1 for delta edits** to existing functions, **~0.3:1 for mechanical refactors** (const-widening, rename). A "~50 LOC" estimate with no comment-density call will be read as "50 total lines" and will systematically under-report actual sheet length by 2-3×. Canonical miss: derive-dedup cycle estimated ~63 LOC, shipped ~169 substantive (2.7×) — mostly because the design didn't call out comment-density. When you write a multi-step LOC table at the end of the proposal, format each row as `~CODE / ~TESTS / ~DOCS / ~TOTAL` (four numbers), not a single `~TOTAL` cell — this surfaces tests-vs-production overruns separately at design time. The comment-density rule applies WITHIN `~CODE` (production code only). Tests scale with the criteria count (BLOCKING + DESIRABLE × ~10 LOC each + verbose rationale blocks for regression coverage); docs scale with novel infrastructure surface area. Canonical miss: Cycle A evaluate_symbolic 2026-05-09 estimated ~110 total for M1+M2; shipped 268 (production +13, tests +224, docs +31). The 4-cell format would have surfaced "this is a tests-heavy cycle" at design time. Recurring miss: Symbolic Differentiation cycle 2026-04-27 estimated ~280 total, shipped ~344 source (1.7×) on a row that was a "novel infrastructure" primitive (post-load resolution pass) where the 1.5:1 density was the documented norm but the table cell read `~40` as if it were code-only. **For deletion or relocation milestones, additionally provide a low/high band, not a point estimate**: design phase typically does not know exact guard-block / condition-block / relocation size. Format: `~CODE / ~TESTS / ~DOCS / ~TOTAL [LOW–HIGH]` with the band reflecting realistic best-case (deletion is dense, e.g. 8-line guard blocks) vs worst-case (deletion is sparse, e.g. 1-line cerr writes that are still structurally important but contribute fewer lines). Without the band, deletion estimates systematically over-promise — T1 cleanup cycle 2026-04-28 estimated −543 LOC, delivered −279 (2.0×); M1 alone estimated −400, delivered −185 because most FWIZ_TRACE_SOLVER guards were 1-line cerr writes, not 5-8 line blocks. Tag whether the dominant variance is comment-density (use density rule alone), tests-density (criteria count), or deletion-shape (use band).
 - **Details**: {what specifically changes — function signatures, logic, data structures}
+- **Discovered during exploration** (optional, nested TODO list): sub-items surfaced while exploring this step that don't merit their own Step but need to be tracked. Items either fold into this step's implementation or get extracted to a follow-up. The orchestrator's Phase 0 re-evaluation surface may pick these up at the start of subsequent cycles as squeeze-in candidates.
 ```
 
 ## What You Do NOT Do

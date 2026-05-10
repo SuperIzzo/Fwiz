@@ -36,7 +36,36 @@ Log every: agent spawn (prompt summary + context in/out), bash command (with why
 
 ## Phase Flow
 
-`USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → repeat`. User drives transitions; after each phase, present findings and wait for approval before advancing.
+`USER BRIEF → RE-EVALUATE → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → repeat`. User drives transitions; after each phase, present findings and wait for approval before advancing.
+
+## Phase 0: RE-EVALUATE (cycle entry)
+
+**The roadmap is vision, not a frozen detailed plan.** It exists to give long-horizon direction over multi-cycle arcs; it is not meant to dictate every step. Each cycle starts by re-evaluating against current state — what shipped, what surfaced, what new items emerged from prior reviews — and asking "is this still the right next move, or should we squeeze something in first?" This mimics how people actually tackle long problems: revisit the plan at each step, pick up small emergent items if they fit, defer rework if they don't.
+
+Run at the START of every cycle, BEFORE Phase 1. ~3-5 minutes; not a full design round.
+
+**Inputs**:
+- `.fwiz-workflow/next-priorities.md` — current top-of-list, carried-overs, design pivots, follow-ups.
+- `.fwiz-workflow/archive/<recent-cycles>/review-notes.md` — any reviewer-flagged but deferred items.
+- `docs/ROADMAP.md` (if active) — the long-horizon arc theme.
+- `docs/Future.md` — emergent in-scope items.
+- The user's instruction (current cycle brief).
+
+**Re-evaluation questions**:
+1. **Is the user's instruction still aligned with current state?** (E.g. "Run cycle for #16" — has #16 already shipped? Has it been split/merged? See `fwiz-orchestrator-preflight.md` §Instruction-vs-recent-commit collision check.)
+2. **What emergent items surfaced since the last cycle close?** Reviewer follow-ups, perf-auditor follow-ups, design-deferred OQs that re-surfaced. Each gets a "carry-forward / pick up now / log and skip" disposition.
+3. **Is there a small fix worth squeezing in before the named big item?** Useful when (a) the small fix unblocks the big item, (b) the small fix is the same touch site as the big item (bundling halves the review cost), (c) skipping leaves the small fix invisible to the next cycle. Squeeze candidates come from prior-cycle Top-3 #1 slot, Cycle B follow-ups, perf NITs at touched sites.
+4. **For master-plan execution paths**: has the frozen design's consumer enumeration gone stale? Run the planner anchor checklist's grep targets (see `planner.md` §How to Work step 3) against the current source. If a delta surfaces — new ExprType / TokenType / sentinel / consumer that the design did not list — DO NOT skip DESIGN; spawn a single critic on the delta only (mini-design, ~5 min). Validates: Cycle B M3 2026-05-10 — design from Cycle A's archive did not enumerate `parse_call_args` as a consumer of new LBRACKET; reviewer caught at REVIEW. Re-evaluation grep would have surfaced the consumer pre-IMPLEMENT.
+
+**Output**: a 3-5 line "re-evaluation note" appended to `orchestrator-log.md`:
+- Confirmed plan: {item}
+- Squeeze-ins (if any): {list with one-line rationale}
+- Mini-design needed (master-plan path only): yes/no + scope
+- Disposition for emergent items: {pick-up | carry-forward | log-and-skip}
+
+If the re-evaluation surfaces a non-trivial pivot (the named item should be deferred, a different priority should preempt, a substantial design gap exists), surface to the user before proceeding — auto-mode does NOT auto-pivot away from the user's stated instruction; it auto-confirms or auto-flags.
+
+**Skip Phase 0 only on**: explicit follow-up commits within the same cycle (a Cycle-A-continuation patch is part of the cycle that started, not a new one); orchestrator self-fix passes during REVIEW; any sub-spawn during the same cycle's IMPLEMENT phase.
 
 ## Phase 1: RESEARCH
 
