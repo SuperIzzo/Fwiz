@@ -1,7 +1,7 @@
 ---
 name: fwiz-orchestrator
 description: Orchestrates the multi-phase Fwiz development workflow (RESEARCH -> DESIGN -> IMPLEMENT -> REVIEW -> PLAN-NEXT)
-tools: Agent(researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer), Read, Glob, Grep, Bash, Write, Edit
+tools: Agent(researcher, planner, critic, visionary, implementer, debugger, reviewer, doc-updater, perf-auditor, meta-reviewer, blind-spot-critic, log-arc-reflector, plan-ideator, plan-critic), Read, Glob, Grep, Bash, Write, Edit
 model: opus
 permissionMode: acceptEdits
 memory: project

@@ -9257,6 +9257,69 @@ void test_complex_numbers() {
     }
 }
 
+// OQ5 hardening — pin the `collect_vars` + `is_active_builtin` interaction.
+//
+// Cycle A reviewer Issue 1: `collect_vars` does not skip builtin constants, so
+// `parse("x + i")` yields `{i, x}` and `i` shows up as a "free variable" in
+// downstream walkers. Today, the only downstream consumer that auto-binds free
+// variables is `solve_recursive`, and it consults `is_active_builtin` — which
+// (via Cycle A Fix-A) skips NaN-valued builtins. So the leak is currently
+// inert: combined-surface queries like `y = x + i; x=3; y=?` correctly throw
+// "Cannot solve" instead of silently producing a wrong real-valued result.
+// This test pins that interaction so a future call site walking
+// `collect_vars` results without consulting `is_active_builtin` cannot
+// silently regress. Scope: test-only — current behavior is correct, no
+// `collect_vars` change needed (per OQ5 micro-cycle decision).
+void test_oq5_collect_vars_with_i() {
+    SECTION("OQ5: collect_vars + is_active_builtin interaction (i as free var)");
+
+    // 1. Documents the current "accidental" behavior: `collect_vars` returns
+    //    `i` alongside real free variables. If a future refactor of
+    //    `collect_vars` decides to skip builtin constants, this assert will
+    //    flip and the consumer-side guards become the only line of defense —
+    //    flag the change explicitly.
+    {
+        ExprArena arena; ExprArena::Scope scope(arena);
+        std::set<std::string> vars;
+        collect_vars(*parse("x + i"), vars);
+        ASSERT(vars.count("i") == 1,
+            "collect_vars(x + i): 'i' present (current behavior — leak inert "
+            "via is_active_builtin)");
+        ASSERT(vars.count("x") == 1, "collect_vars(x + i): 'x' present");
+        ASSERT(vars.size() == 2, "collect_vars(x + i): exactly 2 vars");
+    }
+
+    // 2. Combined surface (the reviewer's reproducer): `y = x + i; x = 3; y=?`.
+    //    Must throw — `i` is not auto-bound by the resolver despite appearing
+    //    in `collect_vars` output, because `is_active_builtin` skips it.
+    //    Pre-Fix-A this silently resolved (wrong); post-Fix-A it throws.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = x + i\nx = 3\n");
+        bool threw = false;
+        try { (void)sys.resolve_all("y", {}); } catch (...) { threw = true; }
+        ASSERT(threw,
+            "y = x + i; x = 3; y=? must throw — `i` not auto-bound even when "
+            "x is bound (regression guard for collect_vars + is_active_builtin)");
+    }
+
+    // 3. Multi-equation with `i` linearly mixed: `y = a*i + b; a = 1; b = 0; y=?`.
+    //    All three of a, b, i appear in `collect_vars(parse("a*i + b"))`;
+    //    the resolver binds a and b but must reject because `i` is unbound.
+    //    Pins the multi-equation path through the same interaction.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = a*i + b\na = 1\nb = 0\n");
+        bool threw = false;
+        try { (void)sys.resolve_all("y", {}); } catch (...) { threw = true; }
+        ASSERT(threw,
+            "y = a*i + b; a=1; b=0; y=? must throw — `i` blocks resolution "
+            "even when other free vars resolve");
+    }
+}
+
 // ---- M2: struct dot-access via flat naming ----
 //
 // The lexer (lexer.h:82-89) already accepts IDENT.IDENT.IDENT as a single
@@ -13241,6 +13304,7 @@ int main() {
     test_cross_equation_validation();
     test_rewrite_rules();
     test_complex_numbers();
+    test_oq5_collect_vars_with_i();
     test_struct_dotnames();
     test_vec_mat_type();
     test_undefined();
