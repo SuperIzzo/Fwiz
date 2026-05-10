@@ -288,21 +288,26 @@ Dotted identifiers like `car.velocity.x` work end-to-end as flat variable names.
 
 **Real `ExprType::STRUCT` / `DOT_ACCESS` node (deferred):** required only for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution. Reopen trigger: a user demonstrates a concrete need that flat naming cannot express (e.g. iterating all fields of a struct, or enforcing that two variables share the same dotted prefix).
 
-## 16. Integrals and Differentials — PARTIAL (M1 shipped 2026-05-10, M2 shipped 2026-05-10)
+## 16. Integrals and Differentials — DONE (M1+M2+M3 shipped 2026-05-10)
 
 **Tier: In-scope.** Symbolic integration is a core math-inference capability; numeric quadrature fallback keeps it useful for non-elementary integrands.
 
 Symbolic integration (`integral(f, x)`) alongside differentiation (#6). Definite integrals with bounds. Standard integration rules (power, trig, substitution, parts). Falls back to numeric quadrature when symbolic fails.
 
-**Status (2026-05-10):** M1 shipped — indefinite Tier 1 (~25 atomic patterns: constants, `x^n`, `1/x`, `sin/cos/tan(x)`, `e^x`, sums, scalar mul/div). M2 shipped — derivative-divides u-substitution (`integral(2*x*cos(x^2), x) → sin(x^2)`, `integral(x*e^(x^2), x) → e^(x^2)/2`), definite-integral 4-arg form `integral(f, x, a, b)` with symbolic F(b)-F(a) primary path, adaptive Simpson numeric fallback (`integral(e^(-x^2), x, 0, 1) ≈ 0.7468`). Two surfaces: `integral(target, var)=?[alias]` CLI query (also `integral(target, var, lo, hi)=?[alias]` for definite) and inline builtin form. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL. NO `--integrate` flag. NO `+ C`. See `.fwiz-workflow/master-plan.md` for the 3-cycle arc roadmap.
+**Status (2026-05-10):** Three-cycle arc complete.
+- **M1**: indefinite Tier 1 (~25 atomic patterns: constants, `x^n`, `1/x`, `sin/cos/tan(x)`, `e^x`, sums, scalar mul/div).
+- **M2**: derivative-divides u-substitution (`integral(2*x*cos(x^2), x) → sin(x^2)`, `integral(x*e^(x^2), x) → e^(x^2)/2`), definite-integral 4-arg form `integral(f, x, a, b)` with symbolic F(b)-F(a) primary path, adaptive Simpson numeric fallback (`integral(e^(-x^2), x, 0, 1) ≈ 0.7468`).
+- **M3**: Integration by parts via LIATE heuristic (depth ≤ 3, no cyclic detection — `e^x*sin(x)` family stays unevaluated by design). Examples: `integral(x*e^x, x) → x*e^x - e^x`; `integral(x^2*log(x), x) → x^3*log(x)/3 - x^3/9`; `integral(atan(x), x) → x*atan(x) - log(x^2+1)/2`. `BuiltinMeta` registry extracted (Future #49) — diff and integrate share a single per-builtin metadata table.
 
-**Remaining (M3)**: integration by parts via LIATE heuristic (depth ≤ 3), `BuiltinMeta` registry extraction (Future #49) consolidating diff and integral builtin tables.
+Two surfaces: `integral(target, var)=?[alias]` CLI query (also `integral(target, var, lo, hi)=?[alias]` for definite) and inline builtin form. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL. NO `--integrate` flag. NO `+ C`.
 
-**Cross-arc reopen triggers (beyond M3):**
+**Cross-arc reopen triggers (post-arc):**
+- **Cyclic IBP (`e^x * sin(x)` family):** user reports family unevaluated in real reproducer AND cleanly-layered detection mechanism identified.
 - **Risch algorithm:** user reports integrand provably elementary-integrable but Tier 1-3 cannot solve, AND same form recurs in 2+ unrelated reproducers.
 - **Improper integrals (`integral(f, x, 0, inf)`):** user requests this form AND limit analysis is needed for another feature.
 - **Multi-variable integration:** vector calculus or surface integrals enter a planning cycle, OR #14 matrix arc extends to tensor calculus.
-- **Cyclic IBP (`e^x * sin(x)` family):** user reports family unevaluated in real reproducer AND cleanly-layered detection mechanism identified.
+- **Domain-aware antiderivative (`log(abs(x))`):** Future #31 (global-condition propagation) ships.
+- **`--integrate` CLI flag:** LLM benchmark or user reports trying `--integrate` and finding it absent.
 
 ## 17. Big Numbers / Arbitrary Precision
 
@@ -630,11 +635,9 @@ itself is the issue, not the ranking).
 
 `resolve_diff_in_equations` (system.h) was the first post-load tree-rewriter. Future #16 (M1) added integration as the second consumer; the shared skeleton was extracted as `resolve_at_load<Rewriter>(rewriter, up_to)` (template). Both `resolve_diff_in_equations` and `resolve_integral_in_equations` are 4-line wrappers around it. Subsequent post-load tree passes (e.g. typed-binding predicates per #53, units #7, LaTeX hints #9) plug in here.
 
-## 49. Per-builtin metadata registry
+## 49. Per-builtin metadata registry — DONE (2026-05-10, Future #16 M3)
 
-`symbolic_diff`'s FUNC_CALL case is an inline if-chain over 9 builtin names. When a second consumer of per-builtin metadata appears (e.g. an antiderivative table for future #16, or a LaTeX renderer for #9), refactor the chain into a shared registry (`map<string, BuiltinMeta>`) that stores derivative rule, antiderivative rule, and LaTeX form together.
-
-**Reopen trigger:** a second consumer of per-builtin metadata (antiderivative table, LaTeX rendering, dimensional annotation) enters a planning cycle.
+`BuiltinMeta` struct + `builtin_meta()` registry shipped in `expr.h` at M3 close. Schema: `{DiffFn diff, IntegrateFn integrate}` per builtin name. Nine current entries (sin/cos/tan/asin/acos/atan/log/sqrt/abs); `symbolic_diff`'s 9-branch FUNC_CALL if-chain and `symbolic_integrate`'s 3-branch FUNC_CALL if-chain both replaced by a single registry lookup. Free `*_diff` / `*_integrate` helper functions live above the registry. Future consumers (#7 units, #9 LaTeX, dimensional annotation) extend by adding fields to `BuiltinMeta`. **The registry is the 4th consumer of Future #53 (typed-binding predicates)** — migration to `.fw` rules waits on #53.
 
 ## 50. `diff(formula_call, var)` corner cases
 
@@ -660,7 +663,7 @@ Extend the rule-condition language with predicates `is_num(x)`, `is_neg_num(x)`,
 
 **Reopen trigger**: a third C++ simplifier block resists migration for the same reason (wildcard binds both numeric and symbolic, rational arithmetic is C++-only), OR Future #31 (`abs(x) = x iff x >= 0`) is reopened, OR T3.5/T3.6 are reopened.
 
-**Escalation (2026-05-10, Future #16 M1):** Tier 1 antiderivative table (`symbolic_integrate` in `expr.h`) is now the **3rd consumer** of the same wildcard-restriction need — `Var(var)^n` matching with `n` constant requires the same numeric-literal predicate. M1 ships with a C++ if-chain (matching diff's pattern), but the M3 `BuiltinMeta` registry refactor that pulls antiderivatives toward `.fw`-rule definability is gated on this. Recommend prioritising in PLAN-NEXT.
+**Escalation (2026-05-10, Future #16 M1):** Tier 1 antiderivative table (`symbolic_integrate` in `expr.h`) is the **3rd consumer** of the same wildcard-restriction need — `Var(var)^n` matching with `n` constant requires the same numeric-literal predicate. M1 ships with a C++ if-chain (matching diff's pattern); M3's `BuiltinMeta` registry (DONE 2026-05-10, Future #49) is the **4th consumer** carrying both diff and integrate metadata as C++ function pointers — the `.fw`-rule migration of these tables is gated on #53. Recommend prioritising in PLAN-NEXT.
 
 ## 54. T3.5 non-migration: constant reassociation in `simplify_div`
 
@@ -728,3 +731,57 @@ Cycle 7.5 drove the `misc-const-correctness` + `modernize-use-nodiscard` baselin
 M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)` surfaces only — there is no `--integrate` CLI flag analogous to `--derive`. Rationale: `--derive` exists because symbolic derivation is a global render mode applied to every query; integration is an explicit per-query operation that already has a natural in-file syntax. Adding a flag risks LLM/user confusion ("is `--integrate` a render mode or a target?").
 
 **Reopen trigger:** LLM benchmark run or user reports trying `--integrate` and finding it absent (signals the discoverability gap is real).
+
+## Refactors
+
+Readability-driven refactor candidates filed by the blind-spot critic. Each carries a **From** (source cycle + grader-tier failure), a **Proposed** (concrete change), and a **Reopen trigger**. The visionary audit tier-classifies these on the next cycle.
+
+## #R1. Refactor: `try_u_sub_integrate` cse_replace naming hijack
+
+**From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on `cse_replace(residual, {{u_name, g}})` — the helper's name signals "common-subexpression extraction" but the call site uses it as a generic structural-equality replace (g-subtree → Var(u_name)). T3 passes only because the comment explicitly says "cse_replace does exactly this with structural eq" — load-bearing comment papering over a naming mismatch.
+
+**Proposed:** Promote `cse_replace` to a more general name reflecting its actual contract — e.g. `tree_replace_subtree` or `replace_subtree_by_name` — keeping `cse_extract` (which IS CSE-specific) named as is. OR add a thin wrapper alias `replace_subtree(tree, name, target)` used at the u-sub call site. Either lift the load-bearing comment off the call site by making the name tell the truth.
+
+**Pattern coverage:** Single-site for now (`try_u_sub_integrate` is the only non-CSE consumer). Per agent profile (N≥3 for rule extraction), this stays as a per-function refactor item. If a third symbolic pass starts using `cse_replace` for non-CSE rewrites (likely in M3 IBP), promote to a rename rule.
+
+**Reopen trigger:** Any third call site using `cse_replace` for non-CSE structural rewriting; OR any future cycle's blind-spot critic re-flagging the cse_replace usage in `try_u_sub_integrate`.
+
+## #R2. Refactor: `resolve_integral_calls` 4-arg control-flow restructure
+
+**From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on the symbolic-vs-numeric dispatch in the 4-arg branch: the `if (val) { if (finite) return Num; /* fall through to numeric */ } else { return diff; }` shape has asymmetric early-return — the symbolic-bounds path returns directly, the NaN/inf path silently falls through. T3 only passes because the comment explicitly labels "fall through to numeric path" and "symbolic bounds — keep the closed form".
+
+**Proposed:** Extract the 4-arg branch into a helper `resolve_definite_integral(antideriv, target, var, lo_expr, hi_expr) → ExprPtr` that hides the dispatch behind explicit named returns:
+1. If `antideriv` and bounds collapse to a finite numeric → return `Num`.
+2. If `antideriv` and bounds stay symbolic (free vars) → return symbolic difference.
+3. Else if both bounds evaluate to finite → return adaptive_simpson result.
+4. Else → return `nullptr` (caller surfaces unevaluated).
+
+The fall-through-on-NaN/inf becomes an explicit early-fall-through `if (val && std::isfinite(val.value())) return Num;` followed by a shared numeric path. The asymmetry disappears because each terminal case is a named return; no comment-as-control-flow-marker needed.
+
+**Pattern coverage:** Single-site. The `resolve_diff_calls` neighbour was rewritten cleanly in Cycle I-M1 with no analogous fall-through asymmetry — this is a 4-arg-specific shape.
+
+**Reopen trigger:** When M3 adds IBP (which may add a third symbolic-fallback strategy) the dispatch grows; refactor before adding the fourth case.
+
+## #R3. Refactor: `vec_mat_det` `en` vs `e` comment-code mismatch
+
+**From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B at T3 scored wrong-on-detail: comment header reads textbook `a(ei - fh) - b(di - fg) + c(dh - eg)` using `e` for the (1,1) entry, but the code uses `en` (presumably renamed to avoid `e = Euler's number` collision). A reader trying to verify the cofactor expansion against the comment will find an apparent transcription bug. T3 fails *worse* than T1/T2 — the comment misleads.
+
+**Proposed:** Either rename `en` → `e_` (trailing-underscore disambiguation) and update the comment correspondingly, OR keep `en` and rewrite the comment to use `en`: `// 3x3 cofactor: a(en*k - f*h) - b(d*k - f*g) + c(d*h - en*g)`. The latter is mechanical; the former is more idiomatic. Either eliminates the comment-code drift.
+
+**Pattern coverage:** Single-site. Drift introduced because `e` is a reserved symbolic name (Euler's number) in this codebase, but no convention exists for "what to rename a `e`-collision local to". Watch for analogous collisions on `i` (imaginary unit, since 2026-05-09) and `pi`/`phi`.
+
+**Reopen trigger:** Any third site renaming `e`/`i`/`pi`/`phi` locally without comment updates; OR a future cycle's grader re-flagging `vec_mat_det`. If the pattern recurs, extract a rule: "when renaming a builtin-constant collision, the comment must use the renamed identifier."
+
+## #R4. Refactor: symbolic / numeric integration cross-references
+
+**From:** Cycle I-M2 blind-spot critic (file-scope, src/expr.h §Symbolic integration). file-explainer at T3 scored vague-but-correct on Components/Relationships/Pattern: the symbolic helpers (`try_cancel`, `try_u_sub_integrate`, `symbolic_integrate`, `symbolic_integrate_simplified`) cluster at lines 2616–2878 and the numeric counterpart (`adaptive_simpson`, `adaptive_simpson_recurse`, `INTEGRATION_TOLERANCE`, `ADAPTIVE_SIMPSON_MAX_DEPTH`) lives at lines 3329–3391, separated by ~430 LOC of unrelated solver / Newton / bisection code. A reader of the symbolic section does not realise the numeric block is the same Future #16 milestone's other half.
+
+**Proposed:** Add cross-reference comments on each end:
+- On the symbolic section header: `// Numeric counterpart: adaptive_simpson (line ~3329, after numeric solver helpers) — definite-integral fallback when symbolic_integrate returns nullptr.`
+- On the adaptive_simpson intro comment (already mentions "numeric fallback for definite `integral(f, x, a, b)`"): add `// Paired with symbolic_integrate (line ~2690 in §Symbolic integration above); dispatch is `resolve_integral_calls` in system.h.`
+
+No code moves. The structural gap closes by making the cross-file-region link explicit.
+
+**Pattern coverage:** This is one site of a broader pattern in expr.h (3500+ LOC, multiple feature-areas interleaved). The file-organisation rule extracted from this finding (Code-Style.md §File-organisation rules) generalises the principle.
+
+**Reopen trigger:** Any future cycle's file-scope critic re-flagging the symbolic-integration section; OR a third milestone shipping a non-contiguous surface in expr.h (`symbolic_diff` already has `diff()`-as-builtin in expr.h + post-load resolver in system.h, but those are cross-file by design — a same-file split is the trigger).

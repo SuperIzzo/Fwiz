@@ -2507,17 +2507,128 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 }
 
 // ============================================================================
+//  Per-builtin metadata registry (Future #49) — shared by symbolic_diff
+//  (chain rule) and symbolic_integrate (direct antiderivative table).
+// ============================================================================
+//
+// `BuiltinMeta` collapses the dual if-chain duplication that previously lived
+// inside `symbolic_diff`'s FUNC_CALL case (9 entries) and `symbolic_integrate`'s
+// FUNC_CALL case (3 entries) into a single shared lookup table.
+//
+// Callback shapes (intentionally narrow — easy for future consumers to extend):
+//   - `DiffFn(u) → f'(u)`: chain rule (`* du/dvar`) is applied at the call
+//     site. Examples: `sin_diff(u) → cos(u)`, `log_diff(u) → 1/u`.
+//   - `IntegrateFn(var) → ∫f(var) dvar`: caller verifies the FUNC_CALL's
+//     argument is exactly `Var(var)` before invoking. Generalized arguments
+//     (e.g. `sin(x^2)`) are u-substitution territory (`try_u_sub_integrate`)
+//     and the IBP layer below.
+//
+// Future consumers (Future #7 units, #9 LaTeX, #53 typed-binding rules) plug
+// in by adding fields to `BuiltinMeta`; the callbacks are currently free
+// functions, but their signatures are stable across the in-tree extension axis.
+//
+// **Why C++ today, not `.fw` rules**: typed-binding predicates (`is_num(...)`,
+// Future #53) are required to express the antiderivative table's pattern guards
+// — `Var(var)^n iff is_num(n)`. `BuiltinMeta` is the **4th consumer** of #53
+// (after T3.5, T3.6, integration Tier 1). Migration to `.fw` rules waits on #53.
+
+struct BuiltinMeta {
+    // Derivative form: returns derivative of f(u) w.r.t. u, where the chain
+    // rule (multiplying by du/dvar) is applied at the call site.
+    //
+    // Raw function-pointer fields (no `using` alias) match the codebase
+    // convention at expr.h:669+ for `builtin_functions()` `double(*)(double)`.
+    // `using DiffFn = ExprPtr(*)(...)` triggers cppcheck internalAstError
+    // (parser limitation on alias-of-function-pointer); inline declaration
+    // sidesteps it.
+    ExprPtr (*diff)(ExprPtr u);
+
+    // Antiderivative form: returns ∫f(var) dvar where the argument MUST be
+    // exactly Var(var). The caller verifies u == Var(var) before invoking;
+    // if u is a more general expression, u-substitution layer
+    // (`try_u_sub_integrate`) handles it. nullptr signals "no table entry —
+    // try IBP or fall through to unevaluated."
+    ExprPtr (*integrate)(const std::string& var);
+};
+
+// ---- Per-builtin diff helpers (chain rule applied at caller) ----
+inline ExprPtr sin_diff(ExprPtr u)  { return Expr::Call("cos", {u}); }
+inline ExprPtr cos_diff(ExprPtr u)  { return Expr::Neg(Expr::Call("sin", {u})); }
+inline ExprPtr tan_diff(ExprPtr u)  {
+    // 1 + tan(u)^2  (equivalent to sec(u)^2; avoids introducing a sec builtin)
+    return Expr::BinOpExpr(BinOp::ADD, Expr::Num(1),
+        Expr::BinOpExpr(BinOp::POW, Expr::Call("tan", {u}), Expr::Num(2)));
+}
+inline ExprPtr asin_diff(ExprPtr u) {
+    // 1 / sqrt(1 - u^2)
+    return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
+        Expr::Call("sqrt", {Expr::BinOpExpr(BinOp::SUB, Expr::Num(1),
+            Expr::BinOpExpr(BinOp::POW, u, Expr::Num(2)))}));
+}
+inline ExprPtr acos_diff(ExprPtr u) {
+    // -1 / sqrt(1 - u^2)
+    return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
+        Expr::Call("sqrt", {Expr::BinOpExpr(BinOp::SUB, Expr::Num(1),
+            Expr::BinOpExpr(BinOp::POW, u, Expr::Num(2)))})));
+}
+inline ExprPtr atan_diff(ExprPtr u) {
+    // 1 / (u^2 + 1)
+    return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
+        Expr::BinOpExpr(BinOp::ADD, Expr::Num(1),
+            Expr::BinOpExpr(BinOp::POW, u, Expr::Num(2))));
+}
+inline ExprPtr log_diff(ExprPtr u)  { return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), u); }
+inline ExprPtr sqrt_diff(ExprPtr u) {
+    // 1 / (2 * sqrt(u))
+    return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
+        Expr::BinOpExpr(BinOp::MUL, Expr::Num(2), Expr::Call("sqrt", {u})));
+}
+inline ExprPtr abs_diff(ExprPtr u)  {
+    // abs(u)/u — the simplifier rewrites this to sign(u) via BUILTIN_REWRITE_RULES.
+    return Expr::BinOpExpr(BinOp::DIV, Expr::Call("abs", {u}), u);
+}
+
+// ---- Per-builtin antiderivative helpers (caller checks arg == Var(var)) ----
+inline ExprPtr sin_integrate(const std::string& var) {
+    return Expr::Neg(Expr::Call("cos", {Expr::Var(var)}));
+}
+inline ExprPtr cos_integrate(const std::string& var) {
+    return Expr::Call("sin", {Expr::Var(var)});
+}
+inline ExprPtr tan_integrate(const std::string& var) {
+    // -log(cos(x))
+    return Expr::Neg(Expr::Call("log", {Expr::Call("cos", {Expr::Var(var)})}));
+}
+
+inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
+    static const std::map<std::string, BuiltinMeta> registry = {
+        {"sin",  {sin_diff,  sin_integrate}},
+        {"cos",  {cos_diff,  cos_integrate}},
+        {"tan",  {tan_diff,  tan_integrate}},
+        {"asin", {asin_diff, nullptr}},   // antiderivative needs IBP
+        {"acos", {acos_diff, nullptr}},   // antiderivative needs IBP
+        {"atan", {atan_diff, nullptr}},   // antiderivative needs IBP
+        {"log",  {log_diff,  nullptr}},   // antiderivative needs IBP (x*log(x) - x)
+        {"sqrt", {sqrt_diff, nullptr}},   // no closed form via Tier 1; not a Tier 2/3 target
+        {"abs",  {abs_diff,  nullptr}},   // deferred (x*abs(x)/2; sign-discontinuous)
+    };
+    return registry;
+}
+
+// ============================================================================
 //  Symbolic differentiation (Future #6)
 // ============================================================================
 //
 // `symbolic_diff(e, var)` produces d(e)/d(var) as a fresh ExprPtr in the
-// active arena. Per-AST-class switch + per-builtin if-chain for FUNC_CALL.
+// active arena. Per-AST-class switch + `BuiltinMeta` registry lookup for
+// FUNC_CALL (Future #49 — registry extracted M3, 2026-05-10).
 //
 // Design choices (see .fwiz-workflow/design-proposal.md "Final Design"):
 //   - Plain factories (no smart-builders): `simplify` already folds 0+x, 0*x,
 //     1*x, x/1, etc. — pre-folding here is dead weight on a non-hot path.
-//   - Inline if-chain over `static map<string, ExprPtr>` table — only one
-//     consumer, eliminates lazy-init / thread-safety / cross-arena issues.
+//   - Per-builtin metadata via `builtin_meta()` registry — second consumer
+//     (`symbolic_integrate`) shares the same table. Future #7 (units), #9
+//     (LaTeX) plug in by extending `BuiltinMeta`.
 //   - Returns `nullptr` for unrecognized forms (multi-arg builtins, unknown
 //     function names). Callers (`symbolic_diff_simplified`, the post-load
 //     resolution pass in system.h) treat null as a domain failure.
@@ -2582,25 +2693,11 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             auto u  = e.args[0];
             auto du = symbolic_diff(*u, var);
             if (!du) return nullptr;
-            ExprPtr fp = nullptr;
-            if      (e.name == "sin")  fp = E::Call("cos", {u});
-            else if (e.name == "cos")  fp = E::Neg(E::Call("sin", {u}));
-            else if (e.name == "tan")  fp = E::BinOpExpr(BinOp::ADD, E::Num(1),
-                                            E::BinOpExpr(BinOp::POW, E::Call("tan", {u}), E::Num(2)));
-            else if (e.name == "asin") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
-                                            E::Call("sqrt", {E::BinOpExpr(BinOp::SUB, E::Num(1),
-                                              E::BinOpExpr(BinOp::POW, u, E::Num(2)))}));
-            else if (e.name == "acos") fp = E::Neg(E::BinOpExpr(BinOp::DIV, E::Num(1),
-                                            E::Call("sqrt", {E::BinOpExpr(BinOp::SUB, E::Num(1),
-                                              E::BinOpExpr(BinOp::POW, u, E::Num(2)))})));
-            else if (e.name == "atan") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
-                                            E::BinOpExpr(BinOp::ADD, E::Num(1),
-                                              E::BinOpExpr(BinOp::POW, u, E::Num(2))));
-            else if (e.name == "log")  fp = E::BinOpExpr(BinOp::DIV, E::Num(1), u);
-            else if (e.name == "sqrt") fp = E::BinOpExpr(BinOp::DIV, E::Num(1),
-                                            E::BinOpExpr(BinOp::MUL, E::Num(2), E::Call("sqrt", {u})));
-            else if (e.name == "abs")  fp = E::BinOpExpr(BinOp::DIV, E::Call("abs", {u}), u);
-            else                       return nullptr; // unknown function
+            // Registry lookup (Future #49): per-builtin derivative table.
+            // The callback returns f'(u); chain rule (`* du`) is applied here.
+            auto it = builtin_meta().find(e.name);
+            if (it == builtin_meta().end() || it->second.diff == nullptr) return nullptr;
+            const ExprPtr fp = it->second.diff(u);
             return E::BinOpExpr(BinOp::MUL, fp, du);
         }
 
@@ -2646,8 +2743,21 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 //     `resolve_integral_calls` in system.h — symbolic F(b)-F(a) primary,
 //     `adaptive_simpson` fallback (defined below alongside `newton_solve`).
 //
-// Out of scope (deferred to M3):
-//   - Integration by parts (LIATE) — M3.
+// M3 additions (this cycle):
+//   - Integration by parts via LIATE heuristic (`try_ibp_integrate`). Depth
+//     limit ≤ 3 enforced via thread-local counter (no cyclic detection — the
+//     `e^x*sin(x)` family returns unevaluated by design, captured by the depth
+//     guard). LIATE priority: Logarithmic > Inverse-trig > Algebraic >
+//     Trigonometric > Exponential. When integrating MUL(u, dv), the operand
+//     with HIGHER LIATE rank becomes `u`; the other is `dv`. Single FUNC_CALL
+//     integrands at L/I rank (e.g. `atan(x)`, `log(x)`) without an
+//     antiderivative-table entry get treated as `f(x) * 1` for IBP.
+//   - `BuiltinMeta` registry extracted (Future #49) — diff and integrate share
+//     the same per-builtin metadata table. See `builtin_meta()` above.
+//
+// Out of scope:
+//   - Cyclic IBP detection (`e^x * sin(x)` family — depth limit catches it).
+//     Reopen trigger: see master-plan.md cross-arc reopen triggers.
 //   - `+ C` constant of integration — never (would not round-trip).
 //   - Domain-aware antiderivative (`log(abs(x))`) — gated on Future #31.
 
@@ -2685,8 +2795,53 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
     return factor_remains ? nullptr : quotient;
 }
 
-// Forward declaration: u-sub helper called from `symbolic_integrate`'s MUL case.
+// Forward declarations: helpers called from `symbolic_integrate`'s MUL /
+// FUNC_CALL cases. Defined below.
 [[nodiscard]] inline ExprPtr try_u_sub_integrate(const Expr& e, const std::string& var);
+[[nodiscard]] inline ExprPtr try_ibp_integrate(const Expr& e, const std::string& var);
+
+// LIATE priority — used by `try_ibp_integrate` to choose `u` vs `dv` when
+// applying integration by parts to a MUL integrand. Higher rank → preferred
+// `u` (we want u to differentiate to something simpler; we want dv to have a
+// known antiderivative).
+//   Logarithmic    : log(...)               → 5
+//   Inverse-trig   : asin / acos / atan     → 4
+//   Algebraic      : x, x^n, c*x, c (var-free or numeric)  → 3
+//   Trigonometric  : sin / cos / tan        → 2
+//   Exponential    : e^Var(var)             → 1
+//   Anything else                            → 0  (does not qualify for LIATE)
+//
+// Pure-numeric and var-free constants get rank 3 (algebraic) so that `dv = 1`
+// in `atan(x)*1`-style synthesised IBP entries is well-defined.
+[[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
+    if (e.type == ExprType::FUNC_CALL && e.args.size() == 1) {
+        if (e.name == "log") return 5;
+        if (e.name == "asin" || e.name == "acos" || e.name == "atan") return 4;
+        if (e.name == "sin"  || e.name == "cos"  || e.name == "tan")  return 2;
+    }
+    if (e.type == ExprType::BINOP && e.op == BinOp::POW) {
+        // e^Var(var) — exponential. Var("e") is the base.
+        if (is_var(e.left)  && e.left->name == "e"
+            && is_var(e.right) && e.right->name == var) return 1;
+        // Var(var)^n with n constant — algebraic.
+        if (is_var(e.left)  && e.left->name == var
+            && !contains_var(*e.right, var)) return 3;
+    }
+    // Algebraic atoms / linear forms: Var(var), Num, var-free expressions, NEG of same.
+    if (is_var(e) && e.name == var) return 3;
+    if (!contains_var(e, var)) return 3;
+    if (e.type == ExprType::UNARY_NEG && e.child)
+        return liate_priority(*e.child, var);
+    if (e.type == ExprType::BINOP && e.op == BinOp::MUL) {
+        // c*x (one side var-free) — algebraic.
+        const bool l_has = contains_var(*e.left, var);
+        const bool r_has = contains_var(*e.right, var);
+        if (!l_has && r_has) return liate_priority(*e.right, var);
+        if (l_has && !r_has) return liate_priority(*e.left,  var);
+    }
+    return 0;
+}
+
 [[nodiscard]] inline ExprPtr symbolic_integrate(const Expr& e, const std::string& var) {
     using E = Expr;
     switch (e.type) {
@@ -2731,9 +2886,9 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                         return il ? E::BinOpExpr(BinOp::MUL, il, r) : nullptr;
                     }
                     // Both contain var — try derivative-divides u-substitution
-                    // (M2). Returns nullptr if no candidate g(x) cancels cleanly,
-                    // leaving IBP cases (M3) for the post-load fallback.
-                    return try_u_sub_integrate(e, var);
+                    // (M2) first, then integration by parts via LIATE (M3).
+                    if (auto u_sub = try_u_sub_integrate(e, var)) return u_sub;
+                    return try_ibp_integrate(e, var);
                 }
                 case BinOp::DIV: {
                     const bool l_has = contains_var(*l, var);
@@ -2748,6 +2903,31 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                     if (!l_has && is_var(r) && r->name == var) {
                         if (is_one(*l)) return E::Call("log", {E::Var(var)});
                         return E::BinOpExpr(BinOp::MUL, l, E::Call("log", {E::Var(var)}));
+                    }
+                    // c / (k * Var(var)) — `c/k * log(Var(var))`. Reaches here from
+                    // the IBP recursive `∫V*du` case for `atan(x)` (`1/(2*u)`).
+                    if (!l_has && r->type == ExprType::BINOP && r->op == BinOp::MUL) {
+                        const bool ll = contains_var(*r->left,  var);
+                        const bool lr = contains_var(*r->right, var);
+                        if (!ll && is_var(r->right) && r->right->name == var) {
+                            // c / (k * x) = (c / k) * log(x)
+                            return E::BinOpExpr(BinOp::MUL,
+                                E::BinOpExpr(BinOp::DIV, l, r->left),
+                                E::Call("log", {E::Var(var)}));
+                        }
+                        if (!lr && is_var(r->left) && r->left->name == var) {
+                            // c / (x * k) = (c / k) * log(x)
+                            return E::BinOpExpr(BinOp::MUL,
+                                E::BinOpExpr(BinOp::DIV, l, r->right),
+                                E::Call("log", {E::Var(var)}));
+                        }
+                    }
+                    // Both numerator and denominator contain var — try u-sub
+                    // (M3 path; reaches `∫x/(x^2+1) dx = log(x^2+1)/2` for atan IBP).
+                    // r_has is true here (the !r_has branch returned above),
+                    // so the surviving condition is just l_has.
+                    if (l_has) {
+                        return try_u_sub_integrate(e, var);
                     }
                     return nullptr;
                 }
@@ -2778,14 +2958,24 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
         }
 
         case ExprType::FUNC_CALL: {
-            // Single-arg builtins only, and only when arg == Var(var) (no
-            // chain rule yet — that's M2 u-sub).
+            // Single-arg builtins only, and only when arg == Var(var). The
+            // chain-rule path (e.g. `sin(x^2)`) is u-substitution territory —
+            // handled at the MUL branch via `try_u_sub_integrate`.
             if (e.args.size() != 1) return nullptr;
             const Expr* u = e.args[0];
             if (!is_var(u) || u->name != var) return nullptr;
-            if (e.name == "sin")  return E::Neg(E::Call("cos", {E::Var(var)}));
-            if (e.name == "cos")  return E::Call("sin", {E::Var(var)});
-            if (e.name == "tan")  return E::Neg(E::Call("log", {E::Call("cos", {E::Var(var)})}));
+            // Registry lookup (Future #49): per-builtin antiderivative table.
+            auto it = builtin_meta().find(e.name);
+            if (it != builtin_meta().end() && it->second.integrate != nullptr)
+                return it->second.integrate(var);
+            // No table entry. If the function sits at L or I in LIATE (rank ≥ 4),
+            // synthesise `f(x) * 1` and let IBP handle it (`atan(x)`, `log(x)`,
+            // `asin(x)`, `acos(x)`). Trig builtins (rank 2) all have table
+            // entries; the synthesised path is unreachable for them.
+            if (liate_priority(e, var) >= 4) {
+                const auto* const product = E::BinOpExpr(BinOp::MUL, const_cast<Expr*>(&e), E::Num(1));
+                return try_ibp_integrate(*product, var);
+            }
             return nullptr;
         }
 
@@ -2875,6 +3065,115 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
         return simplify(result);
     }
     return nullptr;
+}
+
+// Integration by parts via LIATE (M3). Called from `symbolic_integrate`'s MUL
+// branch (after u-sub fails) and synthesised from a single FUNC_CALL at L/I
+// rank with no antiderivative-table entry (`atan(x)`, `log(x)`, etc.).
+//
+// Algorithm (∫u dv = u*V - ∫V*du):
+//   1. From the MUL operands, pick `u` = side with HIGHER LIATE rank (and
+//      rank > 0); the other becomes `dv`. If neither operand qualifies (both
+//      rank 0, or rank-tie), return nullptr.
+//   2. Compute `V = symbolic_integrate(dv, var)`. If null, return nullptr.
+//   3. Compute `du = symbolic_diff_simplified(u, var)`. If null, return nullptr.
+//   4. Recursively integrate `V * du`. If that returns null, return nullptr —
+//      no closed-form result. (Cyclic IBP cases like `e^x * sin(x)` blow the
+//      depth limit on the recursive call and bail out here.)
+//   5. Result: simplify(u*V - ∫V*du).
+//
+// Depth bound (≤ 3) is enforced via a thread-local counter — the recursion can
+// pass through `symbolic_integrate` and back, so an in-band parameter would
+// require widening every layer's signature. `IBP_MAX_DEPTH = 3` matches the
+// design's stated bound.
+constexpr int IBP_MAX_DEPTH = 3;
+static_assert(IBP_MAX_DEPTH >= 1 && IBP_MAX_DEPTH <= 10);
+inline thread_local int ibp_depth_ = 0;
+
+// Helper: build `a * b` while preserving a structural `DIV(num, denom)` factor.
+// When one side is a DIV, returns `DIV(MUL(num_of_div_side, other), denom)`;
+// when both are DIVs, combines numerators and denominators. This avoids the
+// simplifier prematurely flattening `(x^3/3) * (1/x)` into `0.333 * x^2` (the
+// rebuilder collapses the rational coefficient to a double); the `(x^3 * 1) /
+// (3 * x)` form simplifies cleanly to `x^2 / 3`. The numerator-of-DIV always
+// renders FIRST in the resulting MUL — this keeps the algebraic dv-derived
+// term ahead of the function `u` in IBP results (e.g., `x^3 * log(x) / 3`).
+[[nodiscard]] inline ExprPtr mul_through_div(const ExprPtr& a, const ExprPtr& b) {
+    const bool a_is_div = a && a->type == ExprType::BINOP && a->op == BinOp::DIV;
+    const bool b_is_div = b && b->type == ExprType::BINOP && b->op == BinOp::DIV;
+    if (a_is_div && b_is_div) {
+        return Expr::BinOpExpr(BinOp::DIV,
+            Expr::BinOpExpr(BinOp::MUL, a->left, b->left),
+            Expr::BinOpExpr(BinOp::MUL, a->right, b->right));
+    }
+    if (a_is_div) {
+        return Expr::BinOpExpr(BinOp::DIV,
+            Expr::BinOpExpr(BinOp::MUL, a->left, b), a->right);
+    }
+    if (b_is_div) {
+        return Expr::BinOpExpr(BinOp::DIV,
+            Expr::BinOpExpr(BinOp::MUL, a, b->left), b->right);
+    }
+    return Expr::BinOpExpr(BinOp::MUL, a, b);
+}
+
+[[nodiscard]] inline ExprPtr try_ibp_integrate(const Expr& e, const std::string& var) {
+    if (e.type != ExprType::BINOP || e.op != BinOp::MUL) return nullptr;
+    if (ibp_depth_ >= IBP_MAX_DEPTH) return nullptr;
+
+    // Pick u (higher LIATE rank), dv (the other operand). Bail if neither
+    // qualifies or ranks tie (no LIATE preference).
+    const ExprPtr lhs = e.left;
+    const ExprPtr rhs = e.right;
+    const int rl = liate_priority(*lhs, var);
+    const int rr = liate_priority(*rhs, var);
+    if (rl == 0 && rr == 0) return nullptr;
+    if (rl == rr) return nullptr;
+    const ExprPtr u  = (rl > rr) ? lhs : rhs;
+    const ExprPtr dv = (rl > rr) ? rhs : lhs;
+
+    // V = ∫dv dx
+    ExprPtr V = symbolic_integrate(*dv, var);
+    if (!V) return nullptr;
+    V = simplify(V);
+
+    // du = d(u)/dx
+    ExprPtr du = symbolic_diff_simplified(*u, var);
+    if (!du) return nullptr;
+
+    // ∫V*du dx — recursive. Increment depth around the call to bound recursion.
+    // Build V*du via `mul_through_div` to preserve structural fractions;
+    // canonical-render dv's numerator (algebraic, e.g. x^3) FIRST so the
+    // simplifier emits `x^3 * <other> / 3` rather than `<other> * x^3 / 3`.
+    const ExprPtr V_du = simplify(mul_through_div(V, du));
+    ExprPtr int_V_du = nullptr;
+    {
+        ++ibp_depth_;
+        int_V_du = symbolic_integrate(*V_du, var);
+        --ibp_depth_;
+    }
+    if (!int_V_du) return nullptr;
+
+    // u*V - ∫V*du
+    // Render order:
+    //   - V is a DIV (e.g. dv = x^2 → V = x^3/3): build `V_num * u / V_denom`
+    //     so the algebraic dv-derived term renders before the function `u`,
+    //     and the simplifier preserves the structural fraction (avoids
+    //     `0.333 * log(x) * x^3`).
+    //   - V is exactly `Var(var)` (e.g. dv = 1 → V = x), and u is a FUNC_CALL:
+    //     emit `V * u` (algebraic before function — `x * atan(x)`).
+    //   - Otherwise plain `MUL(u, V)` — for `x*e^x` (u=x, V=e^x) yields
+    //     `x * e^x` not `e^x * x`.
+    const bool V_is_div = V && V->type == ExprType::BINOP && V->op == BinOp::DIV;
+    const bool V_is_var = V && is_var(*V) && V->name == var;
+    const bool u_is_call = u && u->type == ExprType::FUNC_CALL;
+    ExprPtr u_V;
+    if (V_is_div)              u_V = mul_through_div(V, u);
+    else if (V_is_var && u_is_call)
+                               u_V = Expr::BinOpExpr(BinOp::MUL, V, u);
+    else                       u_V = Expr::BinOpExpr(BinOp::MUL, u, V);
+    ExprPtr result = Expr::BinOpExpr(BinOp::SUB, u_V, int_V_du);
+    return simplify(result);
 }
 
 // ============================================================================

@@ -38,7 +38,7 @@ Current capabilities:
 - ValueSet returns (ranges when exact values unavailable)
 - Symbolic derivation (`--derive`) with formula call unfolding
 - Symbolic differentiation (`diff(f, x)` builtin + `diff(...)=?` CLI query)
-- Symbolic integration — Tier 1 indefinite + M2 u-substitution + M2 definite (`integral(f, x)` and `integral(f, x, a, b)` builtins; `integral(...)=?` CLI query); adaptive Simpson numeric fallback — Future #16 M1+M2
+- Symbolic integration — Tier 1 indefinite + M2 u-substitution + M2 definite + M3 IBP/LIATE (`integral(f, x)` and `integral(f, x, a, b)` builtins; `integral(...)=?` CLI query); adaptive Simpson numeric fallback; `BuiltinMeta` registry — Future #16 M1+M2+M3
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
@@ -195,7 +195,7 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 **symbolic_diff(const Expr&, const std::string& var) → ExprPtr** — Free function in `expr.h`. Differentiates an expression tree with respect to `var`. Two-level dispatch:
 
 - Per-AST-class switch: `NUM` → 0; `VAR` → 1 if name matches, 0 otherwise (builtin constants are treated as 0); `UNARY_NEG` → chain rule negation; `BINOP` inner switch covers ADD/SUB (sum rule), MUL (product rule), DIV (quotient rule), POW (general `f^g` formula collapsing via `simplify` to the `x^n` / `c^x` / `f^g` sub-cases).
-- FUNC_CALL inline if-chain (9 builtins): sin → `cos(u) * u'`, cos → `-sin(u) * u'`, tan → `u' / cos(u)^2`, asin → `u' / sqrt(1-u^2)`, acos → `-u' / sqrt(1-u^2)`, atan → `u' / (u^2+1)`, log → `u' / u`, sqrt → `u' / (2 * sqrt(u))`, abs → `abs(u)/u * u'` (requiring `sign` builtin + two rewrite rules).
+- FUNC_CALL: registry lookup in `builtin_meta()` (Future #49, M3-extracted, see below). Per-builtin derivative `f'(u)` returned by the registry callback; chain rule (`* du/dvar`) applied at the call site. Nine builtins covered: sin → `cos(u) * u'`, cos → `-sin(u) * u'`, tan → `(1 + tan(u)^2) * u'`, asin → `u' / sqrt(1-u^2)`, acos → `-u' / sqrt(1-u^2)`, atan → `u' / (u^2+1)`, log → `u' / u`, sqrt → `u' / (2 * sqrt(u))`, abs → `abs(u)/u * u'` (requiring `sign` builtin + two rewrite rules).
 - Returns `nullptr` for unknown or multi-arg FUNC_CALL nodes — the post-load pass treats `nullptr` as a "leave-symbolic" signal.
 
 **symbolic_diff_simplified(const Expr&, const std::string& var) → ExprPtr** — Thin wrapper that calls `symbolic_diff` then `simplify()`. Use this at call sites that want a canonical result; use `symbolic_diff` directly when the caller will do its own simplification pass. Called once per query by `try_resolve_numeric` (`system.h`) before `find_numeric_roots`: if non-null, the result is wrapped in a `std::function` lambda and passed as the optional `fp` parameter to Newton's method, giving quadratic convergence (2 evaluations per iteration instead of 3). If `symbolic_diff_simplified` returns `nullptr` (unrecognized function), `fp` stays null and Newton falls back to central finite-differences transparently.
@@ -209,25 +209,38 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 
 Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per design. Running after rewrite rules load ensures `simplify()` inside `symbolic_diff_simplified` can apply all rules (including the three new `x^a/x^b`, `abs(x)/x`, and `sign` rules) to the differentiated result.
 
-**Symbolic integration (`integral(f, x)`) — Tier 1 indefinite + M2 u-sub & definite, Future #16 M1+M2 (2026-05-10)** (sibling of Symbolic differentiation above; same structural pattern throughout)
+**Symbolic integration (`integral(f, x)`) — Tier 1 indefinite + M2 u-sub & definite + M3 IBP/LIATE, Future #16 M1+M2+M3 (2026-05-10)** (sibling of Symbolic differentiation above; same structural pattern throughout)
 
-`symbolic_integrate(const Expr&, const std::string& var) → ExprPtr` — Free function in `expr.h`, sibling of `symbolic_diff`, mirroring its return-on-`nullptr`-on-miss contract. **`e^x` antiderivative convention:** result is `BinOpExpr(POW, Var("e"), Var(var))` — the same `e^x` FUNC_CALL sugar is not used; consumers that pattern-match on `e^x` must match this POW form. Per-AST-class switch + per-builtin if-chain. Tier 1 only — ~25 atomic patterns:
+`symbolic_integrate(const Expr&, const std::string& var) → ExprPtr` — Free function in `expr.h`, sibling of `symbolic_diff`, mirroring its return-on-`nullptr`-on-miss contract. **`e^x` antiderivative convention:** result is `BinOpExpr(POW, Var("e"), Var(var))` — the same `e^x` FUNC_CALL sugar is not used; consumers that pattern-match on `e^x` must match this POW form. Per-AST-class switch + `BuiltinMeta` registry lookup for FUNC_CALL (M3-extracted, Future #49). Tier 1 covers ~25 atomic patterns:
 
 - `NUM` (constant `c`) → `c*x`. `VAR` → `x^2/2` if name matches `var`, else `name*x`.
 - `BINOP::ADD/SUB` — linearity (`∫(l ± r) = ∫l ± ∫r`).
-- `BINOP::MUL` — `c*f` (one operand constant w.r.t. `var`); both-contain-var triggers **M2 derivative-divides u-substitution** (see below). Falls through to `nullptr` for IBP-class inputs (M3 territory).
-- `BINOP::DIV` — `f/c`, `c/x`, and `1/x → log(x)`.
+- `BINOP::MUL` — `c*f` (one operand constant w.r.t. `var`); both-contain-var triggers **M2 derivative-divides u-substitution** (see below) followed by **M3 IBP** if u-sub fails.
+- `BINOP::DIV` — `f/c`, `c/x`, `1/x → log(x)`. **M3 additions:** `c / (k * Var(var))` → `(c/k) * log(Var(var))`; both-contain-var dispatches to `try_u_sub_integrate` (handles `x/(x^2+1) → log(x^2+1)/2`, the recursive form needed for `atan(x)` IBP).
 - `BINOP::POW` — `Var(var)^n` (`n` numeric, `n ≠ -1`) → `x^(n+1)/(n+1)`; `Var(var)^(-1) → log(x)`; `e^Var(var) → e^Var(var)`.
 - `UNARY_NEG` — integrate child, negate.
-- `FUNC_CALL` (single-arg only, arg must equal `Var(var)` — no chain rule yet): `sin → -cos`, `cos → sin`, `tan → -log(cos(x))`.
+- `FUNC_CALL` (single-arg only, arg must equal `Var(var)` — chain rule via u-sub at MUL): registry lookup in `builtin_meta()`. Three table entries today (sin → -cos, cos → sin, tan → -log(cos(x))). When the registry has no entry AND the function sits at L or I in LIATE (rank ≥ 4 — `log`, `asin`, `acos`, `atan`), the FUNC_CALL is synthesised as `f(x) * 1` and dispatched to IBP — handles `∫atan(x) dx → x*atan(x) - log(x^2+1)/2`, `∫log(x) dx → x*log(x) - x`, etc.
 
 Anything outside this list returns `nullptr`. The wrapper `symbolic_integrate_simplified` calls `simplify()` after; null propagates.
 
 **Unevaluated-fallback contract:** when `symbolic_integrate` returns `nullptr`, the post-load pass `resolve_integral_in_equations` keeps the original `integral(target, var)` FUNC_CALL in place — same convention as diff. The result is observable to downstream stages (e.g., `--steps` traces, output round-trip) as a literal `integral(...)` form, signalling "no rule matched."
 
-**Out of scope at M2** (deferred to M3 / future cycles): integration by parts (M3), `BuiltinMeta` registry extraction (M3), `+ C` constant of integration (never — would not round-trip), domain-aware antiderivative `log(abs(x))` (gated on Future #31 condition propagation), Risch / cyclic IBP / improper / multi-variable / trig substitution / partial fractions / special functions (per cross-arc reopen triggers in `.fwiz-workflow/master-plan.md`).
+**Out of scope** (deferred or future cycles): cyclic IBP detection (`e^x*sin(x)` family — depth limit catches it; reopen trigger: user reports family unevaluated in real reproducer AND cleanly-layered detection mechanism identified), `+ C` constant of integration (never — would not round-trip), domain-aware antiderivative `log(abs(x))` (gated on Future #31 condition propagation), Risch / improper / multi-variable / trig substitution / partial fractions / special functions (per cross-arc reopen triggers in `.fwiz-workflow/master-plan.md`).
 
 **M2 — Derivative-divides u-substitution** (`try_u_sub_integrate` in expr.h, called from MUL when both factors mention `var`): enumerates candidate sub-expressions `g(x)` of the integrand to depth `U_SUB_DEPTH = 2`, sorted ascending by leaf count (simplest first — avoids `log(e)` artifacts when a chain-rule POW derivative would be picked). For each `g`, computes `g_prime = symbolic_diff_simplified(g, var)`; calls `try_cancel(integrand, g_prime)` to symbolically divide; substitutes `g → Var("_u_sub_")` in the residual via `cse_replace`; if no `var` remains, integrates w.r.t. `_u_sub_` and back-substitutes. Returns the simplified result on first match, `nullptr` if no candidate cancels cleanly. The root expression itself is excluded from candidates (cancelling against your own derivative is degenerate). `try_cancel(expr, factor)` is the matching primitive: returns `simplify(DIV(expr, factor))` if no subtree of the result equals `factor` structurally; else `nullptr` (heuristic — perfect cancellation is hard).
+
+**M3 — Integration by parts via LIATE** (`try_ibp_integrate` in expr.h, called from `symbolic_integrate`'s MUL branch after u-sub returns null, AND from FUNC_CALL when no antiderivative-table entry exists for an L/I-rank function). LIATE priority (the `liate_priority(expr, var)` helper): Logarithmic (`log`) → 5; Inverse-trig (`asin`/`acos`/`atan`) → 4; Algebraic (`Var(var)`, `Var(var)^n`, `c*Var(var)`, var-free) → 3; Trigonometric (`sin`/`cos`/`tan`) → 2; Exponential (`e^Var(var)` POW form) → 1; anything else → 0. For a MUL integrand, the operand at HIGHER LIATE rank becomes `u`, the other becomes `dv`; at rank-tie or both-zero, IBP declines (no preference). Algorithm: `V = symbolic_integrate(dv, var)`; `du = symbolic_diff_simplified(u, var)`; recursively `int_V_du = symbolic_integrate(V * du, var)`; result = `simplify(u*V - int_V_du)`. **Depth limit ≤ 3** enforced via thread-local `ibp_depth_` counter — bounds recursion without explicit cyclic detection (the `e^x*sin(x)` family blows the depth limit on the recursive call and bails out, returning `nullptr`; the unevaluated `integral(...)` FUNC_CALL is preserved by the post-load pass). Render-order tuning: when `V` is a structural fraction (DIV node), the result builds `V_num * u / V_denom` to preserve the rational form (avoids the simplifier flattening `(x^3/3) * log(x)` to `0.333 * log(x) * x^3`); when `V == Var(var)` and `u` is a FUNC_CALL, swap to `V * u` (algebraic-before-function — `x * atan(x)` not `atan(x) * x`); else plain `MUL(u, V)`. The `mul_through_div(a, b)` helper centralises the structural-fraction-preserving multiply.
+
+**M3 — `BuiltinMeta` registry** (`builtin_meta()` in expr.h, Future #49 — DONE 2026-05-10). Per-builtin metadata table consolidating `symbolic_diff` and `symbolic_integrate`'s formerly-duplicated FUNC_CALL if-chains. Schema:
+```cpp
+struct BuiltinMeta {
+    using DiffFn = ExprPtr (*)(ExprPtr u);              // returns f'(u); chain rule applied at caller
+    using IntegrateFn = ExprPtr (*)(const std::string& var);  // returns ∫f(var) dvar; arg must equal Var(var)
+    DiffFn diff;
+    IntegrateFn integrate;  // nullptr signals "no table entry — try IBP or fall through"
+};
+```
+Nine current entries (sin/cos/tan/asin/acos/atan/log/sqrt/abs); three carry antiderivative entries (sin/cos/tan), the rest leave `integrate == nullptr` so the IBP layer or unevaluated-fallback handles them. Free `*_diff` and `*_integrate` helper functions live immediately above the registry; the registry returns a `const map<string, BuiltinMeta>&` to a function-local static. Future consumers (Future #7 units, #9 LaTeX) plug in by extending `BuiltinMeta` with new fields. **Why C++ today, not `.fw` rules**: typed-binding predicates (Future #53) are required to express the antiderivative table's pattern guards (`Var(var)^n iff is_num(n)`). `BuiltinMeta` is the **4th consumer** of #53 (after T3.5 `simplify_div`, T3.6 `x^(-n)`, integration Tier 1). Migration to `.fw` rules waits on #53 shipping.
 
 **M2 — Definite integrals (4-arg form)**. CLI parsing in `parse_cli_query` (system.h) accepts both `integral(f, x)` and `integral(f, x, a, b)` — the inner-comma split tracks paren AND bracket depth (mirror of `parse_call_args` post-Cycle-B), takes either 2 or 4 pieces, anything else is a parse error. `CLIIntegralQuery` carries optional `lo_text` / `hi_text`. `resolve_integral_calls` (system.h) dispatches the 4-arg form: try the symbolic path (compute antiderivative `F`, return `simplify(F(b) - F(a))`); if `evaluate` collapses the difference to a finite number, return `Num(value)`; if it stays symbolic (free vars in bounds), return the symbolic difference. Numeric fallback: `adaptive_simpson` (expr.h, sibling of `newton_solve`) — recursive Simpson's rule with bisection error estimate `|S(a,b) - S(a,m) - S(m,b)| / 15`, tolerance defaults to `NUMERIC_TOLERANCE`, depth bounded by `ADAPTIVE_SIMPSON_MAX_DEPTH = 30`. NaN at any sample short-circuits to NaN → caller preserves the unevaluated FUNC_CALL.
 
@@ -235,7 +248,7 @@ Anything outside this list returns `nullptr`. The wrapper `symbolic_integrate_si
 
 **CLI surface:** `integral(target, var)=?[alias]` via parse_cli_query → `<cli-integral>` injection in `main.cpp` Pass 1.6, parallel to diff's Pass 1.5. **No `--integrate` flag** — the in-file form is the single surface (see Future #64 for the deferred-flag rationale).
 
-**Dependency on Future #53:** `Var(var)^n` with `n` constant is the pattern that motivates `is_num(...)` typed-binding predicates. Tier 1 antiderivative table is the **3rd consumer** of that need (alongside T3.5 and T3.6 simplifier blocks); the M3 `BuiltinMeta` registry refactor that pulls antiderivatives toward `.fw`-rule definability is gated on it.
+**Dependency on Future #53:** `Var(var)^n` with `n` constant is the pattern that motivates `is_num(...)` typed-binding predicates. Tier 1 antiderivative table was the 3rd consumer; the M3 `BuiltinMeta` registry (shipped 2026-05-10) is the **4th consumer** — pulling the diff/integrate metadata toward `.fw`-rule definability is gated on #53. Until #53 ships, `BuiltinMeta` carries C++ function pointers; migration to `.fw` rules is a future cycle.
 
 ### system.h
 

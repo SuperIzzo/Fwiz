@@ -12630,10 +12630,14 @@ void test_symbolic_integrate_unevaluated_fallback() {
         ASSERT(d == nullptr, "integral(x^x, x) returns nullptr (unrecognized POW form)");
     }
     {
-        // Product of two non-constants (no u-sub yet)
-        const auto* e = parse("x * sin(x)");
+        // Product where neither u-sub nor IBP yields a Tier 1 result.
+        // `sin(x) * log(x)`: LIATE picks u=log(x) (L) > dv=sin(x) (T). V=-cos(x),
+        // du=1/x. ∫(-cos(x)/x) dx is non-elementary → IBP recursive call fails.
+        // u-sub also fails (no g(x) cancels cleanly). Stays null.
+        const auto* e = parse("sin(x) * log(x)");
         const auto* d = symbolic_integrate(*e, "x");
-        ASSERT(d == nullptr, "integral(x*sin(x), x) returns nullptr (no IBP yet)");
+        ASSERT(d == nullptr,
+            "integral(sin(x)*log(x), x) returns nullptr (IBP recurses to non-elementary form)");
     }
 }
 
@@ -12726,14 +12730,12 @@ void test_symbolic_integrate_u_sub() {
     ASSERT_EQ(integral_str("x*e^(x^2)", "x"), "e^x^2 / 2",
         "M2 BLOCKING #2: integral(x*e^(x^2), x) = e^x^2 / 2 via u=x^2");
 
-    // Negative case: x*sin(x) — no g'(x) candidate cancels (g=x → g'=1 leaves
-    // residual x*sin(x); g=sin(x) → g'=cos(x), residual x*sin(x)/cos(x) still
-    // contains var. Stays unevaluated, awaits IBP.
-    {
-        const auto* e = parse("x * sin(x)");
-        const auto* d = symbolic_integrate(*e, "x");
-        ASSERT(d == nullptr, "M2 negative: integral(x*sin(x), x) still nullptr — awaits IBP");
-    }
+    // M3 cascade: `x*sin(x)` is no longer a u-sub-only negative. IBP picks
+    // u=x (A=3) > dv=sin(x) (T=2); V=-cos(x), du=1; result -(x*cos(x)) + sin(x).
+    // u-sub still bails (no g cancels cleanly), so this exercises the
+    // u-sub-fails → IBP-succeeds fallthrough in `symbolic_integrate`'s MUL branch.
+    ASSERT_EQ(integral_str("x*sin(x)", "x"), "-(x * cos(x)) + sin(x)",
+        "M3 cascade: integral(x*sin(x), x) = -x*cos(x) + sin(x) via IBP fallthrough");
 }
 
 // Helper: try to resolve a definite integral expression and return the result
@@ -12770,6 +12772,121 @@ void test_symbolic_integrate_definite_symbolic() {
         ASSERT(std::abs(v - 2.0) < 1e-9,
             "M2 BLOCKING #4: integral(sin(x),x,0,pi) = 2");
     }
+}
+
+void test_symbolic_integrate_ibp() {
+    SECTION("symbolic_integrate: integration by parts via LIATE (M3 BLOCKING #1-#3, DESIRABLE #7)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // M3 BLOCKING #1: integral(x*e^x, x) = x*e^x - e^x
+    // LIATE: u=x (Algebraic, rank 3) > dv=e^x (Exponential, rank 1).
+    // V = ∫e^x dx = e^x; du = 1; result = x*e^x - ∫(e^x*1)dx = x*e^x - e^x.
+    ASSERT_EQ(integral_str("x*e^x", "x"), "x * e^x - e^x",
+        "M3 BLOCKING #1: integral(x*e^x, x) = x*e^x - e^x via IBP (u=x, dv=e^x)");
+
+    // M3 BLOCKING #2: integral(x^2*log(x), x) = x^3*log(x)/3 - x^3/9
+    // LIATE: u=log(x) (Logarithmic, rank 5) > dv=x^2 (Algebraic, rank 3).
+    // V = ∫x^2 dx = x^3/3; du = 1/x; result = log(x)*x^3/3 - ∫(x^3/3 * 1/x)dx
+    //     = x^3*log(x)/3 - ∫(x^2/3)dx = x^3*log(x)/3 - x^3/9.
+    ASSERT_EQ(integral_str("x^2*log(x)", "x"), "x^3 * log(x) / 3 - x^3 / 9",
+        "M3 BLOCKING #2: integral(x^2*log(x), x) = x^3*log(x)/3 - x^3/9 via IBP");
+
+    // M3 BLOCKING #3: integral(atan(x), x) = x*atan(x) - log(x^2 + 1)/2
+    // atan(x) treated as atan(x)*1: u=atan(x) (Inverse-trig, rank 4) > dv=1 (constant, rank 0).
+    // Wait — design says "treating arctan(x) as arctan(x)*1 then u=arctan(x) (I) > dv=1 (constant)".
+    // Approach: when integrand is a single FUNC_CALL covered by LIATE (log, asin, acos, atan)
+    // and not in builtin_meta antiderivative table, treat it as `f(x) * 1` for IBP.
+    // V = ∫1 dx = x; du = 1/(x^2+1); result = x*atan(x) - ∫(x/(x^2+1))dx = x*atan(x) - log(x^2+1)/2.
+    ASSERT_EQ(integral_str("atan(x)", "x"), "x * atan(x) - log(x^2 + 1) / 2",
+        "M3 BLOCKING #3: integral(atan(x), x) = x*atan(x) - log(x^2+1)/2 via IBP");
+
+    // M3 DESIRABLE #7: integral(e^x*sin(x), x) returns nullptr (cyclic — out of scope).
+    // Depth limit ≤ 3 catches this without explicit cyclic detection.
+    {
+        const auto* e = parse("e^x * sin(x)");
+        const auto* r = symbolic_integrate(*e, "x");
+        ASSERT(r == nullptr,
+            "M3 DESIRABLE #7: integral(e^x*sin(x), x) unevaluated — cyclic IBP out of scope");
+    }
+}
+
+void test_builtin_meta_registry() {
+    SECTION("BuiltinMeta registry: per-builtin diff/integrate metadata (M3 BLOCKING #4)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // M3 BLOCKING #4a: registry contains all 9 symbolic_diff builtins.
+    const auto& registry = builtin_meta();
+    const std::vector<std::string> diff_builtins = {
+        "sin", "cos", "tan", "asin", "acos", "atan", "log", "sqrt", "abs"
+    };
+    for (const auto& name : diff_builtins) {
+        ASSERT(registry.count(name) == 1,
+            std::string("BuiltinMeta registry contains '") + name + "'");
+        ASSERT(registry.at(name).diff != nullptr,
+            std::string("BuiltinMeta['") + name + "'].diff is non-null");
+    }
+
+    // M3 BLOCKING #4b: direct invocation of registry callbacks produces correct trees.
+    // sin_diff(x) → cos(x)
+    {
+        ExprPtr u = Expr::Var("x");
+        ExprPtr d = registry.at("sin").diff(u);
+        const ExprPtr simplified = simplify(d);
+        ASSERT_EQ(expr_to_string(simplified), "cos(x)",
+            "BuiltinMeta['sin'].diff(x) = cos(x)");
+    }
+    // sin_integrate("x") → -cos(x)
+    {
+        ASSERT(registry.at("sin").integrate != nullptr,
+            "BuiltinMeta['sin'].integrate is non-null");
+        ExprPtr a = registry.at("sin").integrate("x");
+        const ExprPtr simplified = simplify(a);
+        ASSERT_EQ(expr_to_string(simplified), "-(cos(x))",
+            "BuiltinMeta['sin'].integrate('x') = -cos(x)");
+    }
+    // log_diff(x) → 1/x
+    {
+        ExprPtr u = Expr::Var("x");
+        ExprPtr d = registry.at("log").diff(u);
+        const ExprPtr simplified = simplify(d);
+        ASSERT_EQ(expr_to_string(simplified), "1 / x",
+            "BuiltinMeta['log'].diff(x) = 1/x");
+    }
+
+    // M3 BLOCKING #4c: integrate-table entries for asin/acos/sqrt/abs are nullptr
+    // (no elementary antiderivative table entry; IBP layer or unevaluated fallback handles them).
+    ASSERT(registry.at("asin").integrate == nullptr,
+        "BuiltinMeta['asin'].integrate is nullptr (no table entry; IBP path)");
+    ASSERT(registry.at("acos").integrate == nullptr,
+        "BuiltinMeta['acos'].integrate is nullptr (no table entry; IBP path)");
+    ASSERT(registry.at("sqrt").integrate == nullptr,
+        "BuiltinMeta['sqrt'].integrate is nullptr (no closed form for ∫sqrt(x))");
+    ASSERT(registry.at("abs").integrate == nullptr,
+        "BuiltinMeta['abs'].integrate is nullptr (deferred)");
+
+    // M3 BLOCKING #4d: regression — symbolic_diff still produces correct results
+    // through the registry-backed FUNC_CALL path.
+    ASSERT_EQ(diff_str("sin(x)", "x"), "cos(x)",
+        "Regression: symbolic_diff(sin(x), x) = cos(x) via BuiltinMeta lookup");
+    ASSERT_EQ(diff_str("log(x)", "x"), "1 / x",
+        "Regression: symbolic_diff(log(x), x) = 1/x via BuiltinMeta lookup");
+
+    // M3 BLOCKING #4e: regression — symbolic_integrate still produces correct
+    // results through the registry-backed FUNC_CALL path.
+    ASSERT_EQ(integral_str("sin(x)", "x"), "-(cos(x))",
+        "Regression: symbolic_integrate(sin(x), x) = -cos(x) via BuiltinMeta lookup");
+    ASSERT_EQ(integral_str("cos(x)", "x"), "sin(x)",
+        "Regression: symbolic_integrate(cos(x), x) = sin(x) via BuiltinMeta lookup");
 }
 
 void test_symbolic_integrate_definite_numeric() {
@@ -13637,6 +13754,9 @@ int main() {
     // Symbolic integration M2 (2026-05-10 cycle): u-sub + definite + Simpson
     test_symbolic_integrate_u_sub();
     test_symbolic_integrate_definite_symbolic();
+    // Symbolic integration M3 (2026-05-10 cycle): IBP/LIATE + BuiltinMeta registry
+    test_symbolic_integrate_ibp();
+    test_builtin_meta_registry();
     test_symbolic_integrate_definite_numeric();
 
     // T2+T3 cleanup cycle (M1: correctness, 4 silent bugs)
