@@ -908,3 +908,19 @@ No code moves; just structural delimiters. Box-drawing-character style (`──�
 
 **Reopen trigger:** any future cycle's file-scope critic re-flagging src/system.h Components or Relationships score; OR a third internal-section refactor at scale (e.g. if FormulaSystem grows past 4000 LOC and a sub-area emerges as a split candidate).
 
+
+## #R9. Refactor: `try_resolve_numeric` `charge_budget()` call-site clarity
+
+**From:** Cycle blind-spot 2026-05-10 F6-F10 batch (function-scope, F8). Initial T1 mechanics score: H=match/specific, **G=wrong-on-detail/specific**. Gemma confabulated `charge_budget()` as a "Local variable" with role "Executes budget management logic" — pattern-matched past missing names per the verdict matrix's "wrong-on-detail/specific" diagnosis. The function calls `charge_budget()` at its head as a side-effect-only checkpoint; on comment-stripped read, no name signals "this is a budget guard, not a local with side effects."
+
+**Diagnosis (T1-only):** comment-borne opacity. The `// Part C: insurance — per-candidate-evaluation` comment is what makes the call-site readable. Without it (T1), a reader misclassifies the call as a value-producing local.
+
+**Proposed (soft, two options):**
+- **Option A — rename** `charge_budget()` → `enforce_solve_budget()` or `assert_solve_budget_remaining()`. Reads as a guard at every call site without a comment crutch. Touches 4 sites in `system.h` (lines 2155, 3293, 3555, 3643) plus the function definition.
+- **Option B — comment-at-call-site** every call site with `// guard:` or similar, leaving the function name unchanged.
+
+Recommend Option A — naming carries the intent without comments.
+
+**Pattern coverage:** 4 call sites in `system.h`, all using the same idiom with the same `// Part C: insurance` annotation. No other functions in the codebase have a similar side-effect-only checkpoint pattern that surfaced in the blind-spot scan.
+
+**Reopen trigger:** post-rename, blind-spot re-runs `try_resolve_numeric` → mechanics scores match/specific on Gemma without confabulation. Alternatively: any future blind-spot cycle flags the same name pattern in another function.
