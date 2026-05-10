@@ -12525,6 +12525,183 @@ void test_symbolic_diff_provenance() {
         "PROV-DIFF: solved_symbolic_['sensitivity'] populated after resolve_all");
 }
 
+// ---- Symbolic integration (Future #16, M1) ----
+
+// Helper: parse, integrate w.r.t. var, simplify, stringify.
+static std::string integral_str(const std::string& src, const std::string& var) {
+    const auto* e = parse(src);
+    const auto* d = symbolic_integrate_simplified(*e, var);
+    return d ? expr_to_string(d) : "<null>";
+}
+
+void test_symbolic_integrate_per_class() {
+    SECTION("symbolic_integrate: per-AST-class antiderivatives");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // BLOCKING #2: power rule on Var^n
+    ASSERT_EQ(integral_str("x^2", "x"), "x^3 / 3", "integral(x^2, x) = x^3/3");
+    // BLOCKING #3: linearity on c*x
+    ASSERT_EQ(integral_str("2*x", "x"), "x^2", "integral(2*x, x) = x^2 (2 * x^2/2 = x^2)");
+
+    // Constants and independent variables
+    ASSERT_EQ(integral_str("5", "x"), "5 * x", "integral(5, x) = 5*x");
+    ASSERT_EQ(integral_str("y", "x"), "y * x", "integral(y, x) = y*x  (y treated as constant w.r.t. x)");
+    ASSERT_EQ(integral_str("x", "x"), "x^2 / 2", "integral(x, x) = x^2/2");
+    // -x integrates to -x^2/2; simplify renders as -(x^2 / 2)
+    ASSERT_EQ(integral_str("-x", "x"), "-(x^2 / 2)", "integral(-x, x) = -x^2/2 (UNARY_NEG)");
+}
+
+void test_symbolic_integrate_per_builtin() {
+    SECTION("symbolic_integrate: per-builtin antiderivatives");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // BLOCKING #4: integral(sin(x), x) = -cos(x)
+    ASSERT_EQ(integral_str("sin(x)", "x"), "-(cos(x))", "integral(sin(x), x) = -cos(x)");
+    // BLOCKING #5: integral(cos(x), x) = sin(x)
+    ASSERT_EQ(integral_str("cos(x)", "x"), "sin(x)", "integral(cos(x), x) = sin(x)");
+    // BLOCKING #7: integral(1/x, x) = log(x) — DIV form
+    ASSERT_EQ(integral_str("1/x", "x"), "log(x)", "integral(1/x, x) = log(x)");
+    // BLOCKING #6: integral(e^x, x) = e^x
+    ASSERT_EQ(integral_str("e^x", "x"), "e^x", "integral(e^x, x) = e^x");
+
+    // tan(x) → -log(cos(x))
+    ASSERT_EQ(integral_str("tan(x)", "x"), "-(log(cos(x)))", "integral(tan(x), x) = -log(cos(x))");
+}
+
+void test_symbolic_integrate_linearity() {
+    SECTION("symbolic_integrate: linearity (ADD/SUB, scalar MUL/DIV)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // BLOCKING #8: integral(3*sin(x) + 2*cos(x), x) → -3*cos(x) + 2*sin(x)
+    // Simplifier preserves the UNARY_NEG wrapper around the 3*cos(x) term
+    // (does not fold -1 into the leading coefficient): -(3 * cos(x)).
+    ASSERT_EQ(integral_str("3*sin(x) + 2*cos(x)", "x"),
+        "-(3 * cos(x)) + 2 * sin(x)",
+        "integral(3*sin(x) + 2*cos(x), x) = -3*cos(x) + 2*sin(x)");
+
+    // f / c — scalar denominator
+    ASSERT_EQ(integral_str("x / 2", "x"), "x^2 / 4",
+        "integral(x/2, x) = (x^2/2)/2 = x^2/4");
+
+    // c / x — constant numerator over x
+    ASSERT_EQ(integral_str("3 / x", "x"), "3 * log(x)",
+        "integral(3/x, x) = 3*log(x)");
+
+    // Sum of x^n for various n
+    ASSERT_EQ(integral_str("x^3 + x", "x"), "x^4 / 4 + x^2 / 2",
+        "integral(x^3 + x, x) = x^4/4 + x^2/2");
+}
+
+void test_symbolic_integrate_unevaluated_fallback() {
+    SECTION("symbolic_integrate: returns nullptr on unrecognized forms");
+
+    // BLOCKING #9: unrecognized forms return nullptr (caller preserves the
+    // original integral(...) FUNC_CALL).
+    {
+        const auto* e = parse("sin(x^2)");
+        const auto* d = symbolic_integrate(*e, "x");
+        ASSERT(d == nullptr, "integral(sin(x^2), x) returns nullptr (no chain rule yet)");
+    }
+    {
+        // Multi-arg builtins: not integrable in M1
+        const auto* e = parse("atan2(x, 1)");
+        const auto* d = symbolic_integrate(*e, "x");
+        ASSERT(d == nullptr, "integral(atan2(x, 1), x) returns nullptr (multi-arg)");
+    }
+    {
+        // x^x — neither power-rule nor exponential
+        const auto* e = parse("x^x");
+        const auto* d = symbolic_integrate(*e, "x");
+        ASSERT(d == nullptr, "integral(x^x, x) returns nullptr (unrecognized POW form)");
+    }
+    {
+        // Product of two non-constants (no u-sub yet)
+        const auto* e = parse("x * sin(x)");
+        const auto* d = symbolic_integrate(*e, "x");
+        ASSERT(d == nullptr, "integral(x*sin(x), x) returns nullptr (no IBP yet)");
+    }
+}
+
+void test_symbolic_integrate_surface_inline() {
+    SECTION("symbolic_integrate: Surface 1 — integral() inline in .fw (DESIRABLE #13)");
+
+    // Inline integral (no named-var indirection): integral(x^2 + 1, x)
+    {
+        FormulaSystem sys;
+        sys.load_string("y = integral(x^2 + 1, x)\n");
+        auto result = sys.derive("y", {}, {{"x", "x"}});
+        ASSERT_EQ(result, "x^3 / 3 + x",
+            "Surface 1: y = integral(x^2 + 1, x) → x^3/3 + x");
+    }
+
+    // BLOCKING #13 inline: distance = velocity*time; antideriv = integral(distance, time)
+    // ∫(v*t)dt = v*t^2/2 (v constant w.r.t. t)
+    {
+        write_fw("/tmp/tint_s1.fw",
+            "distance = velocity * time\n"
+            "antideriv = integral(distance, time)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tint_s1.fw");
+        auto result = sys.derive("antideriv", {}, {{"velocity", "velocity"}, {"time", "time"}});
+        // Simplifier folds 1/2 into a leading rational coefficient.
+        ASSERT_EQ(result, "1 / 2 * velocity * time^2",
+            "Surface 1: antideriv resolves to (1/2)*velocity*time^2");
+    }
+}
+
+void test_symbolic_integrate_surface_cli() {
+    SECTION("symbolic_integrate: Surface 2 — integral(...)=? CLI query (BLOCKING #1)");
+
+    // BLOCKING #1: parse_cli_query recognises integral(...)=?
+    write_fw("/tmp/tint_cli.fw", "f = x^2\n");
+    auto q = parse_cli_query("/tmp/tint_cli.fw(integral(f, x)=?)");
+    ASSERT(q.integral_queries.size() == 1, "parse_cli_query: 1 integral query");
+    if (q.integral_queries.size() == 1) {
+        ASSERT_EQ(q.integral_queries[0].var, "x", "integral target var = x");
+        ASSERT_EQ(q.integral_queries[0].alias, "integral_x", "default alias = integral_x");
+    }
+
+    // With explicit alias
+    auto q2 = parse_cli_query("/tmp/tint_cli.fw(integral(f, x)=?antideriv)");
+    ASSERT(q2.integral_queries.size() == 1, "parse_cli_query: 1 integral query with alias");
+    if (q2.integral_queries.size() == 1) {
+        ASSERT_EQ(q2.integral_queries[0].alias, "antideriv", "explicit alias = antideriv");
+    }
+}
+
+void test_symbolic_integrate_resolve_at_load_consumers() {
+    SECTION("resolve_at_load: BLOCKING #10 — both diff and integral use it");
+
+    // BLOCKING #10: diff and integral both rewrite at load time. Verifying via
+    // observable behavior: a system with both diff() and integral() in its RHS
+    // resolves both after a single load.
+    write_fw("/tmp/tint_consumer.fw",
+        "f = x^2\n"
+        "df = diff(f, x)\n"
+        "antideriv = integral(f, x)\n");
+    FormulaSystem sys;
+    sys.load_file("/tmp/tint_consumer.fw");
+    auto df_result = sys.derive("df", {}, {{"x", "x"}});
+    ASSERT_EQ(df_result, "2 * x", "resolve_diff: df → 2*x");
+    auto int_result = sys.derive("antideriv", {}, {{"x", "x"}});
+    ASSERT_EQ(int_result, "x^3 / 3", "resolve_integral: antideriv → x^3/3");
+}
+
 // T2.2: Two FormulaSystem instances should each get _fc0 (per-instance counter).
 // Pre-fix: a static counter inside extract_positional_calls makes the second
 // instance produce _fc1 (and so on). Post-fix: each instance has its own
@@ -13357,6 +13534,15 @@ int main() {
     test_symbolic_diff_surface2_e2e();
     test_symbolic_diff_unfold_formula_call();
     test_symbolic_diff_provenance();
+
+    // Symbolic integration (Future #16, M1 — 2026-05-10 cycle)
+    test_symbolic_integrate_per_class();
+    test_symbolic_integrate_per_builtin();
+    test_symbolic_integrate_linearity();
+    test_symbolic_integrate_unevaluated_fallback();
+    test_symbolic_integrate_surface_inline();
+    test_symbolic_integrate_surface_cli();
+    test_symbolic_integrate_resolve_at_load_consumers();
 
     // T2+T3 cleanup cycle (M1: correctness, 4 silent bugs)
     test_t22_positional_call_counter_per_instance();

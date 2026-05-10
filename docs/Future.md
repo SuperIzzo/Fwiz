@@ -288,9 +288,23 @@ Dotted identifiers like `car.velocity.x` work end-to-end as flat variable names.
 
 **Real `ExprType::STRUCT` / `DOT_ACCESS` node (deferred):** required only for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution. Reopen trigger: a user demonstrates a concrete need that flat naming cannot express (e.g. iterating all fields of a struct, or enforcing that two variables share the same dotted prefix).
 
-## 16. Integrals and Differentials
+## 16. Integrals and Differentials — PARTIAL (M1 shipped 2026-05-10)
+
+**Tier: In-scope.** Symbolic integration is a core math-inference capability; numeric quadrature fallback keeps it useful for non-elementary integrands.
 
 Symbolic integration (`integral(f, x)`) alongside differentiation (#6). Definite integrals with bounds. Standard integration rules (power, trig, substitution, parts). Falls back to numeric quadrature when symbolic fails.
+
+**Status (2026-05-10):** M1 shipped — indefinite Tier 1 (~25 atomic patterns: constants, `x^n`, `1/x`, `sin/cos/tan(x)`, `e^x`, sums, scalar mul/div). Two surfaces: `integral(target, var)=?[alias]` CLI query and inline builtin form. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL. NO `--integrate` flag. NO definite (4-arg) form. NO `+ C`. See `.fwiz-workflow/master-plan.md` for the 3-cycle arc roadmap.
+
+**Remaining (M2)**: derivative-divides u-substitution (`integral(2*x*cos(x^2), x)`), definite integrals (4-arg `integral(f, x, a, b)`), adaptive Simpson numeric fallback.
+
+**Remaining (M3)**: integration by parts via LIATE heuristic (depth ≤ 3), `BuiltinMeta` registry extraction (Future #49) consolidating diff and integral builtin tables.
+
+**Cross-arc reopen triggers (beyond M3):**
+- **Risch algorithm:** user reports integrand provably elementary-integrable but Tier 1-3 cannot solve, AND same form recurs in 2+ unrelated reproducers.
+- **Improper integrals (`integral(f, x, 0, inf)`):** user requests this form AND limit analysis is needed for another feature.
+- **Multi-variable integration:** vector calculus or surface integrals enter a planning cycle, OR #14 matrix arc extends to tensor calculus.
+- **Cyclic IBP (`e^x * sin(x)` family):** user reports family unevaluated in real reproducer AND cleanly-layered detection mechanism identified.
 
 ## 17. Big Numbers / Arbitrary Precision
 
@@ -614,11 +628,9 @@ itself is the issue, not the ranking).
 
 **Reopen trigger:** a user requests the shorthand, OR a `--derive` use case requires high-order derivatives (e.g. Taylor series output).
 
-## 48. Generic `resolve_at_load(rewriter)` mechanism
+## 48. Generic `resolve_at_load(rewriter)` mechanism — DONE (2026-05-10, Future #16 M1)
 
-`resolve_diff_in_equations` (system.h) is the first post-load tree-rewriter. When a second consumer wants the same pattern — integrals (#16), units (#7), LaTeX hints (#9) — factor out the recursive visitor into a `resolve_at_load(rewriter_fn)` primitive that `FormulaSystem::load_with_sections()` invokes for each registered rewriter in order.
-
-**Reopen trigger:** a second feature needs a post-load tree-rewriting pass.
+`resolve_diff_in_equations` (system.h) was the first post-load tree-rewriter. Future #16 (M1) added integration as the second consumer; the shared skeleton was extracted as `resolve_at_load<Rewriter>(rewriter, up_to)` (template). Both `resolve_diff_in_equations` and `resolve_integral_in_equations` are 4-line wrappers around it. Subsequent post-load tree passes (e.g. typed-binding predicates per #53, units #7, LaTeX hints #9) plug in here.
 
 ## 49. Per-builtin metadata registry
 
@@ -649,6 +661,8 @@ The `diff(...)=?` query path returns a `ValueSet` (CLI Surface 2) and so should 
 Extend the rule-condition language with predicates `is_num(x)`, `is_neg_num(x)`, `is_int(x)` that test the runtime binding of a wildcard: `is_num(x)` is true only when `x` binds to a numeric literal — NOT permissive-unknown (unknown → false, not true). This is the foundational extension that would unblock three blocked migrations and one blocked rule: T3.5 (rational arithmetic in `simplify_div`), T3.6 (`x^(-n)` rendering), and Future #31 (`abs(x) = x iff x >= 0`). Without this, the rule engine's wildcard semantics treat any binding — symbolic or numeric — identically, making it impossible to safely restrict a rule to numeric-only operands.
 
 **Reopen trigger**: a third C++ simplifier block resists migration for the same reason (wildcard binds both numeric and symbolic, rational arithmetic is C++-only), OR Future #31 (`abs(x) = x iff x >= 0`) is reopened, OR T3.5/T3.6 are reopened.
+
+**Escalation (2026-05-10, Future #16 M1):** Tier 1 antiderivative table (`symbolic_integrate` in `expr.h`) is now the **3rd consumer** of the same wildcard-restriction need — `Var(var)^n` matching with `n` constant requires the same numeric-literal predicate. M1 ships with a C++ if-chain (matching diff's pattern), but the M3 `BuiltinMeta` registry refactor that pulls antiderivatives toward `.fw`-rule definability is gated on this. Recommend prioritising in PLAN-NEXT.
 
 ## 54. T3.5 non-migration: constant reassociation in `simplify_div`
 
@@ -704,3 +718,15 @@ The per-cycle gate hard-codes `src/main.cpp src/tests.cpp` and silently excludes
 ## 59. Periodic C1 follow-up (`misc-const-correctness`) — RESOLVED 2026-05-07
 
 Cycle 7.5 drove the `misc-const-correctness` + `modernize-use-nodiscard` baseline to 0 via a one-shot `clang-tidy --fix` pass over the full codebase (245 findings fixed; 7 files, +251/-245 LOC). Local-variable `const` is now enforced by clang-tidy rather than being aspirational. Future `make analyze-full` runs start from a clean baseline; any new findings will surface incrementally at the next batch run.
+
+## 63. Domain-aware antiderivative (`log(abs(x))` for `∫1/x`)
+
+`symbolic_integrate(1/x, x)` currently emits `log(x)` (consistent with the existing `log(x^n) = n*log(x) iff x != 0` simplifier convention — same domain assumption). The mathematically-correct antiderivative is `log(abs(x))` when the sign of `x` is unknown. M1 deliberately does NOT emit `abs(x)` because (a) without global-condition propagation reaching the simplifier, the engine cannot prove `x > 0` to drop the abs, and (b) emitting `log(abs(x))` unconditionally pessimises every concrete-domain case. Defer to a domain-aware pass that consults the active condition system.
+
+**Reopen trigger:** Future #31 (`abs(x) = x iff x >= 0` builtin rewrite + global-condition propagation reaches the simplifier).
+
+## 64. `--integrate` CLI flag deferred
+
+M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)` surfaces only — there is no `--integrate` CLI flag analogous to `--derive`. Rationale: `--derive` exists because symbolic derivation is a global render mode applied to every query; integration is an explicit per-query operation that already has a natural in-file syntax. Adding a flag risks LLM/user confusion ("is `--integrate` a render mode or a target?").
+
+**Reopen trigger:** LLM benchmark run or user reports trying `--integrate` and finding it absent (signals the discoverability gap is real).

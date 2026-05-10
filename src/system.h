@@ -393,6 +393,8 @@ public:
     // skips already-rewritten equations. Eliminates redundant double-walk on
     // the CLI diff path (perf-auditor WARN, polish-pass Item 5).
     size_t diff_resolved_up_to_ = 0;
+    // Symmetric dirty-flag for resolve_integral_in_equations (Future #16).
+    size_t integral_resolved_up_to_ = 0;
 
     [[nodiscard]] std::set<std::string> all_variables() const {
         std::set<std::string> vars;
@@ -879,11 +881,32 @@ abs(x) / x = undefined iff x = 0
         resolve_positional_calls();
         compute_rewrite_groups();  // regroup after user rules loaded
         resolve_diff_in_equations();  // Future #6: rewrite diff(...) calls
+        resolve_integral_in_equations();  // Future #16 (M1): rewrite integral(...) calls
         trace_loaded();
     }
 
     // ------------------------------------------------------------------------
-    // Post-load symbolic differentiation (Future #6)
+    // Generic post-load tree-rewriting primitive (Future.md #48, extracted
+    // 2026-05-10 as part of Future #16 M1). Walks every equation RHS from
+    // `up_to` onward through `rewriter`, then advances `up_to` to the new
+    // tail. Equations only ever grow, so subsequent load_string calls skip
+    // already-rewritten equations.
+    //
+    // Two consumers today: `resolve_diff_in_equations` and
+    // `resolve_integral_in_equations`. Future tree-rewriting passes (e.g.
+    // typed-binding predicates per Future #53) plug in here.
+    // ------------------------------------------------------------------------
+    template <typename Rewriter>
+    void resolve_at_load(Rewriter rewriter, size_t& up_to) {
+        const ExprArena::Scope scope(arena);
+        // justified: starts mid-array at `up_to` (incremental dirty-flag)
+        for (size_t i = up_to; i < equations.size(); ++i)
+            equations[i].rhs = rewriter(equations[i].rhs);
+        up_to = equations.size();
+    }
+
+    // ------------------------------------------------------------------------
+    // Post-load symbolic differentiation (Future #6).
     //
     // Rewrites every `diff(target, var)` call in equation RHS expressions to
     // its derivative tree. Three cases (in order of preference):
@@ -906,11 +929,19 @@ abs(x) / x = undefined iff x = 0
     // unknown as constant" behavior, surfaced via trace).
     // ------------------------------------------------------------------------
     void resolve_diff_in_equations() {
-        const ExprArena::Scope scope(arena);
-        // justified: starts mid-array at `diff_resolved_up_to_` (incremental)
-        for (size_t i = diff_resolved_up_to_; i < equations.size(); ++i)
-            equations[i].rhs = resolve_diff_calls(equations[i].rhs);
-        diff_resolved_up_to_ = equations.size();
+        resolve_at_load(
+            [this](ExprPtr e) { return resolve_diff_calls(e); },
+            diff_resolved_up_to_);
+    }
+
+    // Post-load symbolic integration (Future #16, M1). Same 3-case dispatch
+    // shape as diff (named-var → equation RHS / FormulaCall output / literal),
+    // dispatching through `symbolic_integrate_simplified`. Unrecognized forms
+    // preserve the original `integral(...)` FUNC_CALL.
+    void resolve_integral_in_equations() {
+        resolve_at_load(
+            [this](ExprPtr e) { return resolve_integral_calls(e); },
+            integral_resolved_up_to_);
     }
 
     // Walks `e` post-order; replaces any `diff(target, var)` FUNC_CALL with the
@@ -968,6 +999,64 @@ abs(x) / x = undefined iff x = 0
                 return node;
             }
             return derived;
+        });
+    }
+
+    // Walks `e` post-order; replaces any `integral(target, var)` FUNC_CALL
+    // with the corresponding antiderivative tree (simplified). Mirrors
+    // `resolve_diff_calls` exactly, dispatching through `symbolic_integrate_simplified`.
+    // Three cases (in order of preference): equation RHS / FormulaCall output
+    // / literal expression. Unrecognized forms preserve the original
+    // `integral(...)` call so downstream stages can surface a useful error.
+    [[nodiscard]] ExprPtr resolve_integral_calls(ExprPtr e) {
+        return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+            if (node->type != ExprType::FUNC_CALL || node->name != "integral" ||
+                node->args.size() != 2) return node;
+            const Expr* target_expr = node->args[0];
+            const Expr* var_expr    = node->args[1];
+            if (!is_var(var_expr))
+                throw std::runtime_error("integral: second argument must be a variable name");
+            const std::string& var = var_expr->name;
+
+            ExprPtr integrated = nullptr;
+
+            // Case 1: target is a Var that names a system equation.
+            if (is_var(target_expr)) {
+                const std::string& tname = target_expr->name;
+                // not std::find_if: body invokes symbolic_integrate_simplified (allocates) and assigns captured `integrated`
+                for (const auto& eq : equations) {
+                    // cppcheck-suppress useStlAlgorithm
+                    if (eq.lhs_var == tname) {
+                        integrated = symbolic_integrate_simplified(*eq.rhs, var);
+                        break;
+                    }
+                }
+                // Case 2: target is a Var that names a FormulaCall output.
+                if (!integrated) {
+                    for (const auto& call : formula_calls) {
+                        if (call.output_var != tname) continue;
+                        const Expr* unfolded = unfold_formula_call_for_diff(call);
+                        if (unfolded) {
+                            integrated = symbolic_integrate_simplified(*unfolded, var);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Case 3 (or fallback when 1/2 produced nullptr): treat target as
+            // a literal expression.
+            if (!integrated) {
+                integrated = symbolic_integrate_simplified(*target_expr, var);
+            }
+
+            // If everything failed, keep the original `integral(...)` call.
+            if (!integrated) {
+                trace.step("  integral: cannot integrate " + expr_to_string(target_expr)
+                           + " w.r.t. " + var + " — keeping symbolic form");
+                return node;
+            }
+            return integrated;
         });
     }
 
@@ -3589,12 +3678,21 @@ struct CLIDiffQuery {
     std::string alias;
 };
 
+// Future #16 (M1): `integral(target_expr, var)=?[alias]` CLI query target.
+// Mirrors CLIDiffQuery exactly; default alias is "integral_<var>".
+struct CLIIntegralQuery {
+    std::string target_text;
+    std::string var;
+    std::string alias;
+};
+
 struct CLIQuery {
     std::string filename;
     std::string section;        // section name (from file.section syntax)
     std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
     std::vector<CLIDiffQuery> diff_queries;  // Future #6: diff(...)=? targets
+    std::vector<CLIIntegralQuery> integral_queries;  // Future #16: integral(...)=? targets
     std::map<std::string, double> bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
     // Future #21 (nested form): top-level args that are themselves formula
@@ -3782,6 +3880,31 @@ struct CLIQuery {
             continue;
         }
 
+        // Future #16 (M1): `integral(target_expr, var)=?[alias]` — mirror diff parsing.
+        if (val.size() >= 1 && val[0] == '?'
+            && name.size() > 9 && name.compare(0, 9, "integral(") == 0
+            && name.back() == ')') {
+            std::string inner = name.substr(9, name.size() - 10);
+            int pd = 0; size_t comma_pos = std::string::npos;
+            // justified: char-cursor — captures comma offset for substr split
+            for (size_t i = 0; i < inner.size(); i++) {
+                if (inner[i] == '(') pd++;
+                else if (inner[i] == ')') pd--;
+                else if (inner[i] == ',' && pd == 0) { comma_pos = i; break; }
+            }
+            if (comma_pos == std::string::npos)
+                throw std::runtime_error("integral(): expected target and variable separated by ','");
+            const std::string target = trim(inner.substr(0, comma_pos));
+            const std::string ivar   = trim(inner.substr(comma_pos + 1));
+            if (target.empty() || ivar.empty())
+                throw std::runtime_error("integral(): missing target or variable");
+            std::string rest = trim(val.substr(1));
+            if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — integral is single-result
+            const std::string alias = rest.empty() ? ("integral_" + ivar) : rest;
+            q.integral_queries.push_back({target, ivar, alias});
+            continue;
+        }
+
         if (val.size() >= 1 && val[0] == '?') {
             // Query: "x=?" or "x=?!" or "x=?alias" or "x=?!alias"
             bool strict = false;
@@ -3829,7 +3952,7 @@ struct CLIQuery {
         }
     }
 
-    if (q.queries.empty() && q.diff_queries.empty() && !allow_no_queries)
+    if (q.queries.empty() && q.diff_queries.empty() && q.integral_queries.empty() && !allow_no_queries)
         throw std::runtime_error("No query variable (use var=?)");
     return q;
 }

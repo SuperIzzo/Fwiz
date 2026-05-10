@@ -38,6 +38,7 @@ Current capabilities:
 - ValueSet returns (ranges when exact values unavailable)
 - Symbolic derivation (`--derive`) with formula call unfolding
 - Symbolic differentiation (`diff(f, x)` builtin + `diff(...)=?` CLI query)
+- Symbolic integration — Tier 1 indefinite (`integral(f, x)` builtin + `integral(...)=?` CLI query) — Future #16 M1
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
@@ -207,6 +208,30 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 3. Literal expression — differentiates directly.
 
 Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per design. Running after rewrite rules load ensures `simplify()` inside `symbolic_diff_simplified` can apply all rules (including the three new `x^a/x^b`, `abs(x)/x`, and `sign` rules) to the differentiated result.
+
+**Symbolic integration (`integral(f, x)`) — Tier 1 indefinite, Future #16 M1 (2026-05-10)** (sibling of Symbolic differentiation above; same structural pattern throughout)
+
+`symbolic_integrate(const Expr&, const std::string& var) → ExprPtr` — Free function in `expr.h`, sibling of `symbolic_diff`, mirroring its return-on-`nullptr`-on-miss contract. **`e^x` antiderivative convention:** result is `BinOpExpr(POW, Var("e"), Var(var))` — the same `e^x` FUNC_CALL sugar is not used; consumers that pattern-match on `e^x` must match this POW form. Per-AST-class switch + per-builtin if-chain. Tier 1 only — ~25 atomic patterns:
+
+- `NUM` (constant `c`) → `c*x`. `VAR` → `x^2/2` if name matches `var`, else `name*x`.
+- `BINOP::ADD/SUB` — linearity (`∫(l ± r) = ∫l ± ∫r`).
+- `BINOP::MUL` — `c*f` only (one operand constant w.r.t. `var`); both-contain-var returns `nullptr` (M2/M3 territory).
+- `BINOP::DIV` — `f/c`, `c/x`, and `1/x → log(x)`.
+- `BINOP::POW` — `Var(var)^n` (`n` numeric, `n ≠ -1`) → `x^(n+1)/(n+1)`; `Var(var)^(-1) → log(x)`; `e^Var(var) → e^Var(var)`.
+- `UNARY_NEG` — integrate child, negate.
+- `FUNC_CALL` (single-arg only, arg must equal `Var(var)` — no chain rule yet): `sin → -cos`, `cos → sin`, `tan → -log(cos(x))`.
+
+Anything outside this list returns `nullptr`. The wrapper `symbolic_integrate_simplified` calls `simplify()` after; null propagates.
+
+**Unevaluated-fallback contract:** when `symbolic_integrate` returns `nullptr`, the post-load pass `resolve_integral_in_equations` keeps the original `integral(target, var)` FUNC_CALL in place — same convention as diff. The result is observable to downstream stages (e.g., `--steps` traces, output round-trip) as a literal `integral(...)` form, signalling "no rule matched."
+
+**Out of scope at M1** (deferred to subsequent cycles in the integration arc): u-substitution (M2), definite integrals 4-arg `integral(f, x, a, b)` (M2), adaptive Simpson numeric fallback (M2), integration by parts (M3), `+ C` constant of integration (never — would not round-trip), domain-aware antiderivative `log(abs(x))` (gated on Future #31 condition propagation), Risch / cyclic IBP / improper / multi-variable / trig substitution / partial fractions / special functions (per cross-arc reopen triggers in `.fwiz-workflow/master-plan.md`).
+
+**`resolve_at_load(rewriter, up_to)` primitive** (Future #48, system.h) — Generic post-load tree-rewriting loop extracted at M1. Both `resolve_diff_in_equations` and `resolve_integral_in_equations` are 4-line wrappers around it. Subsequent post-load passes (e.g., units #7, LaTeX hints #9, typed-binding rewrites once #53 ships) plug in here. The `up_to` dirty-flag pattern (`diff_resolved_up_to_`, `integral_resolved_up_to_`) ensures a second `load_string` (e.g., the CLI's synthesized `<alias> = integral(...)` injection) only walks the new tail.
+
+**CLI surface:** `integral(target, var)=?[alias]` via parse_cli_query → `<cli-integral>` injection in `main.cpp` Pass 1.6, parallel to diff's Pass 1.5. **No `--integrate` flag** — the in-file form is the single surface (see Future #64 for the deferred-flag rationale).
+
+**Dependency on Future #53:** `Var(var)^n` with `n` constant is the pattern that motivates `is_num(...)` typed-binding predicates. Tier 1 antiderivative table is the **3rd consumer** of that need (alongside T3.5 and T3.6 simplifier blocks); the M3 `BuiltinMeta` registry refactor that pulls antiderivatives toward `.fw`-rule definability is gated on it.
 
 ### system.h
 

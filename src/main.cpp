@@ -412,6 +412,57 @@ int main(int argc, const char* argv[]) {
             }
         }
 
+        // --- Pass 1.6: integral(...)=? CLI queries (Future #16, M1) ---
+        // Mirrors Pass 1.5 (diff) — synthesize `<alias> = integral(target, var)`,
+        // load_string-inject, then resolve. The post-load
+        // `resolve_integral_in_equations` rewrites it to the antiderivative
+        // tree at load time (or preserves `integral(...)` symbolically if
+        // unrecognized). NO `--integrate` flag — only the in-file syntax.
+        if (!query.integral_queries.empty()) {
+            std::string injected;
+            for (const auto& iq : query.integral_queries) {
+                injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var + ")\n";
+            }
+            sys.load_string(injected, "<cli-integral>");
+            for (const auto& iq : query.integral_queries) {
+                try {
+                    auto result = sys.resolve_all(iq.alias, query.bindings);
+                    if (result.is_discrete()) {
+                        auto it = sys.numeric_results_.find(iq.alias);
+                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
+                        for (auto r : result.discrete())
+                            std::cout << iq.alias << (exact ? " = " : " ~ ")
+                                      << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
+                        if (!result.discrete().empty())
+                            solved[iq.alias] = result.discrete()[0];
+                    } else if (result.has_periodic()) {
+                        auto it = sys.numeric_results_.find(iq.alias);
+                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
+                        for (const auto& line : result.periodic_render_lines())
+                            std::cout << iq.alias << (exact ? " = " : " ~ ") << line << '\n';
+                    } else {
+                        std::cout << iq.alias << " : " << result.to_string() << '\n';
+                    }
+                } catch (const std::runtime_error&) {
+                    // Free-variable case: print symbolic RHS (which is now the
+                    // antiderivative tree, or the unevaluated integral(...) if
+                    // no rule matched).
+                    bool emitted = false;
+                    // not std::find_if: body emits to stdout (side effect) and sets emitted before break
+                    for (const auto& eq : sys.equations) {
+                        // cppcheck-suppress useStlAlgorithm
+                        if (eq.lhs_var == iq.alias) {
+                            std::cout << iq.alias << " = "
+                                      << expr_to_string(eq.rhs) << '\n';
+                            emitted = true;
+                            break;
+                        }
+                    }
+                    if (!emitted) std::cout << iq.alias << " = ?\n";
+                }
+            }
+        }
+
         // --- Pass 2: verify ---
         if (has_verify) {
             // Determine which variables to verify

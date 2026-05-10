@@ -2617,6 +2617,147 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 }
 
 // ============================================================================
+//  Symbolic integration (Future #16, M1 — indefinite, Tier 1 only)
+// ============================================================================
+//
+// `symbolic_integrate(e, var)` produces ∫e d(var) as a fresh ExprPtr in the
+// active arena. Per-AST-class switch + per-builtin if-chain for FUNC_CALL.
+// Mirrors `symbolic_diff` exactly: same return-on-`nullptr`-on-miss contract.
+//
+// Scope (Tier 1, ~25 atomic patterns):
+//   - Constants and VAR (linearity-trivial cases).
+//   - ADD/SUB linearity.
+//   - MUL: only `c * f` where `c` is constant w.r.t. var.
+//   - DIV: `f / c` (constant denom), `c / x` (constant over var), `1 / x`.
+//   - POW: `Var(var)^n` (power rule, n ≠ -1), `Var(var)^(-1) → log`,
+//     `e^Var(var)` (exponential).
+//   - UNARY_NEG: integrate child, negate.
+//   - FUNC_CALL: sin, cos, tan only when arg == Var(var).
+//
+// Returns `nullptr` for any form outside this list. Callers (the post-load
+// `resolve_integral_in_equations` pass) treat null as "preserve the original
+// integral(...) call symbolic" — same convention as diff.
+//
+// Out of scope (deferred to M2/M3):
+//   - u-substitution (chain rule inverse) — M2.
+//   - Integration by parts (LIATE) — M3.
+//   - Definite integrals (4-arg `integral(f, x, a, b)`) — M2.
+//   - Adaptive Simpson numeric fallback — M2.
+//   - `+ C` constant of integration — never (would not round-trip).
+//   - Domain-aware antiderivative (`log(abs(x))`) — gated on Future #31.
+[[nodiscard]] inline ExprPtr symbolic_integrate(const Expr& e, const std::string& var) {
+    using E = Expr;
+    switch (e.type) {
+        case ExprType::NUM:
+            // ∫c dx = c*x
+            return E::BinOpExpr(BinOp::MUL, E::Num(e.num), E::Var(var));
+
+        case ExprType::VAR:
+            // ∫x dx = x^2/2;  ∫y dx = y*x  (y constant w.r.t. x)
+            if (e.name == var)
+                return E::BinOpExpr(BinOp::DIV,
+                    E::BinOpExpr(BinOp::POW, E::Var(var), E::Num(2)),
+                    E::Num(2));
+            return E::BinOpExpr(BinOp::MUL, E::Var(e.name), E::Var(var));
+
+        case ExprType::UNARY_NEG: {
+            auto ic = symbolic_integrate(*e.child, var);
+            return ic ? E::Neg(ic) : nullptr;
+        }
+
+        case ExprType::BINOP: {
+            auto l = e.left, r = e.right;
+            switch (e.op) {
+                case BinOp::ADD:
+                case BinOp::SUB: {
+                    // Linearity: ∫(l ± r) = ∫l ± ∫r
+                    auto il = symbolic_integrate(*l, var);
+                    auto ir = symbolic_integrate(*r, var);
+                    if (!il || !ir) return nullptr;
+                    return E::BinOpExpr(e.op, il, ir);
+                }
+                case BinOp::MUL: {
+                    // Only c*f where c is constant w.r.t. var.
+                    const bool l_has = contains_var(*l, var);
+                    const bool r_has = contains_var(*r, var);
+                    if (!l_has) {
+                        auto ir = symbolic_integrate(*r, var);
+                        return ir ? E::BinOpExpr(BinOp::MUL, l, ir) : nullptr;
+                    }
+                    if (!r_has) {
+                        auto il = symbolic_integrate(*l, var);
+                        return il ? E::BinOpExpr(BinOp::MUL, il, r) : nullptr;
+                    }
+                    // Both contain var — needs IBP/u-sub (M2/M3 territory).
+                    return nullptr;
+                }
+                case BinOp::DIV: {
+                    const bool l_has = contains_var(*l, var);
+                    const bool r_has = contains_var(*r, var);
+                    if (!r_has) {
+                        // f / c → ∫f / c
+                        auto il = symbolic_integrate(*l, var);
+                        return il ? E::BinOpExpr(BinOp::DIV, il, r) : nullptr;
+                    }
+                    // c / x or c / Var(var) — log form. Only when r is exactly
+                    // Var(var) and l is constant w.r.t. var.
+                    if (!l_has && is_var(r) && r->name == var) {
+                        if (is_one(*l)) return E::Call("log", {E::Var(var)});
+                        return E::BinOpExpr(BinOp::MUL, l, E::Call("log", {E::Var(var)}));
+                    }
+                    return nullptr;
+                }
+                case BinOp::POW: {
+                    // Var(var)^n (n constant numeric, n != -1) → x^(n+1)/(n+1)
+                    // The n == -1 branch is reachable only via the post-simplify()
+                    // form `POW(Var(var), Num(-1))` (e.g. through unfold_formula_call_*
+                    // whose body re-simplifies before reaching this dispatcher); the
+                    // direct parse path `x^(-1)` produces POW(Var(var), UNARY_NEG(Num(1)))
+                    // and falls through to nullptr → the DIV `1/x` branch above handles
+                    // user-typed `1/x` directly.
+                    if (is_var(l) && l->name == var && is_num(r)) {
+                        if (is_neg_one(*r)) return E::Call("log", {E::Var(var)});
+                        const double n = r->num;
+                        return E::BinOpExpr(BinOp::DIV,
+                            E::BinOpExpr(BinOp::POW, E::Var(var), E::Num(n + 1)),
+                            E::Num(n + 1));
+                    }
+                    // e^Var(var) → e^Var(var)  (Var("e") base)
+                    if (is_var(l) && l->name == "e" && is_var(r) && r->name == var) {
+                        return E::BinOpExpr(BinOp::POW, E::Var("e"), E::Var(var));
+                    }
+                    return nullptr;
+                }
+                case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
+            }
+            return nullptr;
+        }
+
+        case ExprType::FUNC_CALL: {
+            // Single-arg builtins only, and only when arg == Var(var) (no
+            // chain rule yet — that's M2 u-sub).
+            if (e.args.size() != 1) return nullptr;
+            const Expr* u = e.args[0];
+            if (!is_var(u) || u->name != var) return nullptr;
+            if (e.name == "sin")  return E::Neg(E::Call("cos", {E::Var(var)}));
+            if (e.name == "cos")  return E::Call("sin", {E::Var(var)});
+            if (e.name == "tan")  return E::Neg(E::Call("log", {E::Call("cos", {E::Var(var)})}));
+            return nullptr;
+        }
+
+        case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    }
+    return nullptr;
+}
+
+// Convenience wrapper: integrate then simplify. Returns nullptr if the
+// underlying `symbolic_integrate` returns nullptr (signal for callers).
+[[nodiscard]] inline ExprPtr symbolic_integrate_simplified(const Expr& e, const std::string& var) {
+    auto raw = symbolic_integrate(e, var);
+    return raw ? simplify(raw) : nullptr;
+}
+
+// ============================================================================
 //  Linear solver: decompose expr into coeff * target + rest
 // ============================================================================
 

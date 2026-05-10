@@ -107,6 +107,24 @@ The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than pr
 
 `derive_all` uses a 3-point Schwartz–Zippel fingerprint; the M3-6 test uses 5 branch-distinguishing points. Post-M1 (added sin/cos second inverse branches), 4 candidates collide on `derive_all`'s 3 test points but diverge on the test's 5 — `derive_all` retains them (correct under its resolution); the original `dup_count == 0` assertion was too strict. The test now allows `dup_count <= 4` with a comment explaining the cascade. Underlying fix (extend test points or add structural canonicalization, ~30-50 LOC) tracked in Future.md #12f.
 
+## 13. Symbolic integration — current scope (Cycle 1 M1, 2026-05-10)
+
+Indefinite Tier 1 integration via `integral(f, x)` shipped in M1. What works and what does not:
+
+**Works:** ~25 atomic patterns: constants (`integral(c, x) → c*x`), power rule (`x^n → x^(n+1)/(n+1)`), `1/x → log(x)`, `e^x → e^x`, `sin/cos/tan(x)` antiderivatives, linearity over ADD/SUB, scalar MUL/DIV. Two surfaces: inline `f = integral(g, x)` (resolved at load time via post-load pass) and `integral(target, var)=?[alias]` CLI query. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL — same convention as `diff(...)`; observable in `--steps` traces and output round-trip.
+
+**Does not work yet:**
+- Definite integrals (`integral(f, x, a, b)` 4-arg form) — deferred to M2.
+- Derivative-divides u-substitution (e.g. `integral(2*x*cos(x^2), x)`) — deferred to M2.
+- Adaptive Simpson numeric fallback — deferred to M2.
+- Integration by parts / LIATE heuristic — deferred to M3.
+- `+ C` constant of integration — deliberately excluded (would not round-trip as `.fw`).
+- Risch algorithm, improper integrals, multi-variable integration, cyclic IBP, trig substitution, partial fractions, special functions — see cross-arc reopen triggers in Future #16.
+
+**Domain assumption:** `integral(1/x, x)` emits `log(x)`, not `log(abs(x))`. The mathematically complete antiderivative for unknown-sign `x` requires `abs(x)`, but emitting it unconditionally pessimises concrete-domain cases. Deferred to a domain-aware pass gated on Future #31 (global-condition propagation). See Future #63.
+
+**No `--integrate` flag:** integration is a per-query operation with natural in-file syntax; no global render mode exists. See Future #64 for the deferred-flag rationale.
+
 ## 8. `--cse 3` default is over-aggressive on dense formula sets — RESOLVED
 
 Resolved by Option C refactor (commit `<hash-placeholder>`). `--cse N` semantics
