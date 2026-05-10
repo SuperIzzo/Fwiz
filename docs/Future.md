@@ -288,15 +288,13 @@ Dotted identifiers like `car.velocity.x` work end-to-end as flat variable names.
 
 **Real `ExprType::STRUCT` / `DOT_ACCESS` node (deferred):** required only for cross-field invariants, type-checking on dotted shapes, or namespace-scoped resolution. Reopen trigger: a user demonstrates a concrete need that flat naming cannot express (e.g. iterating all fields of a struct, or enforcing that two variables share the same dotted prefix).
 
-## 16. Integrals and Differentials — PARTIAL (M1 shipped 2026-05-10)
+## 16. Integrals and Differentials — PARTIAL (M1 shipped 2026-05-10, M2 shipped 2026-05-10)
 
 **Tier: In-scope.** Symbolic integration is a core math-inference capability; numeric quadrature fallback keeps it useful for non-elementary integrands.
 
 Symbolic integration (`integral(f, x)`) alongside differentiation (#6). Definite integrals with bounds. Standard integration rules (power, trig, substitution, parts). Falls back to numeric quadrature when symbolic fails.
 
-**Status (2026-05-10):** M1 shipped — indefinite Tier 1 (~25 atomic patterns: constants, `x^n`, `1/x`, `sin/cos/tan(x)`, `e^x`, sums, scalar mul/div). Two surfaces: `integral(target, var)=?[alias]` CLI query and inline builtin form. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL. NO `--integrate` flag. NO definite (4-arg) form. NO `+ C`. See `.fwiz-workflow/master-plan.md` for the 3-cycle arc roadmap.
-
-**Remaining (M2)**: derivative-divides u-substitution (`integral(2*x*cos(x^2), x)`), definite integrals (4-arg `integral(f, x, a, b)`), adaptive Simpson numeric fallback.
+**Status (2026-05-10):** M1 shipped — indefinite Tier 1 (~25 atomic patterns: constants, `x^n`, `1/x`, `sin/cos/tan(x)`, `e^x`, sums, scalar mul/div). M2 shipped — derivative-divides u-substitution (`integral(2*x*cos(x^2), x) → sin(x^2)`, `integral(x*e^(x^2), x) → e^(x^2)/2`), definite-integral 4-arg form `integral(f, x, a, b)` with symbolic F(b)-F(a) primary path, adaptive Simpson numeric fallback (`integral(e^(-x^2), x, 0, 1) ≈ 0.7468`). Two surfaces: `integral(target, var)=?[alias]` CLI query (also `integral(target, var, lo, hi)=?[alias]` for definite) and inline builtin form. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL. NO `--integrate` flag. NO `+ C`. See `.fwiz-workflow/master-plan.md` for the 3-cycle arc roadmap.
 
 **Remaining (M3)**: integration by parts via LIATE heuristic (depth ≤ 3), `BuiltinMeta` registry extraction (Future #49) consolidating diff and integral builtin tables.
 

@@ -2617,7 +2617,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 }
 
 // ============================================================================
-//  Symbolic integration (Future #16, M1 — indefinite, Tier 1 only)
+//  Symbolic integration (Future #16, M1 — indefinite Tier 1; M2 — u-sub + definite)
 // ============================================================================
 //
 // `symbolic_integrate(e, var)` produces ∫e d(var) as a fresh ExprPtr in the
@@ -2627,7 +2627,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 // Scope (Tier 1, ~25 atomic patterns):
 //   - Constants and VAR (linearity-trivial cases).
 //   - ADD/SUB linearity.
-//   - MUL: only `c * f` where `c` is constant w.r.t. var.
+//   - MUL: `c * f` where `c` is constant w.r.t. var; M2 derivative-divides u-sub.
 //   - DIV: `f / c` (constant denom), `c / x` (constant over var), `1 / x`.
 //   - POW: `Var(var)^n` (power rule, n ≠ -1), `Var(var)^(-1) → log`,
 //     `e^Var(var)` (exponential).
@@ -2638,13 +2638,55 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 // `resolve_integral_in_equations` pass) treat null as "preserve the original
 // integral(...) call symbolic" — same convention as diff.
 //
-// Out of scope (deferred to M2/M3):
-//   - u-substitution (chain rule inverse) — M2.
+// M2 additions (this cycle):
+//   - Derivative-divides u-substitution in MUL: enumerate candidate g(x)
+//     subexpressions, compute g'(x), cancel g' out of the integrand, integrate
+//     the residual w.r.t. u, back-substitute g for u.
+//   - Definite integral 4-arg form `integral(f, x, a, b)` is dispatched by
+//     `resolve_integral_calls` in system.h — symbolic F(b)-F(a) primary,
+//     `adaptive_simpson` fallback (defined below alongside `newton_solve`).
+//
+// Out of scope (deferred to M3):
 //   - Integration by parts (LIATE) — M3.
-//   - Definite integrals (4-arg `integral(f, x, a, b)`) — M2.
-//   - Adaptive Simpson numeric fallback — M2.
 //   - `+ C` constant of integration — never (would not round-trip).
 //   - Domain-aware antiderivative (`log(abs(x))`) — gated on Future #31.
+
+// `try_cancel(expr, factor)` — symbolic division with a cancellation check.
+// Computes `simplify(DIV(expr, factor))` then walks the result to verify the
+// `factor` subtree no longer appears anywhere; returns the quotient if so,
+// nullptr otherwise. Heuristic — perfect cancellation is hard. This catches
+// the "obvious factor matches" case used by derivative-divides u-sub.
+[[nodiscard]] inline ExprPtr try_cancel(const ExprPtr& expr, const ExprPtr& factor) {
+    if (!expr || !factor || is_zero(factor)) return nullptr;
+    auto quotient = simplify(Expr::BinOpExpr(BinOp::DIV, expr, factor));
+    if (!quotient) return nullptr;
+    // Walk quotient checking no subtree equals factor structurally. Pure
+    // pass-through for atomic NUM/VAR; recurses through BINOP/UNARY_NEG/
+    // FUNC_CALL children. Early-exits on first match via the `bool*` channel.
+    bool factor_remains = false;
+    std::function<void(const Expr*)> walk = [&](const Expr* n) {
+        if (factor_remains || !n) return;
+        if (expr_equal(*n, *factor)) { factor_remains = true; return; }
+        switch (n->type) {
+            case ExprType::NUM:
+            case ExprType::VAR:
+                break;
+            case ExprType::BINOP:
+                walk(n->left); walk(n->right); break;
+            case ExprType::UNARY_NEG:
+                walk(n->child); break;
+            case ExprType::FUNC_CALL:
+                for (const auto* a : n->args) walk(a);
+                break;
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+        }
+    };
+    walk(quotient);
+    return factor_remains ? nullptr : quotient;
+}
+
+// Forward declaration: u-sub helper called from `symbolic_integrate`'s MUL case.
+[[nodiscard]] inline ExprPtr try_u_sub_integrate(const Expr& e, const std::string& var);
 [[nodiscard]] inline ExprPtr symbolic_integrate(const Expr& e, const std::string& var) {
     using E = Expr;
     switch (e.type) {
@@ -2677,7 +2719,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                     return E::BinOpExpr(e.op, il, ir);
                 }
                 case BinOp::MUL: {
-                    // Only c*f where c is constant w.r.t. var.
+                    // Constant-times-f (linearity over a numeric or var-free factor).
                     const bool l_has = contains_var(*l, var);
                     const bool r_has = contains_var(*r, var);
                     if (!l_has) {
@@ -2688,8 +2730,10 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                         auto il = symbolic_integrate(*l, var);
                         return il ? E::BinOpExpr(BinOp::MUL, il, r) : nullptr;
                     }
-                    // Both contain var — needs IBP/u-sub (M2/M3 territory).
-                    return nullptr;
+                    // Both contain var — try derivative-divides u-substitution
+                    // (M2). Returns nullptr if no candidate g(x) cancels cleanly,
+                    // leaving IBP cases (M3) for the post-load fallback.
+                    return try_u_sub_integrate(e, var);
                 }
                 case BinOp::DIV: {
                     const bool l_has = contains_var(*l, var);
@@ -2755,6 +2799,82 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 [[nodiscard]] inline ExprPtr symbolic_integrate_simplified(const Expr& e, const std::string& var) {
     auto raw = symbolic_integrate(e, var);
     return raw ? simplify(raw) : nullptr;
+}
+
+// Derivative-divides u-substitution (M2). For an integrand `e` (typically a
+// product where both factors mention `var`), enumerate candidate sub-expressions
+// `g` of `e` to a bounded depth, compute `g' = symbolic_diff(g, var)`, attempt
+// to cancel `g'` out of `e`, and — if the cancelled residual is expressible as
+// a function of `g` alone (no direct `var` outside `g`) — integrate w.r.t.
+// `u = g` and back-substitute. Returns nullptr when no candidate works.
+//
+// Depth bound: we descend at most U_SUB_DEPTH levels into the integrand to
+// gather candidates, which keeps cost O(small) for the typical 2-3-factor
+// product. Linear `g = c*x` cases are caught when `g` is a sub-expression of
+// the integrand (e.g. `cos(2*x)` has `2*x` as a candidate via the FUNC_CALL
+// arg path).
+[[nodiscard]] inline ExprPtr try_u_sub_integrate(const Expr& e, const std::string& var) {
+    constexpr int U_SUB_DEPTH = 2;
+
+    // Collect distinct candidate subexpressions to a bounded depth. Excludes
+    // pure-numeric and var-free nodes (g' = 0 is unhelpful) and the trivial
+    // `Var(var)` case (g' = 1 gives back the original integrand). Skip the
+    // root `&e` itself — picking g = e produces a pathological "cancel
+    // against my own derivative" loop and leaves `log(e)` artifacts via the
+    // general POW-derivative rule for `e^...` integrands.
+    std::vector<ExprPtr> candidates;
+    std::function<void(const Expr*, int, bool)> gather = [&](const Expr* n, int d, bool is_root) {
+        if (!n || d < 0) return;
+        if (!is_root && contains_var(*n, var) && !(is_var(*n) && n->name == var)) {
+            const bool dup = std::any_of(candidates.begin(), candidates.end(),
+                [&](const ExprPtr& c) { return expr_equal(*c, *n); });
+            if (!dup) candidates.push_back(const_cast<Expr*>(n));
+        }
+        switch (n->type) {
+            case ExprType::NUM: case ExprType::VAR: break;
+            case ExprType::BINOP:
+                gather(n->left, d - 1, false); gather(n->right, d - 1, false); break;
+            case ExprType::UNARY_NEG:
+                gather(n->child, d - 1, false); break;
+            case ExprType::FUNC_CALL:
+                for (const auto* a : n->args) gather(a, d - 1, false);
+                break;
+            case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+        }
+    };
+    gather(&e, U_SUB_DEPTH, true);
+
+    // Sort candidates ascending by leaf count — try the simplest g first.
+    // For `x*e^(x^2)` this picks `x^2` (3 leaves) before `e^(x^2)` (5 leaves),
+    // avoiding the chain-rule diff-of-`e^...` that produces a log(e) artifact.
+    std::sort(candidates.begin(), candidates.end(),
+        [](const ExprPtr& a, const ExprPtr& b) {
+            return canonicity_score(a) < canonicity_score(b);
+        });
+
+    // Use a placeholder name unlikely to collide with user vars. The literal
+    // string is contained to this function; back-substitution restores `g`.
+    const std::string u_name = "_u_sub_";
+
+    ExprPtr e_ptr = const_cast<Expr*>(&e);
+    for (const auto& g : candidates) {
+        auto g_prime = symbolic_diff_simplified(*g, var);
+        if (!g_prime || is_zero(g_prime)) continue;
+        auto residual = try_cancel(e_ptr, g_prime);
+        if (!residual) continue;
+        // Express residual in terms of u — replace every subtree equal to g
+        // with Var(u_name). cse_replace does exactly this with structural eq.
+        const ExprPtr residual_in_u = cse_replace(residual, {{u_name, g}});
+        // If residual still references `var` directly, this candidate fails:
+        // u-sub requires the integrand reduce to f(u) du.
+        if (contains_var(*residual_in_u, var)) continue;
+        auto antideriv_in_u = symbolic_integrate(*residual_in_u, u_name);
+        if (!antideriv_in_u) continue;
+        // Back-substitute: replace Var(u_name) with g.
+        auto result = substitute(antideriv_in_u, u_name, g);
+        return simplify(result);
+    }
+    return nullptr;
 }
 
 // ============================================================================
@@ -3204,6 +3324,70 @@ template<class F>
         else                { lo = mid; flo = fmid; }
     }
     return snap_integer((lo + hi) / 2.0);
+}
+
+// Adaptive Simpson's rule on [a, b] with recursive bisection. Used as the
+// numeric fallback for definite `integral(f, x, a, b)` when the symbolic
+// antiderivative path returns nullptr (Future #16, M2). Standard estimator:
+// |S(a,b) - S(a,m) - S(m,b)| / 15 ≈ error of S(a,b). When the estimate is
+// below tolerance, accept S(a,m) + S(m,b) as the integral; otherwise recurse
+// on each half with halved tolerance, capped by `max_depth` to prevent
+// runaway. NaN at any sample short-circuits to NaN (caller surfaces the
+// unevaluated `integral(...)` when this fires).
+constexpr int ADAPTIVE_SIMPSON_MAX_DEPTH = 30;
+static_assert(ADAPTIVE_SIMPSON_MAX_DEPTH >= 10
+              && ADAPTIVE_SIMPSON_MAX_DEPTH <= 60);
+
+// Integration tolerance — semantically distinct from NUMERIC_TOLERANCE
+// (which is a root-finding absolute residual tolerance, 1e-10). Adaptive
+// Simpson's convergence test is |S(a,b) - S(a,m) - S(m,b)| <= 15*tol —
+// this controls absolute integral error, NOT residual. 1e-7 matches the
+// realistic precision of double-precision arithmetic on smooth integrands
+// after cancellation; tighter tolerances drive recursion to near-max-depth
+// without buying useful precision. Reviewer Cycle 2 (M2) 2026-05-10.
+constexpr double INTEGRATION_TOLERANCE = 1e-7;
+static_assert(INTEGRATION_TOLERANCE > 0.0 && INTEGRATION_TOLERANCE < 1e-3);
+
+template<class F>
+[[nodiscard]] inline double adaptive_simpson_recurse(F&& fn,
+        double a, double b, double fa, double fb, double fm, double whole,
+        double tol, int depth) {
+    const double m  = 0.5 * (a + b);
+    const double lm = 0.5 * (a + m);
+    const double rm = 0.5 * (m + b);
+    const double flm = fn(lm);
+    const double frm = fn(rm);
+    if (std::isnan(flm) || std::isnan(frm)) return std::nan("");
+    const double left  = (m - a) / 6.0 * (fa + 4.0 * flm + fm);
+    const double right = (b - m) / 6.0 * (fm + 4.0 * frm + fb);
+    const double sum   = left + right;
+    if (depth <= 0 || std::abs(sum - whole) <= 15.0 * tol)
+        return sum + (sum - whole) / 15.0;
+    const double half = 0.5 * tol;
+    const double l = adaptive_simpson_recurse(fn, a, m, fa, fm, flm, left,  half, depth - 1);
+    if (std::isnan(l)) return l;
+    const double r = adaptive_simpson_recurse(fn, m, b, fm, fb, frm, right, half, depth - 1);
+    return l + r;
+}
+
+template<class F>
+[[nodiscard]] inline double adaptive_simpson(F&& fn, double a, double b,
+        double tol = INTEGRATION_TOLERANCE,
+        int max_depth = ADAPTIVE_SIMPSON_MAX_DEPTH) {
+    if (a == b) return 0.0;
+    if (a > b) {
+        // Reverse: ∫[a→b] = -∫[b→a]. Recurse to keep the recursive helper's
+        // (a < b) precondition.
+        const double v = adaptive_simpson(fn, b, a, tol, max_depth);
+        return std::isnan(v) ? v : -v;
+    }
+    const double fa = fn(a);
+    const double fb = fn(b);
+    const double m  = 0.5 * (a + b);
+    const double fm = fn(m);
+    if (std::isnan(fa) || std::isnan(fb) || std::isnan(fm)) return std::nan("");
+    const double whole = (b - a) / 6.0 * (fa + 4.0 * fm + fb);
+    return adaptive_simpson_recurse(fn, a, b, fa, fb, fm, whole, tol, max_depth);
 }
 
 // Adaptive grid scan: find intervals where f changes sign.

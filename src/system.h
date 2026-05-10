@@ -1008,36 +1008,43 @@ abs(x) / x = undefined iff x = 0
     // Three cases (in order of preference): equation RHS / FormulaCall output
     // / literal expression. Unrecognized forms preserve the original
     // `integral(...)` call so downstream stages can surface a useful error.
+    //
+    // M2: also handles the 4-arg definite form `integral(f, x, a, b)`.
+    // Strategy: try symbolic F(b) - F(a); if that fails, fall back to
+    // adaptive Simpson when both bounds evaluate numerically. If both paths
+    // fail, preserve the unevaluated FUNC_CALL.
     [[nodiscard]] ExprPtr resolve_integral_calls(ExprPtr e) {
         return tree_map(e, [&](ExprPtr node) -> ExprPtr {
-            if (node->type != ExprType::FUNC_CALL || node->name != "integral" ||
-                node->args.size() != 2) return node;
+            if (node->type != ExprType::FUNC_CALL || node->name != "integral")
+                return node;
+            const size_t nargs = node->args.size();
+            if (nargs != 2 && nargs != 4) return node;
             const Expr* target_expr = node->args[0];
             const Expr* var_expr    = node->args[1];
             if (!is_var(var_expr))
                 throw std::runtime_error("integral: second argument must be a variable name");
             const std::string& var = var_expr->name;
 
-            ExprPtr integrated = nullptr;
+            ExprPtr antideriv = nullptr;
 
             // Case 1: target is a Var that names a system equation.
             if (is_var(target_expr)) {
                 const std::string& tname = target_expr->name;
-                // not std::find_if: body invokes symbolic_integrate_simplified (allocates) and assigns captured `integrated`
+                // not std::find_if: body invokes symbolic_integrate_simplified (allocates) and assigns captured `antideriv`
                 for (const auto& eq : equations) {
                     // cppcheck-suppress useStlAlgorithm
                     if (eq.lhs_var == tname) {
-                        integrated = symbolic_integrate_simplified(*eq.rhs, var);
+                        antideriv = symbolic_integrate_simplified(*eq.rhs, var);
                         break;
                     }
                 }
                 // Case 2: target is a Var that names a FormulaCall output.
-                if (!integrated) {
+                if (!antideriv) {
                     for (const auto& call : formula_calls) {
                         if (call.output_var != tname) continue;
                         const Expr* unfolded = unfold_formula_call_for_diff(call);
                         if (unfolded) {
-                            integrated = symbolic_integrate_simplified(*unfolded, var);
+                            antideriv = symbolic_integrate_simplified(*unfolded, var);
                         }
                         break;
                     }
@@ -1046,17 +1053,67 @@ abs(x) / x = undefined iff x = 0
 
             // Case 3 (or fallback when 1/2 produced nullptr): treat target as
             // a literal expression.
-            if (!integrated) {
-                integrated = symbolic_integrate_simplified(*target_expr, var);
+            if (!antideriv) {
+                antideriv = symbolic_integrate_simplified(*target_expr, var);
             }
 
-            // If everything failed, keep the original `integral(...)` call.
-            if (!integrated) {
-                trace.step("  integral: cannot integrate " + expr_to_string(target_expr)
-                           + " w.r.t. " + var + " — keeping symbolic form");
-                return node;
+            // 2-arg: indefinite integral. Substitute the antiderivative
+            // directly (or keep symbolic if integration failed).
+            if (nargs == 2) {
+                if (!antideriv) {
+                    trace.step("  integral: cannot integrate " + expr_to_string(target_expr)
+                               + " w.r.t. " + var + " — keeping symbolic form");
+                    return node;
+                }
+                return antideriv;
             }
-            return integrated;
+
+            // 4-arg: definite integral. Symbolic path: F(b) - F(a) when an
+            // antiderivative is available; otherwise adaptive Simpson on the
+            // raw integrand. Both fail → keep symbolic FUNC_CALL.
+            const Expr* lo_expr = node->args[2];
+            const Expr* hi_expr = node->args[3];
+            if (antideriv) {
+                // const_cast: ExprPtr is `Expr*`; the arena owns nodes mutably
+                // even when held through const Expr* aliases (substitute does
+                // not mutate through this argument).
+                auto F_hi = simplify(substitute(antideriv, var, const_cast<Expr*>(hi_expr)));
+                auto F_lo = simplify(substitute(antideriv, var, const_cast<Expr*>(lo_expr)));
+                auto diff = simplify(Expr::BinOpExpr(BinOp::SUB, F_hi, F_lo));
+                // If the symbolic difference collapses to a finite numeric,
+                // we're done — return the constant. If it stays symbolic
+                // (free variables in bounds), return the symbolic form too.
+                auto val = evaluate(*diff);
+                if (val) {
+                    if (std::isfinite(val.value())) return Expr::Num(val.value());
+                    // NaN/inf — fall through to numeric path.
+                } else {
+                    return diff;  // symbolic bounds — keep the closed form
+                }
+            }
+
+            // Numeric fallback: adaptive Simpson. Requires both bounds to
+            // evaluate to finite numbers.
+            auto lo_val = evaluate(*lo_expr);
+            auto hi_val = evaluate(*hi_expr);
+            if (lo_val && hi_val
+                && std::isfinite(lo_val.value()) && std::isfinite(hi_val.value())) {
+                // Build a numeric closure: substitute `var` with sample x,
+                // simplify+evaluate. Constant-fold once outside the loop is
+                // not safe — different x produces different trees.
+                ExprPtr target_ptr = const_cast<Expr*>(target_expr);
+                auto fn = [&](double x) -> double {
+                    const ExprPtr subst = substitute(target_ptr, var, Expr::Num(x));
+                    auto v = evaluate(*subst);
+                    return v ? v.value() : std::nan("");
+                };
+                const double result = adaptive_simpson(fn, lo_val.value(), hi_val.value());
+                if (std::isfinite(result)) return Expr::Num(result);
+            }
+
+            trace.step("  integral: cannot evaluate definite " + expr_to_string(target_expr)
+                       + " w.r.t. " + var + " — keeping symbolic form");
+            return node;
         });
     }
 
@@ -3680,9 +3737,14 @@ struct CLIDiffQuery {
 
 // Future #16 (M1): `integral(target_expr, var)=?[alias]` CLI query target.
 // Mirrors CLIDiffQuery exactly; default alias is "integral_<var>".
+// M2: `lo_text` / `hi_text` carry the optional definite-integral bounds. Both
+// empty for the indefinite form `integral(f, x)=?`; both populated for the
+// 4-arg form `integral(f, x, a, b)=?`. Parsed-time strings (no Expr yet).
 struct CLIIntegralQuery {
     std::string target_text;
     std::string var;
+    std::string lo_text;  // empty if indefinite
+    std::string hi_text;  // empty if indefinite
     std::string alias;
 };
 
@@ -3880,28 +3942,44 @@ struct CLIQuery {
             continue;
         }
 
-        // Future #16 (M1): `integral(target_expr, var)=?[alias]` — mirror diff parsing.
+        // Future #16 (M1+M2): `integral(target_expr, var)=?[alias]` (indefinite)
+        // or `integral(target_expr, var, lo, hi)=?[alias]` (definite, 4-arg).
+        // The split harvests ALL top-level commas (paren AND bracket depth ==
+        // 0 — vec/mat literals embed COMMAs inside [...] just like
+        // `parse_call_args`). Then 2-arg / 4-arg forms dispatch by piece count;
+        // any other count is an error.
         if (val.size() >= 1 && val[0] == '?'
             && name.size() > 9 && name.compare(0, 9, "integral(") == 0
             && name.back() == ')') {
             std::string inner = name.substr(9, name.size() - 10);
-            int pd = 0; size_t comma_pos = std::string::npos;
-            // justified: char-cursor — captures comma offset for substr split
-            for (size_t i = 0; i < inner.size(); i++) {
-                if (inner[i] == '(') pd++;
-                else if (inner[i] == ')') pd--;
-                else if (inner[i] == ',' && pd == 0) { comma_pos = i; break; }
+            std::vector<std::string> pieces;
+            { int pd = 0; size_t start = 0;
+              // justified: char-cursor; captures piece boundaries via substr(start, i - start)
+              for (size_t i = 0; i < inner.size(); i++) {
+                  const char c = inner[i];
+                  if (c == '(' || c == '[') pd++;
+                  else if (c == ')' || c == ']') pd--;
+                  else if (c == ',' && pd == 0) {
+                      pieces.push_back(trim(inner.substr(start, i - start)));
+                      start = i + 1;
+                  }
+              }
+              pieces.push_back(trim(inner.substr(start)));
             }
-            if (comma_pos == std::string::npos)
-                throw std::runtime_error("integral(): expected target and variable separated by ','");
-            const std::string target = trim(inner.substr(0, comma_pos));
-            const std::string ivar   = trim(inner.substr(comma_pos + 1));
+            if (pieces.size() != 2 && pieces.size() != 4)
+                throw std::runtime_error("integral(): expected 2-arg `integral(f, x)` or 4-arg `integral(f, x, a, b)`");
+            const std::string target = pieces[0];
+            const std::string ivar   = pieces[1];
+            const std::string lo_text = (pieces.size() == 4) ? pieces[2] : std::string();
+            const std::string hi_text = (pieces.size() == 4) ? pieces[3] : std::string();
             if (target.empty() || ivar.empty())
                 throw std::runtime_error("integral(): missing target or variable");
+            if (pieces.size() == 4 && (lo_text.empty() || hi_text.empty()))
+                throw std::runtime_error("integral(): missing definite-integral bound");
             std::string rest = trim(val.substr(1));
             if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — integral is single-result
             const std::string alias = rest.empty() ? ("integral_" + ivar) : rest;
-            q.integral_queries.push_back({target, ivar, alias});
+            q.integral_queries.push_back({target, ivar, lo_text, hi_text, alias});
             continue;
         }
 

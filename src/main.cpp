@@ -421,7 +421,12 @@ int main(int argc, const char* argv[]) {
         if (!query.integral_queries.empty()) {
             std::string injected;
             for (const auto& iq : query.integral_queries) {
-                injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var + ")\n";
+                if (iq.lo_text.empty() || iq.hi_text.empty()) {
+                    injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var + ")\n";
+                } else {
+                    injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var
+                              + ", " + iq.lo_text + ", " + iq.hi_text + ")\n";
+                }
             }
             sys.load_string(injected, "<cli-integral>");
             for (const auto& iq : query.integral_queries) {

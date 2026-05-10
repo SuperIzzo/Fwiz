@@ -107,19 +107,18 @@ The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than pr
 
 `derive_all` uses a 3-point Schwartz–Zippel fingerprint; the M3-6 test uses 5 branch-distinguishing points. Post-M1 (added sin/cos second inverse branches), 4 candidates collide on `derive_all`'s 3 test points but diverge on the test's 5 — `derive_all` retains them (correct under its resolution); the original `dup_count == 0` assertion was too strict. The test now allows `dup_count <= 4` with a comment explaining the cascade. Underlying fix (extend test points or add structural canonicalization, ~30-50 LOC) tracked in Future.md #12f.
 
-## 13. Symbolic integration — current scope (Cycle 1 M1, 2026-05-10)
+## 13. Symbolic integration — current scope (M1+M2, 2026-05-10)
 
-Indefinite Tier 1 integration via `integral(f, x)` shipped in M1. What works and what does not:
+Indefinite Tier 1 integration via `integral(f, x)` shipped in M1; u-substitution, definite integrals, and adaptive Simpson fallback shipped in M2. What works and what does not:
 
-**Works:** ~25 atomic patterns: constants (`integral(c, x) → c*x`), power rule (`x^n → x^(n+1)/(n+1)`), `1/x → log(x)`, `e^x → e^x`, `sin/cos/tan(x)` antiderivatives, linearity over ADD/SUB, scalar MUL/DIV. Two surfaces: inline `f = integral(g, x)` (resolved at load time via post-load pass) and `integral(target, var)=?[alias]` CLI query. Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL — same convention as `diff(...)`; observable in `--steps` traces and output round-trip.
+**Works:** ~25 atomic Tier 1 patterns: constants (`integral(c, x) → c*x`), power rule (`x^n → x^(n+1)/(n+1)`), `1/x → log(x)`, `e^x → e^x`, `sin/cos/tan(x)` antiderivatives, linearity over ADD/SUB, scalar MUL/DIV. M2 u-substitution via `try_u_sub_integrate` (e.g. `integral(2*x*cos(x^2), x) → sin(x^2)`, `integral(x*e^(x^2), x) → e^(x^2)/2`). Definite 4-arg form `integral(f, x, a, b)` with symbolic F(b)-F(a) primary path (e.g. `integral(x^2, x, 0, 3) → 9`). Adaptive Simpson numeric fallback for non-elementary definite integrands (e.g. `integral(e^(-x^2), x, 0, 1) ≈ 0.7468`). Two CLI surfaces: `integral(target, var)=?[alias]` (indefinite) and `integral(target, var, lo, hi)=?[alias]` (definite). Unrecognized forms preserve the unevaluated `integral(...)` FUNC_CALL — same convention as `diff(...)`; observable in `--steps` traces and output round-trip.
 
 **Does not work yet:**
-- Definite integrals (`integral(f, x, a, b)` 4-arg form) — deferred to M2.
-- Derivative-divides u-substitution (e.g. `integral(2*x*cos(x^2), x)`) — deferred to M2.
-- Adaptive Simpson numeric fallback — deferred to M2.
 - Integration by parts / LIATE heuristic — deferred to M3.
 - `+ C` constant of integration — deliberately excluded (would not round-trip as `.fw`).
 - Risch algorithm, improper integrals, multi-variable integration, cyclic IBP, trig substitution, partial fractions, special functions — see cross-arc reopen triggers in Future #16.
+
+**Adaptive Simpson failure modes:** `adaptive_simpson` (expr.h, `ADAPTIVE_SIMPSON_MAX_DEPTH=30`) short-circuits to NaN whenever the integrand evaluator returns NaN at any sample point. A NaN result causes `resolve_integral_calls` to preserve the unevaluated `integral(...)` FUNC_CALL rather than return a numeric approximation. Depth exhaustion (more than 2^30 sub-intervals) produces a best-effort approximation without error indication — only integrands with rapid oscillation or near-singularities at bounded-away sample points are expected to hit this.
 
 **Domain assumption:** `integral(1/x, x)` emits `log(x)`, not `log(abs(x))`. The mathematically complete antiderivative for unknown-sign `x` requires `abs(x)`, but emitting it unconditionally pessimises concrete-domain cases. Deferred to a domain-aware pass gated on Future #31 (global-condition propagation). See Future #63.
 

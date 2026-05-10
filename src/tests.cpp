@@ -12702,6 +12702,97 @@ void test_symbolic_integrate_resolve_at_load_consumers() {
     ASSERT_EQ(int_result, "x^3 / 3", "resolve_integral: antideriv → x^3/3");
 }
 
+// ---- M2 ----
+
+void test_symbolic_integrate_u_sub() {
+    SECTION("symbolic_integrate: derivative-divides u-substitution (M2 BLOCKING #1, #2)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+
+    // M2 BLOCKING #1: integral(2*x*cos(x^2), x) = sin(x^2)
+    // u = x^2; g' = 2*x; residual after cancel = cos(u); ∫cos(u) du = sin(u);
+    // back-sub → sin(x^2). Constant-coefficient cancellation.
+    ASSERT_EQ(integral_str("2*x*cos(x^2)", "x"), "sin(x^2)",
+        "M2 BLOCKING #1: integral(2*x*cos(x^2), x) = sin(x^2) via u=x^2");
+
+    // M2 BLOCKING #2: integral(x*e^(x^2), x) = e^(x^2) / 2
+    // u = x^2; g' = 2*x; cancel x against 2*x leaves residual e^u / 2;
+    // ∫(e^u / 2) du = e^u / 2; back-sub → e^(x^2) / 2. POW is right-assoc
+    // so `e^x^2` denotes `e^(x^2)` — no inner parens emitted by expr_to_string.
+    ASSERT_EQ(integral_str("x*e^(x^2)", "x"), "e^x^2 / 2",
+        "M2 BLOCKING #2: integral(x*e^(x^2), x) = e^x^2 / 2 via u=x^2");
+
+    // Negative case: x*sin(x) — no g'(x) candidate cancels (g=x → g'=1 leaves
+    // residual x*sin(x); g=sin(x) → g'=cos(x), residual x*sin(x)/cos(x) still
+    // contains var. Stays unevaluated, awaits IBP.
+    {
+        const auto* e = parse("x * sin(x)");
+        const auto* d = symbolic_integrate(*e, "x");
+        ASSERT(d == nullptr, "M2 negative: integral(x*sin(x), x) still nullptr — awaits IBP");
+    }
+}
+
+// Helper: try to resolve a definite integral expression and return the result
+// as a double. Returns NaN on any failure (so tests can ASSERT on the value
+// without crashing the runner if the feature isn't implemented yet).
+static double resolve_definite_integral(const std::string& src) {
+    try {
+        FormulaSystem sys;
+        sys.load_string(src);
+        auto result = sys.resolve_all("v", {});
+        if (result.is_discrete() && result.discrete().size() == 1)
+            return result.discrete()[0];
+    // NOLINTNEXTLINE(bugprone-empty-catch) — test helper, NaN signals "not resolvable"
+    } catch (const std::runtime_error&) {}
+    return std::nan("");
+}
+
+void test_symbolic_integrate_definite_symbolic() {
+    SECTION("symbolic_integrate: definite F(b)-F(a) symbolic path (M2 BLOCKING #3, #4)");
+
+    // M2 BLOCKING #3: integral(x^2, x, 0, 3) = 9
+    // Symbolic path: F(x) = x^3/3; F(3) - F(0) = 9 - 0 = 9. No filesystem
+    // touch — load_string carries the equation directly.
+    {
+        const double v = resolve_definite_integral("v = integral(x^2, x, 0, 3)\n");
+        ASSERT(std::abs(v - 9.0) < 1e-9,
+            "M2 BLOCKING #3: integral(x^2,x,0,3) = 9 (got NaN if not implemented)");
+    }
+
+    // M2 BLOCKING #4: integral(sin(x), x, 0, pi) = 2
+    // F(x) = -cos(x); F(pi) - F(0) = -(-1) - (-(1)) = 1 - (-1) = 2.
+    {
+        const double v = resolve_definite_integral("v = integral(sin(x), x, 0, pi)\n");
+        ASSERT(std::abs(v - 2.0) < 1e-9,
+            "M2 BLOCKING #4: integral(sin(x),x,0,pi) = 2");
+    }
+}
+
+void test_symbolic_integrate_definite_numeric() {
+    SECTION("symbolic_integrate: adaptive Simpson numeric fallback (M2 BLOCKING #5)");
+
+    // M2 BLOCKING #5: integral(e^(-x^2), x, 0, 1) ≈ 0.7468...
+    // Symbolic path FAILS (no closed-form for ∫e^(-x^2)) — adaptive Simpson
+    // engages. Reference: erf(1) * sqrt(pi) / 2 = 0.7468241328124270254...
+    {
+        const double v = resolve_definite_integral("v = integral(e^(-x^2), x, 0, 1)\n");
+        ASSERT(std::abs(v - 0.7468241328) < 1e-4,
+            "M2 BLOCKING #5: integral(e^(-x^2),x,0,1) ≈ 0.7468 (adaptive Simpson)");
+    }
+
+    // Negative case: symbolic path SUCCEEDS for x^2 — Simpson must NOT be
+    // invoked (we'd see roundoff if it were). Exact path returns 9.0 exactly.
+    {
+        const double v = resolve_definite_integral("v = integral(x^2, x, 0, 3)\n");
+        ASSERT(v == 9.0,
+            "M2: symbolic path picked over numeric for integral(x^2,x,0,3) → exact 9");
+    }
+}
+
 // T2.2: Two FormulaSystem instances should each get _fc0 (per-instance counter).
 // Pre-fix: a static counter inside extract_positional_calls makes the second
 // instance produce _fc1 (and so on). Post-fix: each instance has its own
@@ -13543,6 +13634,10 @@ int main() {
     test_symbolic_integrate_surface_inline();
     test_symbolic_integrate_surface_cli();
     test_symbolic_integrate_resolve_at_load_consumers();
+    // Symbolic integration M2 (2026-05-10 cycle): u-sub + definite + Simpson
+    test_symbolic_integrate_u_sub();
+    test_symbolic_integrate_definite_symbolic();
+    test_symbolic_integrate_definite_numeric();
 
     // T2+T3 cleanup cycle (M1: correctness, 4 silent bugs)
     test_t22_positional_call_counter_per_instance();

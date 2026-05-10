@@ -38,7 +38,7 @@ Current capabilities:
 - ValueSet returns (ranges when exact values unavailable)
 - Symbolic derivation (`--derive`) with formula call unfolding
 - Symbolic differentiation (`diff(f, x)` builtin + `diff(...)=?` CLI query)
-- Symbolic integration — Tier 1 indefinite (`integral(f, x)` builtin + `integral(...)=?` CLI query) — Future #16 M1
+- Symbolic integration — Tier 1 indefinite + M2 u-substitution + M2 definite (`integral(f, x)` and `integral(f, x, a, b)` builtins; `integral(...)=?` CLI query); adaptive Simpson numeric fallback — Future #16 M1+M2
 - Verification (`--verify`)
 - Explore mode (`--explore`, `--explore-full`)
 - CLI expression values (`width=2^3, height=sqrt(9)`)
@@ -209,13 +209,13 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 
 Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per design. Running after rewrite rules load ensures `simplify()` inside `symbolic_diff_simplified` can apply all rules (including the three new `x^a/x^b`, `abs(x)/x`, and `sign` rules) to the differentiated result.
 
-**Symbolic integration (`integral(f, x)`) — Tier 1 indefinite, Future #16 M1 (2026-05-10)** (sibling of Symbolic differentiation above; same structural pattern throughout)
+**Symbolic integration (`integral(f, x)`) — Tier 1 indefinite + M2 u-sub & definite, Future #16 M1+M2 (2026-05-10)** (sibling of Symbolic differentiation above; same structural pattern throughout)
 
 `symbolic_integrate(const Expr&, const std::string& var) → ExprPtr` — Free function in `expr.h`, sibling of `symbolic_diff`, mirroring its return-on-`nullptr`-on-miss contract. **`e^x` antiderivative convention:** result is `BinOpExpr(POW, Var("e"), Var(var))` — the same `e^x` FUNC_CALL sugar is not used; consumers that pattern-match on `e^x` must match this POW form. Per-AST-class switch + per-builtin if-chain. Tier 1 only — ~25 atomic patterns:
 
 - `NUM` (constant `c`) → `c*x`. `VAR` → `x^2/2` if name matches `var`, else `name*x`.
 - `BINOP::ADD/SUB` — linearity (`∫(l ± r) = ∫l ± ∫r`).
-- `BINOP::MUL` — `c*f` only (one operand constant w.r.t. `var`); both-contain-var returns `nullptr` (M2/M3 territory).
+- `BINOP::MUL` — `c*f` (one operand constant w.r.t. `var`); both-contain-var triggers **M2 derivative-divides u-substitution** (see below). Falls through to `nullptr` for IBP-class inputs (M3 territory).
 - `BINOP::DIV` — `f/c`, `c/x`, and `1/x → log(x)`.
 - `BINOP::POW` — `Var(var)^n` (`n` numeric, `n ≠ -1`) → `x^(n+1)/(n+1)`; `Var(var)^(-1) → log(x)`; `e^Var(var) → e^Var(var)`.
 - `UNARY_NEG` — integrate child, negate.
@@ -225,7 +225,11 @@ Anything outside this list returns `nullptr`. The wrapper `symbolic_integrate_si
 
 **Unevaluated-fallback contract:** when `symbolic_integrate` returns `nullptr`, the post-load pass `resolve_integral_in_equations` keeps the original `integral(target, var)` FUNC_CALL in place — same convention as diff. The result is observable to downstream stages (e.g., `--steps` traces, output round-trip) as a literal `integral(...)` form, signalling "no rule matched."
 
-**Out of scope at M1** (deferred to subsequent cycles in the integration arc): u-substitution (M2), definite integrals 4-arg `integral(f, x, a, b)` (M2), adaptive Simpson numeric fallback (M2), integration by parts (M3), `+ C` constant of integration (never — would not round-trip), domain-aware antiderivative `log(abs(x))` (gated on Future #31 condition propagation), Risch / cyclic IBP / improper / multi-variable / trig substitution / partial fractions / special functions (per cross-arc reopen triggers in `.fwiz-workflow/master-plan.md`).
+**Out of scope at M2** (deferred to M3 / future cycles): integration by parts (M3), `BuiltinMeta` registry extraction (M3), `+ C` constant of integration (never — would not round-trip), domain-aware antiderivative `log(abs(x))` (gated on Future #31 condition propagation), Risch / cyclic IBP / improper / multi-variable / trig substitution / partial fractions / special functions (per cross-arc reopen triggers in `.fwiz-workflow/master-plan.md`).
+
+**M2 — Derivative-divides u-substitution** (`try_u_sub_integrate` in expr.h, called from MUL when both factors mention `var`): enumerates candidate sub-expressions `g(x)` of the integrand to depth `U_SUB_DEPTH = 2`, sorted ascending by leaf count (simplest first — avoids `log(e)` artifacts when a chain-rule POW derivative would be picked). For each `g`, computes `g_prime = symbolic_diff_simplified(g, var)`; calls `try_cancel(integrand, g_prime)` to symbolically divide; substitutes `g → Var("_u_sub_")` in the residual via `cse_replace`; if no `var` remains, integrates w.r.t. `_u_sub_` and back-substitutes. Returns the simplified result on first match, `nullptr` if no candidate cancels cleanly. The root expression itself is excluded from candidates (cancelling against your own derivative is degenerate). `try_cancel(expr, factor)` is the matching primitive: returns `simplify(DIV(expr, factor))` if no subtree of the result equals `factor` structurally; else `nullptr` (heuristic — perfect cancellation is hard).
+
+**M2 — Definite integrals (4-arg form)**. CLI parsing in `parse_cli_query` (system.h) accepts both `integral(f, x)` and `integral(f, x, a, b)` — the inner-comma split tracks paren AND bracket depth (mirror of `parse_call_args` post-Cycle-B), takes either 2 or 4 pieces, anything else is a parse error. `CLIIntegralQuery` carries optional `lo_text` / `hi_text`. `resolve_integral_calls` (system.h) dispatches the 4-arg form: try the symbolic path (compute antiderivative `F`, return `simplify(F(b) - F(a))`); if `evaluate` collapses the difference to a finite number, return `Num(value)`; if it stays symbolic (free vars in bounds), return the symbolic difference. Numeric fallback: `adaptive_simpson` (expr.h, sibling of `newton_solve`) — recursive Simpson's rule with bisection error estimate `|S(a,b) - S(a,m) - S(m,b)| / 15`, tolerance defaults to `NUMERIC_TOLERANCE`, depth bounded by `ADAPTIVE_SIMPSON_MAX_DEPTH = 30`. NaN at any sample short-circuits to NaN → caller preserves the unevaluated FUNC_CALL.
 
 **`resolve_at_load(rewriter, up_to)` primitive** (Future #48, system.h) — Generic post-load tree-rewriting loop extracted at M1. Both `resolve_diff_in_equations` and `resolve_integral_in_equations` are 4-line wrappers around it. Subsequent post-load passes (e.g., units #7, LaTeX hints #9, typed-binding rewrites once #53 ships) plug in here. The `up_to` dirty-flag pattern (`diff_resolved_up_to_`, `integral_resolved_up_to_`) ensures a second `load_string` (e.g., the CLI's synthesized `<alias> = integral(...)` injection) only walks the new tail.
 
