@@ -594,7 +594,7 @@ diff_head: <commit>
 <output>
 ```
 
-The orchestrator spawns each `Haiku prompt: <key>` line with the listed grader and prompt body. It collects responses into `.fwiz-workflow/blind-spot-responses.md` keyed by the same identifiers. It may also spawn an Opus-side run per prompt (model override) and record under `Opus response: <key>`.
+The orchestrator spawns each `Haiku prompt: <key>` line with the listed grader and prompt body. **Per the file-write convention** (orchestrator profile §Phase 6 Step 2), each spawn brief appends `"Write your output to /tmp/blind-spot-responses/<key>.txt using the Write tool."` Haiku graders have `Write` in their frontmatter. The orchestrator collects only one-line confirmations and builds `.fwiz-workflow/blind-spot-responses.md` as an index of file paths keyed by `<key>`. ANALYZE reads the files directly. May also spawn Opus-side run per prompt (model override) writing to `<key>.opus.txt`.
 
 ### Orchestrator-collected responses: `.fwiz-workflow/blind-spot-responses.md`
 

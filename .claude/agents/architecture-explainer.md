@@ -1,7 +1,7 @@
 ---
 name: architecture-explainer
 description: Explain a codebase's architecture given only file paths and per-file public symbols. The Haiku-grader for architecture-level comprehension.
-tools: Read
+tools: Read, Write
 model: haiku
 color: cyan
 ---

@@ -1,7 +1,7 @@
 ---
 name: code-explainer-mechanics
 description: Name the role each parameter, variable, and control structure plays in a function — not their C++ types. Given only the function body, comments stripped.
-tools: Read
+tools: Read, Write
 model: haiku
 color: cyan
 ---

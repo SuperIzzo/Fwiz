@@ -1,7 +1,7 @@
 ---
 name: file-explainer
 description: Explain what a single source file does, its main components, and how they relate, given only the file body with comments stripped. The Haiku-grader for file-level comprehension.
-tools: Read
+tools: Read, Write
 model: haiku
 color: cyan
 ---

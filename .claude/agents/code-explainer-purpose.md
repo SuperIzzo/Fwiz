@@ -1,7 +1,7 @@
 ---
 name: code-explainer-purpose
 description: Write a documentation block explaining what a function is FOR — its intention, not its mechanism. Given only the function body, comments stripped.
-tools: Read
+tools: Read, Write
 model: haiku
 color: cyan
 ---
