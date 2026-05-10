@@ -103,6 +103,21 @@ Planned (see Future.md):
 
 All headers, no `.cpp` files except `main.cpp` and `tests.cpp`. ~15000 lines total including tests.
 
+### Validated architectural shape
+
+Cycle 2026-05-10 architecture-scope blind-spot ANALYZE confirmed (via two model-family-different floor graders reading only a symbol manifest, no prose) that the architecture is legible from symbols alone:
+
+- **Linear pipeline with a central domain module.** `lexer → parser → expr → system → main`. Both graders independently identified the layered structure and the dependency direction. New code should preserve this shape — see `docs/Code-Style.md` §"Architecture rules" for the rule statement.
+- **`expr.h` is the central domain.** Expression types, simplification, evaluation, primitive solvers, tree walkers, pattern matching, `ValueSet`, builtin metadata registry. New domain primitives belong here.
+- **`system.h` is the orchestrator.** Multi-equation resolution, `enumerate_candidates` (7 strategies), cross-equation elimination, derive mode (canonicalization + CSE), file loading, post-load passes, CLI query types. Algorithmic compositions belong here.
+- **`fit.h` is parallel to the main pipeline.** Imported by `system.h` and `main.cpp`; does not import `system.h`. Future parallel modules (e.g. a hypothetical `units.h` for dimensional analysis, `latex.h` for export) should follow the same shape.
+- **`trace.h` is a leaf utility.** Imported by the pipeline; imports nothing from it.
+
+**Outstanding architectural concerns** (tracked in `docs/Future.md`):
+
+- `expr.h` (3861 LOC) + `system.h` (4037 LOC) together account for ~88% of source LOC. Above the ~80% threshold codified in the Code-Style rule. The path forward is **T4.1** (extract `numeric.h` from `system.h` first, then `query.h`) plus **#R8** (intra-class section dividers as a cheap interim step).
+- The `FormulaSystem` class conflates engine concerns (rewrite rules, simplify, evaluate, candidate enumeration) and query/CLI concerns (CLI query types, derive output formatting). **#R12** in `docs/Future.md` is the `nuanced-refactor-candidate` capturing this; the design-track work would split a thin `Engine` / `Solver` interface from the orchestrator. Multi-cycle arc, not single-cycle.
+
 ### lexer.h
 
 Converts source text into tokens: `NUMBER`, `IDENT`, `PLUS`, `MINUS`, `STAR`, `SLASH`, `CARET`, `LPAREN`, `RPAREN`, `EQUALS`, `QUESTION`, `COMMA`, `END`.

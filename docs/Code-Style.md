@@ -324,4 +324,45 @@ Examples of rules that would live here once empirically derived:
 - "File names must be domain-meaningful, not generic (`Manager`, `Data`, `State` are warning signs)."
 - "Top-level public types in a file should cluster around a single role; if the file's public symbols span multiple roles, the file is a split candidate."
 
-_(none yet — populated by blind-spot-critic architecture-scope tests.)_
+### Rule (provisional): symbol-only manifests should make codebase purpose, module roles, and dependency direction inferable without prose
+
+**Origin:** Cycle 2026-05-10 — architecture-scope blind-spot ANALYZE (first architecture pass after staged 20-function sweep). Both floor graders (Haiku + Gemma), reading only `<file> (lines): types: ... functions: ...` manifests, identified **codebase purpose, module roles, dependency graph, and architectural pattern correctly**. Module names (`lexer.h`, `parser.h`, `expr.h`, `system.h`, `fit.h`, `trace.h`, `main.cpp`) and top-level type names (`Expr`, `Token`, `FormulaSystem`, `ValueSet`, `Condition`, `RewriteRule`) carry the architectural narrative without prose support.
+
+**Rule (positive form):** the codebase's architecture should be legible from a symbol-only manifest:
+
+- **File names are the layer names.** `lexer` / `parser` / `expr` / `system` / `fit` / `trace` / `main` each name a clear pipeline stage or domain. Generic names (`Manager`, `Data`, `State`, `util`) are forbidden; if such a name is proposed, the file's role hasn't been identified yet.
+- **Top-level types name domains, not abstractions.** `Expr`, `ExprArena`, `Token`, `FormulaSystem`, `ValueSet`, `Condition`, `RewriteRule` — each surfaces what the type IS in domain terms. `Handler`, `Helper`, `Wrapper`, `Adapter` are warning signs.
+- **Function names follow per-file patterns.** Parsers use `parse_*`; simplifiers use `simplify*`/`apply_rewrite_rules`; solvers use `resolve*`/`solve*`/`newton_solve`/`bisection_solve`; tree walkers use `tree_map*`. New code in a file should follow that file's verb conventions.
+- **Dependency direction is unidirectional.** `lexer → parser → expr → system → main`; `fit.h` parallel to the main pipeline; `trace.h` as utility. Reverse imports are forbidden — if `expr.h` would need to know about `system.h`, the dependency is mis-modelled.
+
+**How to verify:** run the architecture-scope blind-spot test (`/blind-spot-sweep` or auto-fire when `src/*.h`/`src/*.cpp` change). If both floor graders correctly identify the four axes (purpose, module roles, dependency graph, pattern) from the symbol-only manifest, the rule is satisfied. Failure on any axis = rename / re-layer / re-organise the affected file before proceeding.
+
+### Rule (provisional): a codebase whose two largest files together exceed ~80% of source LOC is a structural concern, not a domain-density signal
+
+**Origin:** Cycle 2026-05-10 — architecture-scope blind-spot ANALYZE. `expr.h` (3861 LOC) + `system.h` (4037 LOC) = 7898 LOC, ~88% of the manifest's source weight. Gemma flagged this as "Monolithic Core (file size)" *unprompted* — a `nuanced-refactor-candidate` per the floor-vs-supplementary verdict matrix. Haiku did not flag size; the disagreement is itself the signal that the weaker grader's working memory is taxed by the file weight.
+
+**Rule:** when a codebase's two (or fewer) largest files account for >80% of source LOC, file size is a structural variable to track, not a domain-density invariant. Specifically:
+
+- **A file approaching ~3000 LOC** is a candidate for split-by-responsibility, even if internally cohesive. If multiple sub-areas exist within the file (e.g. `numeric.h` extractable from `system.h`'s solver substrate), the split should be designed under a Future.md item with a concrete reopen trigger.
+- **A class within such a file approaching ~1500 LOC** is a candidate for intra-class section dividers (see file-organisation rule above) as a cheap interim step before split.
+- **The split must preserve dependency direction.** Extracting a sub-file from a large file should not reverse the pipeline (extracting `numeric.h` from `system.h` is fine because `system.h` calls `numeric.h`-content already; pulling `expr.h` symbols UP into `system.h` would reverse the layering).
+
+This rule is satisfied today by the open work in `Future.md`:
+- **#R8** (FormulaSystem intra-class section dividers) addresses intra-class structure cheaply.
+- **T4.1 trigger** (`numeric.h` extraction from `system.h`, then `query.h`) addresses the file-split path.
+- **#R12** (`nuanced-refactor-candidate` — engine/query API split) is the design-track sibling of T4.1.
+
+**Reopen trigger** (rule retirement): when `expr.h` and `system.h` together drop below ~70% of source LOC (via T4.1's `numeric.h` extraction or analogous splits), re-evaluate whether this rule still applies or has been outgrown.
+
+### Rule (positive datum): unidirectional pipelines with a central domain module are the validated architectural shape
+
+**Origin:** Cycle 2026-05-10 — architecture-scope blind-spot ANALYZE. Both floor graders independently identified the architecture as a "linear pipeline with a central domain module" (Haiku) / "Layered Architecture with a strong emphasis on a Core Engine pattern" (Gemma). Both read the dependency direction correctly. The pattern is recognized without prose.
+
+**Rule:** future architectural additions should preserve this shape:
+
+- **The pipeline is `lexer → parser → expr → system → main`.** New modules slot into this chain or stand parallel to it (the `fit.h` precedent), never reverse it.
+- **Parallel modules attach at the orchestration layer.** `fit.h` is consumed by `system.h` and `main.cpp`; it does not import `system.h`. Future parallel modules (e.g. a hypothetical `units.h` for dimensional analysis, `latex.h` for export) should follow the same pattern: `expr.h`-imports-only, consumed at the system/main layer.
+- **`expr.h` is the central domain.** It owns expression types, simplification, evaluation, and primitive solvers. New domain primitives (a new tree walker, a new value type, a new pattern-matching strategy) belong here. Algorithmic compositions / orchestrations belong in `system.h`.
+- **Utility modules (`trace.h`, future `numeric.h`) are leaves.** They are imported by the pipeline; they import nothing from it.
+
+**How to verify:** any new `.h` introduced to `src/` should pass the architecture-scope blind-spot test (run `/blind-spot-sweep`). If the new file's role isn't legible from its name + symbols alone, redesign before merging.

@@ -962,3 +962,27 @@ A downstream agent reading Gemma's interpretation would conclude: "`all_cancel` 
 **Below the cross-cycle rule-extraction threshold** but worth tracking — alongside #R10 (`is_iff`), this is the second confabulation in this batch on identifier-semantics, and the third across 15 sampled (F8 `charge_budget`, F11 `is_iff`, F15 `all_cancel`/`lc`/`rc`). Pattern: cryptic abbreviations or short names that pattern-match to nearest-common-meaning trip Gemma's reading. Logged as soft pattern; rule extraction defers until a 4th instance appears in a future cycle.
 
 **Reopen trigger:** post-rename, blind-spot re-runs `simplify_div` → Gemma mechanics scores match/specific without `all_cancel` zero-misread or `lc`/`rc` polynomial-misread. Alternatively: any future blind-spot cycle flags `all_cancel` semantics in another function (or similar two-letter coefficient names).
+
+## #R12. Refactor: `nuanced-refactor-candidate` — missing query/engine API abstraction layer
+
+**From:** Cycle blind-spot 2026-05-10 architecture-scope batch (first architecture-scope ANALYZE in the staged sweep). Floor (Haiku + Gemma) **passed** the comprehension gate on all four axes (purpose, module roles, dependency graph, pattern). However, **Gemma surfaced an unprompted concern** that Haiku did not flag: *"the manifest does not reveal if there is a higher-level abstraction layer (e.g., a specific API or interface) that cleanly separates the user-facing query logic from the underlying symbolic computation."*
+
+Per the floor-vs-supplementary discipline (one floor grader flagging concerns the other missed = `nuanced-refactor-candidate`, not gate failure), this is **logged for tracking** rather than treated as a structural failure.
+
+**Diagnosis:** the `FormulaSystem` class currently absorbs both **engine concerns** (rewrite rules, simplify, evaluate, candidate enumeration, numeric solving) AND **query/CLI concerns** (CLIIntegralQuery, parse_cli_query, derive_all output formatting, format_derived). A reader navigating from `main.cpp` cannot distinguish "what's the engine's public API" from "what's the CLI's view of the engine." The concerns share one class, with no interface boundary between them.
+
+This is the architecture-scope sibling of **#R8** (FormulaSystem intra-class section dividers): #R8 makes the intra-class structure visible without moving code; this entry asks whether the engine's *public surface* should be split into a thin interface (`Engine` or `Solver`) consumed by a separate query/orchestration layer (`FormulaSystem` or `QueryEngine`).
+
+**Proposed (low-priority, design-track):**
+- Sketch an `Engine` (or `Solver`) class containing the substrate: rewrite rules, equations, builtins, `try_resolve`, `enumerate_candidates`, `simplify`, `evaluate`. Keep `FormulaSystem` as the orchestrator that owns CLI query types, derive output, format helpers, and the engine.
+- Section dividers (#R8) is the cheap step toward this — making intra-class boundaries visible is prerequisite to extraction.
+- The full extraction is a multi-cycle arc, not a single-cycle refactor.
+
+**Pattern coverage:** 1 codebase site (`class FormulaSystem` — the only place the conflation exists). Below cross-cycle rule-extraction threshold; this is a single design call, not a generalisable rule.
+
+**Reopen trigger:** Either of:
+1. **#R8 is shipped** AND a follow-up architecture-scope critic still flags the engine/query mixed-concern reading. The dividers refactor is the cheap test — if intra-class structure visibility resolves the flag, no extraction needed.
+2. A new contributor / agent asks "where does the engine end and the CLI begin?" — the question is itself the reopen condition.
+3. The orchestrator considers an arc proposal (`/plan-campaign`) for a public-API surface — this entry becomes its starting point.
+
+**Locked:** No — open for the visionary's tier classification. This is borderline wrapper-tool (since the user's vision emphasises "tiny fast core, infinite extendability via .fw rules" — a clean engine API would advance that), and borderline parked (the extraction is multi-cycle and currently has no concrete trigger).
