@@ -1068,3 +1068,46 @@ No code moves. Goal: a file-explainer reading fit.h cold can navigate the 4 regi
 3. **A second sub-1500-LOC file in the codebase** flags the same structure-without-size pattern in a future cycle. At N≥2 distinct sites, promote to a file-organisation rule (currently below the rule-extraction threshold; this is a single-file refactor item).
 
 **Locked:** No — open for the visionary's tier classification. Cheap, low-risk, single-cycle work — likely in-scope.
+
+## #R15. Refactor: `extract_positional_calls` — `nuanced-refactor-candidate` — dead `eq_lhs` parameter
+
+**From:** Cycle blind-spot 2026-05-10 F21-F25 function-scope batch. Floor (Haiku + Gemma) **passed** the comprehension gate on both axes (purpose, mechanics) cleanly. However, **Haiku surfaced a principled hedge that Gemma did not flag**: on the `eq_lhs` parameter, Haiku's mechanics response said *"role: cannot be determined — it is passed through to recursive calls but never read or modified in the visible body."*
+
+Gemma, in contrast, confabulated a "context or comparison" role for the same parameter — confidence without evidence at the same param. Per the floor-vs-supplementary discipline (one floor grader flagging concerns the other missed = `nuanced-refactor-candidate`, not gate failure), this is **logged for tracking** rather than treated as a gate failure.
+
+**Verification (grep, src/system.h:783-862):** The body of `extract_positional_calls` references `eq_lhs` only in five places, ALL pass-through recursive self-calls. The parameter is never compared, stored, written into `FormulaCall` fields, used in section lookup, or read in any branch. Sole caller (line 868) passes `eq.lhs_var` — but the parameter is genuinely dead within this function.
+
+**Diagnosis:** **naming + dead-parameter.** Either:
+1. The parameter was intended for future use (e.g. recording the LHS context in `FormulaCall` for error reporting) and the wiring was never completed — a soft TODO with no comment.
+2. The parameter is a vestige of an earlier design where the LHS was used (e.g. to disambiguate call sites, to detect self-reference) and was removed without parameter cleanup.
+3. The parameter is required by an interface contract that the visible body doesn't exercise — but no override or virtual signature exists.
+
+Without comment or git-blame archaeology, the floor-grader read cannot disambiguate. Haiku's hedge is the strongest signal: *the parameter exists, it doesn't visibly do anything, the function still compiles and works correctly.*
+
+**Proposed (low-priority, single-pass):** Choose one of:
+1. **Remove the parameter.** Update the sole caller (system.h:868) to drop the `eq.lhs_var` argument. Cheapest action; preserves all current behaviour. Trivially verifiable.
+2. **Wire it into `FormulaCall`.** Add `FormulaCall::source_lhs` (or similar) field, set `call.source_lhs = eq_lhs` at line 821-ish. Useful if future error messages or derive-trace need to know "which equation this call came from."
+3. **Document the intent with a comment.** If the parameter is required for some future use, name the future use in a `// TODO:` or `// NOTE:` comment so the next reader (Haiku, future agent, human) doesn't hedge on it again.
+
+**Recommendation:** **Option 1 (remove)**. The parameter has been dead for at least one major refactor cycle (the Integrals arc didn't touch this function). If a future use emerges, re-adding a parameter is a 2-line change. Keeping a dead parameter is a permanent legibility tax.
+
+**Pattern coverage:** 1 codebase site. Below cross-cycle rule-extraction threshold; this is a single-function refactor. However, if future blind-spot batches surface 1-2 more dead-parameter hedges from Haiku, promote to a Code-Style.md rule under "Empirically-derived rules": *unused parameters in private/internal functions should be removed; if interface-required, name the requirement in a `// NOTE:` comment.*
+
+**Reopen trigger:** Either of:
+1. A future blind-spot floor-grader sweep re-flags `extract_positional_calls` for any reason — even unrelated — then revisit and decide.
+2. A second blind-spot batch surfaces a Haiku "cannot be determined — passed through but never used" hedge on a different function. At N≥2 sites, promote to rule.
+3. Implementer touches `extract_positional_calls` for any reason; apply the cheap fix as part of that change.
+
+**Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Likely in-scope as cheap hygiene.
+
+## #R2 status update — 2026-05-10 F21-F25 retest
+
+**F22 `resolve_integral_calls` no longer flags at floor-grader read.** The 4-arg control-flow restructure (#R2) was filed at Cycle I-M2 and **deferred at meta-review consensus** (cycle-cleanup-bundle close, ~5 cycles back). At F21-F25 retest, BOTH floor graders (Haiku + Gemma) read the 2-arg-vs-4-arg dispatch, the three-tier antiderivative resolution, AND the FTC-with-Simpson-fallback path cleanly. Haiku names all 22 local vars including the FTC carriers; Gemma names 19 of 20 with no confabulations.
+
+**Disposition:** the meta-review deferral was correct. R2's "structurally confusing" diagnosis was Opus-the-scorer's call from a position of full context; floor graders without that context find the function legible. Per floor-vs-supplementary discipline, this means the gate verdict is **pass**, and the deferred action is effectively a `nuanced-refactor-candidate` (same channel as #R12, #R15).
+
+**Recommended action on #R2:** Either:
+- **Downgrade R2 to `nuanced-refactor-candidate` channel** (mirror #R12's framing) with reopen trigger "next blind-spot floor-grader failure on `resolve_integral_calls`."
+- **Close R2 as DONE-by-retest** with a note that 2x floor-grader passes constitute resolution. Defer to visionary's tier classification.
+
+No new R2-tracked refactor work is recommended. Two consecutive floor-grader passes (cycle-cleanup-bundle close + F22 retest) is strong evidence that the function reads cleanly without intervention.
