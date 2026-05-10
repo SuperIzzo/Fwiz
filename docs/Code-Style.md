@@ -236,6 +236,40 @@ enum class LiateRank : int {
 
 **Origin:** Cycle I-M3 — Haiku-B failure on `liate_priority` (T1=wrong-on-detail because rank values 5/4/3/2/1 are inline-magic without the LIATE-table comment).
 
+**Validated:** Cycle Cleanup-Bundle (2026-05-10) — A2 implemented this refactor exactly as Code-Style prescribed. Re-graded `liate_priority` at all three tiers: clean throughout (T1 mechanics moved from wrong-on-detail to match). The named-constant lift produced the predicted readability win **without any caller change** (call site continues to use ints for rank comparison). Strong evidence the rule's prescribed fix is correct. Future heuristic-priority functions should adopt the pattern at first authorship, not retrofit.
+
+### Rule: prefer named-struct `operator()` over `std::function` for recursive tree-walkers (refinement)
+
+**Convention:** when a recursive walker over the AST is needed inside a function body (and an inline lambda capturing `&this`/`&out` would otherwise be assigned to `std::function<...>` to enable self-reference), declare a local named struct with `operator()` and reference members for the captured state. Self-reference uses `(*this)(child)`.
+
+**Anti-pattern:** `std::function<void(const Expr*)> walk = [&](const Expr* n) { ... walk(child); ... };` — heap allocation via type erasure, opaque to a comprehension-gate reader (the recursion's name disappears into the lambda body).
+
+**Good:**
+```cpp
+struct FactorWalker {
+    const Expr* factor;
+    bool factor_remains = false;
+    void operator()(const Expr* n) {
+        if (factor_remains || !n) return;
+        if (expr_equal(*n, *factor)) { factor_remains = true; return; }
+        switch (n->type) {
+            case ExprType::BINOP: (*this)(n->left); (*this)(n->right); break;
+            // ...
+        }
+    }
+};
+FactorWalker walker{factor};
+walker(quotient);
+```
+
+**Reason:** removes type-erasure overhead AND lifts readability. A Haiku-grade reader sees a named struct with named members; the recursion is `(*this)(child)`, not a captured-by-ref lambda variable. **Empirical: Cycle Cleanup-Bundle measured T1 mechanics improvement on `try_cancel`** from Cycle I-M2's vague-but-correct (with `std::function walk`) to match (with `FactorWalker`) on the same Haiku-grade comprehension test. The same A1 rewrite applied to `try_u_sub_integrate`'s `gather` made `Gatherer`'s recursion legible at T1; while R1's deeper `cse_replace` naming issue is independent, the gather-loop's clarity improved measurably.
+
+**Refines:** the existing pre-existing rule "prefer template callables and named structs over `std::function`" (in `## Pre-existing conventions`) — that rule covered API-level / storage-level `std::function` use. This refinement extends the principle to *recursive tree-walkers within a function body*, where the historical justification for `std::function` (need for self-reference in C++17 lambdas) had become a default. The two-keystroke "lambda + std::function" idiom is more verbose at the textual level but loses to a named struct on every readability axis.
+
+**Pattern coverage at extraction:** 4 sites in expr.h + system.h — `FactorWalker` (`try_cancel`, this cycle's A1), `Gatherer` (`try_u_sub_integrate`, this cycle's A1), `Walker` (`cse_extract`, pre-existing — predates the rule but follows it), `TreeCounter` (`cse_extract`, pre-existing — same). N≥3 met. The pre-existing sites confirm the pattern was already idiomatic in places; the cycle's A1 made it the *default* for new walker code.
+
+**Origin:** Cycle Cleanup-Bundle — measured T1-mechanics improvement on `try_cancel` after A1's `std::function`→struct rewrite (Cycle I-M2's vague-but-correct → Cycle Cleanup-Bundle's match on the same function under the same Haiku-grade test).
+
 ## File-organisation rules
 
 File-scope rules. Appended by the blind-spot critic when file-scope tests reveal a recurring file-level comprehension failure (file-explainer can't reliably name purpose / components / relationships / pattern). Each entry follows the same rule format as above; **Origin** line names the cycle and file.
@@ -261,6 +295,24 @@ Concretely (example from Cycle I-M2, src/expr.h §"Symbolic integration"):
 **Status:** **adopted** — Cycle I-M3 validated the rule under live use: M3's §"Symbolic integration" header comment (expr.h lines 2716-2762) embeds M1+M2+M3 milestone notes in a single comment block, and the M3 cycle ran without re-flagging the section. The cross-reference back from `adaptive_simpson` (line ~3329) to §Symbolic integration remains R4 (Future.md, open) — the rule's mechanism (cross-reference at each end) is partially in place but not symmetrically. The rule itself is durable; promotion from provisional to adopted reflects the absence of regression under one additional cycle of churn.
 
 **Origin:** Cycle I-M2 — file-explainer scored vague-but-correct on Components/Relationships/Pattern for src/expr.h §Symbolic integration extension (lines 2616–2878 + 3329–3391, separated by ~430 LOC). Cycle I-M3 — validated; no regression, M3 surface follows the rule.
+
+### Rule (provisional): intra-class section dividers in classes exceeding ~1500 LOC
+
+**Convention:** when a single class body exceeds ~1500 LOC and contains conceptually separable sub-areas (e.g. parsing, loading, solving, deriving, CLI orchestration), each sub-area's first member is preceded by a nested section divider in the visual style:
+
+```cpp
+    // ────────────── Subsection: Loading and parsing ──────────────
+```
+
+The box-drawing-character style (`──────`) visually subordinates these dividers below the file-level top dividers (which use `============`). No code moves; the goal is structural legibility for a single-pass file reader.
+
+**Anti-pattern:** a 3000+ LOC class body with public/private blocks but no internal grouping marker. Methods from different sub-areas (loading vs solving vs deriving) interleave by authorship order and a `file-explainer` cannot identify sub-area boundaries without reading bodies.
+
+**Reason:** the existing file-organisation rule above ("non-contiguous milestone surfaces in a >2000-line file require cross-reference comments at each end") covers cross-region references in a file. This rule covers *intra-class* sub-area boundaries in a class that has itself exceeded the 1500-LOC threshold. The same comprehension-gate principle (Haiku-grade reader cannot navigate without structural delimiters) applies. Empirical: Cycle Cleanup-Bundle file-explainer scored Components and Relationships at vague-but-correct on src/system.h's `class FormulaSystem` (~3400 LOC) — the file's *top-level* layout is clean (5 sections delimited) but the class body itself has no internal markers.
+
+**Status:** **provisional** — single instance in the codebase (`class FormulaSystem` is the only class >1500 LOC). The rule will be retired or promoted by the next cycle's evidence: if R8 (Future.md) lands and the next cycle's file-explainer scores src/system.h's Components / Relationships at *match*, the rule is validated and adopted; if a second >1500-LOC class emerges in the codebase and exhibits the same pattern, also promote.
+
+**Origin:** Cycle Cleanup-Bundle — file-explainer scored vague-but-correct on Components and Relationships for src/system.h (4037 LOC; central `class FormulaSystem` at lines 293–3700 has 5 conceptually separable sub-areas with no internal section delimiters).
 
 ## Architecture rules
 

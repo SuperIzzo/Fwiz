@@ -835,3 +835,75 @@ The call site in `try_ibp_integrate` continues to use ints (rank comparison only
 N≥3 met (with `precedence` being the closest analogue). Rule promoted directly — see Code-Style.md addition.
 
 **Reopen trigger:** any new heuristic-priority function added to the codebase that returns small magic-int ranks. Or a future cycle's grader re-flagging `liate_priority` under the same diagnosis.
+
+**Status (Cycle Cleanup-Bundle, 2026-05-10):** **shipped.** Cleanup-bundle's A2 implemented this refactor exactly as proposed. Cycle Cleanup-Bundle blind-spot critic re-ran `liate_priority` at all three tiers — clean throughout (T1 mechanics now passes; was wrong-on-detail in M3). Visionary audit may close this entry on next firing.
+
+## #R7. Refactor: `flatten_multiplicative` int-frac short-circuit position-priority
+
+**From:** Cycle Cleanup-Bundle blind-spot critic (function-scope, random codebase sample). Haiku-B at T1+T2 scored vague-but-correct on the `is_int_frac(e)` short-circuit at function head — without the comment, the position-priority over the DIV-decomposition branch reads as "test-then-push" optimization rather than what it is (a *correctness* guard: DIV decomposition would split `3/4` into "factor 3 exp 1, factor 4 exp -1", losing the structural-fraction shape that derive output relies on). T3 passes only because the comment "must short-circuit before DIV decomposition would split it apart" lifts the rationale. Soft load-bearing-comment instance — the structural cause is real (correctness invariant) but addressable.
+
+**Proposed:** Extract the int-frac short-circuit as a clearly-named guard helper. Two options:
+1. **Named guard helper** — extract to `bool try_emit_int_frac_factor(ExprPtr e, vector<pair<ExprPtr, double>>& factors)` returning true if pushed. The function head reads `if (try_emit_int_frac_factor(e, factors)) return;` — the name itself says "preserve structural fractions". One-line at the call site replaces the multi-line comment.
+2. **Move int-frac test inside the DIV branch** — keep the short-circuit local to where the decomposition would happen: in the `BINOP::DIV with NUM denom` branch, test `is_int_frac(e)` before recursing into NUM coeff division. The short-circuit becomes a local invariant of the DIV branch rather than a head-of-function position-priority.
+
+Option 1 is more idiomatic with the codebase's existing helper-extraction pattern (`mul_through_div`, `cse_extract`); option 2 is more locality-preserving. Either lifts the load-bearing comment.
+
+**Pattern coverage:** Single-site for now. The "head-of-function correctness guard" shape is rare in expr.h (most simplifier helpers are case-driven without head guards). If a second simplifier helper acquires a similar head-of-function correctness guard (e.g. for matrix shapes, complex-coefficient fractions), promote to a rule.
+
+**Reopen trigger:** any second simplifier function in expr.h growing a head-of-function correctness guard with comment-only justification; OR a future cycle's grader re-flagging `flatten_multiplicative` under the same diagnosis.
+
+## #R8. Refactor: `class FormulaSystem` intra-class section dividers
+
+**From:** Cycle Cleanup-Bundle blind-spot critic (file-scope, src/system.h). file-explainer scored vague-but-correct on Components and Relationships: the file's top-level layout is clean (5 sections with `// ============ ============`-style dividers) but the central `class FormulaSystem` (~3400 LOC, lines 293–3700) has 5 conceptually separable sub-areas (Builtins / Loading-Parsing / Resolution-Solving / Derive / CLI orchestration helpers) interleaved without internal section delimiters. A reader cannot identify "where loading ends and solving begins" without reading method bodies.
+
+This is a generalisation of the Cycle I-M2 file-organisation rule (cross-region milestone references in a >2000-line file): the same readability principle applies *intra-class* when a class itself exceeds ~1500 LOC.
+
+**Proposed:** Add nested section dividers inside the class body, mirroring the existing top-level style but visually subordinated:
+
+```cpp
+class FormulaSystem {
+public:
+    std::vector<Equation> equations;
+    // ... fields ...
+
+    // ────────────── Subsection: Loading and parsing ──────────────
+    void load_lines(...);
+    void load_section(...);
+    // ...
+
+    // ────────────── Subsection: Builtins and rewrite rules ──────────────
+    void load_builtins();
+    void compute_rewrite_groups();
+    // ...
+
+    // ────────────── Subsection: Resolution / solving ──────────────
+    [[nodiscard]] double resolve(...);
+    [[nodiscard]] ValueSet resolve_all(...);
+    // ...
+
+    // ────────────── Subsection: Derive ──────────────
+    [[nodiscard]] std::string derive(...);
+    [[nodiscard]] std::vector<std::string> derive_all(...);
+    // ...
+
+    // ────────────── Subsection: CLI orchestration helpers ──────────────
+    [[nodiscard]] std::map<std::string, ExprPtr> prepare_derive_bindings(...);
+    [[nodiscard]] std::string format_derived(...);
+    // ...
+
+private:
+    // ────────────── Subsection: private parsing helpers ──────────────
+    // ...
+
+    // ────────────── Subsection: private solver ──────────────
+    [[nodiscard]] double solve_recursive(...);
+    [[nodiscard]] bool try_resolve(...);
+    // ...
+};
+```
+
+No code moves; just structural delimiters. Box-drawing-character style (`──────`) visually subordinates them below the file-level `============` dividers, mirroring the existing visual hierarchy.
+
+**Pattern coverage:** `class FormulaSystem` is the codebase's clearest single instance. `class Solver` / `class Lexer` / `class Parser` are all <500 LOC and don't trigger the threshold. No second class in the codebase exceeds the ~1500-LOC threshold.
+
+**Reopen trigger:** any future cycle's file-scope critic re-flagging src/system.h Components or Relationships score; OR a third internal-section refactor at scale (e.g. if FormulaSystem grows past 4000 LOC and a sub-area emerges as a split candidate).

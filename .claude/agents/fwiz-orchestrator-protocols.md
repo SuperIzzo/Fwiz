@@ -152,7 +152,9 @@ The follow-up is a named **micro-cycle**: tiny research artifact (often <1 page)
 
 (2) **Production-code delta = 0** — when the cycle ships zero non-test, non-docs production code (canonical: OQ5 hardening micro-cycle 2026-05-10 — test-only, +60 LOC in `src/tests.cpp`, no production change). Reviewer trio is overhead with no surface to evaluate. Self-review (read test, conventions check, cppcheck inline) substitutes. Doc-updater + perf-auditor are skipped silently. The implementer's self-discipline (RGR, fresh-env verification, conventions) is the gate. Codified in Cycle 1 M1 meta-review 2026-05-10 to prevent reflex-spawning when an instance forgets the case.
 
-If any condition in either pattern fails, spawn the reviewer. Default for full cycles remains: reviewer always fires.
+(3) **Reviewer-pre-spec'd mechanical cleanup, ~80-150 LOC** — ALL of: (a) every item was reviewer-pre-spec'd in prior cycles' review-notes / blind-spot scores / perf-auditor reports (no new design surface this cycle); (b) total LOC ≤ ~150 (above pattern (1)'s 80-LOC ceiling; below the ~200 LOC threshold where novel infrastructure is the norm); (c) NO novel infrastructure — every change is mechanical (rename, named constant, struct-rewrite, comment fix) or single-perf-change with well-understood mechanism (e.g., heap-alloc elimination). Spawn reviewer ONLY; perf-auditor and doc-updater skipped because (perf-auditor) the perf changes are well-understood and (doc-updater) doc updates are inline. Document the abbreviation rationale in `review-notes.md` per item. Canonical: Cleanup-bundle cycle 2026-05-10 — 13 items / +89 LOC, all reviewer-pre-spec'd from Cycle B M3 + Integrals arc M1/M2/M3 + blind-spot scores; reviewer-only spawn caught 1 NIT (glob comment), perf-auditor would have re-validated std::function elimination (well-understood), doc-updater would have produced ~0 LOC delta.
+
+If any condition in any pattern fails, spawn the reviewer. Default for full cycles remains: reviewer always fires.
 
 ### Multi-cycle audit roadmap — per-cycle artifact archival
 
