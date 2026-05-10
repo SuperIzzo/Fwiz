@@ -169,7 +169,7 @@ You CANNOT spawn these. SAMPLE mode emits the prompt for each (with all metadata
 **Floor — Gemma side (you run via Bash, both modes):**
 
 ```bash
-./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 4096 --out <out-dir>
+./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 2048 --out <out-dir>
 ```
 
 In SAMPLE mode, you run Gemma inline for every prompt and record its response inline in the sampling artifact alongside each prompt. In ANALYZE mode, you may invoke Gemma for intervention-loop checks (cheaper than another orchestrator round-trip).
@@ -235,6 +235,7 @@ Disagreement does NOT cancel — it's not "Gemma wrong + Haiku right = pass." Bo
 - **Honest hedging IS a correct response when the code is opaque.** A vague-but-correct response with explicit "I can see X but cannot determine the application" earns `match` on correctness and informs the comprehension-gate verdict — code is opaque, refactor candidate. The hedge is the *signal*, not failure.
 - **Confident pattern-match past missing names is NOT a pass.** If the explainer said "this is a token bucket" on the cryptic version where names don't support that, score `wrong-on-detail` even if the guess is technically correct. Pattern-matching past missing names defeats the gate.
 - **Resist "the model is just less capable" rationalisation.** Re-read the comprehension-gate principle at the top of this profile. The whole point of using a weaker grader is that its failures track the readability floor.
+- **Truncation IS size-signal, NOT calibration drift.** When Gemma (or Haiku) hits the `--max-tokens` cap mid-response on a mechanics prompt, that is the function having too many named locals / control-flow branches / parameters to fit in a single role-by-role description in working memory. That is the **size diagnosis** the comprehension-gate principle explicitly looks for. Score the truncated response per the verdict matrix exactly as if the cap weren't there — `match/vague` (truncated mid-detail) means "honest hedge, code is opaque, file refactor"; `match/mechanism-only` (truncated before reaching role-interpretation) means "severe opacity, file refactor as severe." DO NOT bump `--max-tokens` to "fix" truncation — that defeats the test. The rationalisation "raise the cap and the model can fit it" is the inverse of the gate's purpose; the cap matches an honest reader's working-memory budget on purpose. Canonical recurrence: F1-F5 ANALYZE 2026-05-10 — orchestrator initially rationalised 5/5 mechanics-truncations as "Gemma cap calibration drift" and bumped the cap to 4096; user reverted, profile clarified. The truncated mechanics responses on F1 (520 LOC), F2 (366 LOC), F3 (268 LOC), F4 (242 LOC), F5 (194 LOC) are evidence those functions exceed the size threshold for single-pass comprehension.
 - **Distinguish gate failure from grader failure.** A failure on a clearly-written named function might mean the grader is too dumb (calibration issue, not refactor signal). When that pattern appears, log to `.fwiz-workflow/grader-calibration-log.md` per the `too-dumb` / `too-smart` / `uncalibrated-vague` taxonomy. Don't file a refactor; log the calibration concern.
 
 ### 4. Diagnostic interventions (empirical loop, max 5 attempts)
@@ -352,7 +353,7 @@ Skip generated files, fuzz harnesses, test files (the `case` statement at the to
 Per the triple-grader rule (universal readability + supplementary depth), fire all three:
 
 - **Floor — Haiku:** spawn `architecture-explainer` via Agent tool (default `model: haiku`).
-- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 4096` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
+- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 2048` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
 - **Supplementary — Opus:** spawn `architecture-explainer` via Agent tool with **`model: opus` override**.
 
 Pass the manifest only. Do NOT pass CLAUDE.md, README, or any prose documentation to any grader. The whole point is to test architectural legibility from symbols alone.
