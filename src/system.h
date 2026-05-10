@@ -579,7 +579,8 @@ public:
     // Check if a variable name is a builtin constant not overridden by this system
     [[nodiscard]] bool is_active_builtin(const std::string& name) const {
         auto& consts = builtin_constants();
-        if (!consts.count(name)) return false;
+        const auto it = consts.find(name);
+        if (it == consts.end()) return false;
         // Skip NaN-valued builtin constants (e.g. `i`): they have no real numeric
         // value and must not be auto-bound by the resolver. The pattern matcher
         // still treats them as literal-match constants via builtin_constants().count(name)
@@ -590,7 +591,7 @@ public:
         // (Future.md #13c) remains; it is unreachable from user-facing input
         // *while `i` is the only NaN-bound constant*. A second NaN-valued
         // builtin (e.g. complex infinity) would require fixing #13c first.
-        if (std::isnan(consts.at(name))) return false;
+        if (std::isnan(it->second)) return false;
         if (defaults.count(name)) return false;
         return std::none_of(equations.begin(), equations.end(),
             [&name](const Equation& eq) { return eq.lhs_var == name; });
@@ -975,7 +976,7 @@ abs(x) / x = undefined iff x = 0
                 if (!derived) {
                     for (const auto& call : formula_calls) {
                         if (call.output_var != tname) continue;
-                        const Expr* unfolded = unfold_formula_call_for_diff(call);
+                        const Expr* unfolded = unfold_formula_call_body(call);
                         if (unfolded) {
                             derived = symbolic_diff_simplified(*unfolded, var);
                         }
@@ -1042,7 +1043,7 @@ abs(x) / x = undefined iff x = 0
                 if (!antideriv) {
                     for (const auto& call : formula_calls) {
                         if (call.output_var != tname) continue;
-                        const Expr* unfolded = unfold_formula_call_for_diff(call);
+                        const Expr* unfolded = unfold_formula_call_body(call);
                         if (unfolded) {
                             antideriv = symbolic_integrate_simplified(*unfolded, var);
                         }
@@ -1128,7 +1129,7 @@ abs(x) / x = undefined iff x = 0
     // `iff` branches), only the FIRST matching equation is used. This
     // silently uses one branch's derivative. See Future #51 for the
     // multi-branch follow-up.
-    [[nodiscard]] ExprPtr unfold_formula_call_for_diff(const FormulaCall& call) const {
+    [[nodiscard]] ExprPtr unfold_formula_call_body(const FormulaCall& call) const {
         try {
             auto& sub_sys = load_sub_system(call.file_stem);
             for (auto& eq : sub_sys.equations) {

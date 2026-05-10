@@ -12870,7 +12870,7 @@ void test_builtin_meta_registry() {
     ASSERT(registry.at("acos").integrate == nullptr,
         "BuiltinMeta['acos'].integrate is nullptr (no table entry; IBP path)");
     ASSERT(registry.at("sqrt").integrate == nullptr,
-        "BuiltinMeta['sqrt'].integrate is nullptr (no closed form for ∫sqrt(x))");
+        "BuiltinMeta['sqrt'].integrate is nullptr (no FUNC_CALL table entry; users write x^(1/2) for the power-rule path)");
     ASSERT(registry.at("abs").integrate == nullptr,
         "BuiltinMeta['abs'].integrate is nullptr (deferred)");
 

@@ -204,7 +204,7 @@ Near-zero coefficient guard: if `|coeff| < 1e-12`, returns nullptr. This prevent
 
 **resolve_diff_in_equations** (system.h) — Post-load pass hooked into `load_with_sections()` after `compute_rewrite_groups()`. Recursively rewrites `diff(target, var)` FUNC_CALL nodes in every equation's RHS. Three target shapes handled:
 1. `diff(named_var, x)` — substitutes the named variable's equation RHS and differentiates.
-2. `diff(formula_call_placeholder, x)` — `unfold_formula_call_for_diff()` inlines the FormulaCall body, then differentiates the inlined tree.
+2. `diff(formula_call_placeholder, x)` — `unfold_formula_call_body()` inlines the FormulaCall body, then differentiates the inlined tree.
 3. Literal expression — differentiates directly.
 
 Throws `std::runtime_error` on `diff(<non-var-non-formula-call>, ...)` per design. Running after rewrite rules load ensures `simplify()` inside `symbolic_diff_simplified` can apply all rules (including the three new `x^a/x^b`, `abs(x)/x`, and `sign` rules) to the differentiated result.

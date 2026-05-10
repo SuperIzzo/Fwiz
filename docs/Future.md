@@ -641,13 +641,13 @@ itself is the issue, not the ranking).
 
 ## 50. `diff(formula_call, var)` corner cases
 
-The post-load pass (`resolve_diff_in_equations`) inlines formula-call bodies for `diff(formula_call_placeholder, var)` via `unfold_formula_call_for_diff`. Corner cases deferred: piecewise formula calls (multiple RHS branches — which branch to differentiate?), multi-return formula calls (which output var?), and formula calls with expression bindings that themselves contain `diff`. Revisit when Future #20 typed FORMULA_CALL nodes land (giving stable node identity for the chain rule), or when >2 user reports of unexpected behavior surface.
+The post-load pass (`resolve_diff_in_equations`) inlines formula-call bodies for `diff(formula_call_placeholder, var)` via `unfold_formula_call_body`. Corner cases deferred: piecewise formula calls (multiple RHS branches — which branch to differentiate?), multi-return formula calls (which output var?), and formula calls with expression bindings that themselves contain `diff`. Revisit when Future #20 typed FORMULA_CALL nodes land (giving stable node identity for the chain rule), or when >2 user reports of unexpected behavior surface.
 
 **Reopen trigger:** Future #20 (typed FORMULA_CALL nodes) enters a planning cycle, OR >2 user reports of unexpected `diff(formula_call, var)` behavior.
 
 ## 51. Piecewise / conditional formula-call diff (multi-branch)
 
-When `diff(formula_call, var)` targets a sub-system with multiple equations defining the output (e.g., `abs` via two `iff` branches: `result = x iff x >= 0` and `result = -x iff x < 0`), the post-load pass `unfold_formula_call_for_diff` currently uses only the first equation's RHS. The correct behavior depends on which branch is active at evaluation time — this requires either evaluating conditions symbolically (and folding them into a piecewise derivative) OR returning a piecewise result expression. Today the user silently gets one branch's derivative.
+When `diff(formula_call, var)` targets a sub-system with multiple equations defining the output (e.g., `abs` via two `iff` branches: `result = x iff x >= 0` and `result = -x iff x < 0`), the post-load pass `unfold_formula_call_body` currently uses only the first equation's RHS. The correct behavior depends on which branch is active at evaluation time — this requires either evaluating conditions symbolically (and folding them into a piecewise derivative) OR returning a piecewise result expression. Today the user silently gets one branch's derivative.
 
 **Reopen trigger:** user reports unexpected derivative of a piecewise formula call.
 
@@ -760,7 +760,7 @@ The fall-through-on-NaN/inf becomes an explicit early-fall-through `if (val && s
 
 **Pattern coverage:** Single-site. The `resolve_diff_calls` neighbour was rewritten cleanly in Cycle I-M1 with no analogous fall-through asymmetry — this is a 4-arg-specific shape.
 
-**Reopen trigger:** When M3 adds IBP (which may add a third symbolic-fallback strategy) the dispatch grows; refactor before adding the fourth case.
+**Reopen trigger:** When integration adds a 4th symbolic-fallback strategy (e.g., trigonometric substitution, partial fractions, or Risch) — at that point the dispatch chain becomes hard enough to warrant the refactor. (Original M3-IBP trigger fired; the refactor was deferred and remains scheduled for the next dispatch-strategy addition.)
 
 ## #R3. Refactor: `vec_mat_det` `en` vs `e` comment-code mismatch
 
@@ -785,3 +785,53 @@ No code moves. The structural gap closes by making the cross-file-region link ex
 **Pattern coverage:** This is one site of a broader pattern in expr.h (3500+ LOC, multiple feature-areas interleaved). The file-organisation rule extracted from this finding (Code-Style.md §File-organisation rules) generalises the principle.
 
 **Reopen trigger:** Any future cycle's file-scope critic re-flagging the symbolic-integration section; OR a third milestone shipping a non-contiguous surface in expr.h (`symbolic_diff` already has `diff()`-as-builtin in expr.h + post-load resolver in system.h, but those are cross-file by design — a same-file split is the trigger).
+
+## #R5. Refactor: `try_ibp_integrate` render-order branch extraction
+
+**From:** Cycle I-M3 blind-spot critic (function-scope). Haiku-B failed at T1+T2 (wrong-on-detail) on the three-way render-order branch at function tail (`if V_is_div ... else if V_is_var && u_is_call ... else ...`). T3 only passes because the comment block enumerates each render-order case explicitly. **Third occurrence of the load-bearing-comment-papers-over-structural-complexity pattern in the integration arc** (cf. R1 `try_u_sub_integrate` cse_replace naming, R2 `resolve_integral_calls` 4-arg fall-through). Cycle-I-M2 rule "load-bearing comments must point at a structural cause" applies — the structural cause is mixed-responsibility: `try_ibp_integrate` does both IBP (math) AND canonical-render-order shaping (presentation).
+
+**Proposed:** Extract the render-order branch into a named helper `canonicalise_ibp_product(u, V, var) → ExprPtr` that returns the `u*V` term with the correct operand order. The IBP function then reads as:
+```cpp
+const ExprPtr u_V        = canonicalise_ibp_product(u, V, var);
+const ExprPtr result_raw = Expr::BinOpExpr(BinOp::SUB, u_V, int_V_du);
+return simplify(result_raw);
+```
+The helper carries the three-case docstring; the IBP function carries only the IBP algorithm. The `mul_through_div` helper is already extracted — this is the symmetric move on the render-order side.
+
+**Pattern coverage:** Three sites in the integration arc all exhibit the same shape (load-bearing comment at function tail compensating for branched complexity): `try_u_sub_integrate` (R1 — cse_replace naming), `resolve_integral_calls` 4-arg (R2 — control-flow asymmetry), `try_ibp_integrate` (R5 — render-order shaping). N≥3 met for rule extraction; the Cycle-I-M2 rule (Code-Style.md §Empirically-derived rules) is **validated** by this third occurrence, no new rule needed but its origin should reference all three sites.
+
+**Reopen trigger:** when M-future adds a 4th integration strategy (e.g. partial-fractions, trig substitution), the render-order branch will grow further — refactor BEFORE adding the 4th case. Or when a future blind-spot cycle re-flags any of R1/R2/R5 under the same diagnosis.
+
+## #R6. Refactor: `liate_priority` magic-rank constants → `enum class LiateRank`
+
+**From:** Cycle I-M3 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on the rank values 5/4/3/2/1 — without the LIATE table comment, the values are pure magic. T2 (signature lifts the LIATE acronym) helped purpose but mechanics still failed. T3 passes only because the comment table explicitly enumerates which-rank-for-which-category.
+
+**Proposed:** Replace inline magic ranks with an `enum class LiateRank` (declared near `liate_priority`):
+```cpp
+enum class LiateRank : int {
+    None          = 0,  // does not qualify for LIATE
+    Exponential   = 1,  // e^Var(var)
+    Trigonometric = 2,  // sin / cos / tan
+    Algebraic     = 3,  // x, x^n, c*x, c (var-free or numeric)
+    InverseTrig   = 4,  // asin / acos / atan
+    Logarithmic   = 5,  // log(...)
+};
+[[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
+    if (e.type == ExprType::FUNC_CALL && e.args.size() == 1) {
+        if (e.name == "log") return static_cast<int>(LiateRank::Logarithmic);
+        if (e.name == "asin" || e.name == "acos" || e.name == "atan") return static_cast<int>(LiateRank::InverseTrig);
+        ...
+    }
+    ...
+}
+```
+The call site in `try_ibp_integrate` continues to use ints (rank comparison only); the FUNCTION BODY uses named constants. The comment-table burden disappears because each return statement IS the table.
+
+**Pattern coverage:** Magic-rank/priority returns appear in **3+ sites** in the codebase:
+1. `liate_priority` (this finding) — returns 0-5 by category.
+2. `precedence` (expr.h:1081) — returns 0-5 for operator precedence (with the constant `5` falling out as the literal "atom" precedence).
+3. `canonicity_score` (expr.h:1357) — returns `pair<int, int>` for derive ordering (leaves, depth) — the int values themselves are computed, not magic, but the *ordering* of returns from various branches is comment-driven.
+
+N≥3 met (with `precedence` being the closest analogue). Rule promoted directly — see Code-Style.md addition.
+
+**Reopen trigger:** any new heuristic-priority function added to the codebase that returns small magic-int ranks. Or a future cycle's grader re-flagging `liate_priority` under the same diagnosis.

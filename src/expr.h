@@ -2259,13 +2259,18 @@ struct RewriteRulesGuard {
     return Expr::Call("mat", std::move(rows));
 }
 
+// Matrix dimension constants — `e` is reserved for Euler's number, hence
+// `en` is used for the (1,1) entry in the 3x3 cofactor expansion below.
+constexpr size_t MATRIX_2X2_DIM = 2;
+constexpr size_t MATRIX_3X3_DIM = 3;
+
 // 2x2 cofactor / 3x3 cofactor expansion. Returns Var("undefined") for other shapes.
 [[nodiscard]] inline ExprPtr vec_mat_det(const ExprPtr& m) {
     auto rows = mat_rows(m);
     const size_t n = rows.size();
     const size_t cols = mat_cols(m);
-    if (n != cols || (n != 2 && n != 3)) return Expr::Var("undefined");
-    if (n == 2) {
+    if (n != cols || (n != MATRIX_2X2_DIM && n != MATRIX_3X3_DIM)) return Expr::Var("undefined");
+    if (n == MATRIX_2X2_DIM) {
         // a*d - b*c
         auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1);
         auto c = mat_at(m, 1, 0); auto d = mat_at(m, 1, 1);
@@ -2273,7 +2278,8 @@ struct RewriteRulesGuard {
             Expr::BinOpExpr(BinOp::MUL, a, d),
             Expr::BinOpExpr(BinOp::MUL, b, c)));
     }
-    // 3x3 cofactor: a(ei - fh) - b(di - fg) + c(dh - eg)
+    // 3x3 cofactor: a*(en*k - f*h) - b*(d*k - f*g) + c*(d*h - en*g)
+    // (`en` for the (1,1) entry: textbook `e` collides with builtin Euler's number.)
     auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1); auto c = mat_at(m, 0, 2);
     auto d = mat_at(m, 1, 0); auto en = mat_at(m, 1, 1); auto f = mat_at(m, 1, 2);
     auto g = mat_at(m, 2, 0); auto h = mat_at(m, 2, 1); auto k = mat_at(m, 2, 2);
@@ -2292,7 +2298,7 @@ struct RewriteRulesGuard {
 // 2x2 inverse only. Returns Var("undefined") for other shapes or singular dets.
 [[nodiscard]] inline ExprPtr vec_mat_inv(const ExprPtr& m) {
     auto rows = mat_rows(m);
-    if (rows.size() != 2 || mat_cols(m) != 2) return Expr::Var("undefined");
+    if (rows.size() != MATRIX_2X2_DIM || mat_cols(m) != MATRIX_2X2_DIM) return Expr::Var("undefined");
     auto a = mat_at(m, 0, 0); auto b = mat_at(m, 0, 1);
     auto c = mat_at(m, 1, 0); auto d = mat_at(m, 1, 1);
     auto det = simplify(Expr::BinOpExpr(BinOp::SUB,
@@ -2609,7 +2615,7 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
         {"acos", {acos_diff, nullptr}},   // antiderivative needs IBP
         {"atan", {atan_diff, nullptr}},   // antiderivative needs IBP
         {"log",  {log_diff,  nullptr}},   // antiderivative needs IBP (x*log(x) - x)
-        {"sqrt", {sqrt_diff, nullptr}},   // no closed form via Tier 1; not a Tier 2/3 target
+        {"sqrt", {sqrt_diff, nullptr}},   // FUNC_CALL("sqrt") path: antiderivative not in table — write x^(1/2) for the power-rule path.
         {"abs",  {abs_diff,  nullptr}},   // deferred (x*abs(x)/2; sign-discontinuous)
     };
     return registry;
@@ -2695,8 +2701,9 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
             if (!du) return nullptr;
             // Registry lookup (Future #49): per-builtin derivative table.
             // The callback returns f'(u); chain rule (`* du`) is applied here.
-            auto it = builtin_meta().find(e.name);
-            if (it == builtin_meta().end() || it->second.diff == nullptr) return nullptr;
+            const auto& reg = builtin_meta();
+            const auto it = reg.find(e.name);
+            if (it == reg.end() || it->second.diff == nullptr) return nullptr;
             const ExprPtr fp = it->second.diff(u);
             return E::BinOpExpr(BinOp::MUL, fp, du);
         }
@@ -2772,27 +2779,33 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
     if (!quotient) return nullptr;
     // Walk quotient checking no subtree equals factor structurally. Pure
     // pass-through for atomic NUM/VAR; recurses through BINOP/UNARY_NEG/
-    // FUNC_CALL children. Early-exits on first match via the `bool*` channel.
-    bool factor_remains = false;
-    std::function<void(const Expr*)> walk = [&](const Expr* n) {
-        if (factor_remains || !n) return;
-        if (expr_equal(*n, *factor)) { factor_remains = true; return; }
-        switch (n->type) {
-            case ExprType::NUM:
-            case ExprType::VAR:
-                break;
-            case ExprType::BINOP:
-                walk(n->left); walk(n->right); break;
-            case ExprType::UNARY_NEG:
-                walk(n->child); break;
-            case ExprType::FUNC_CALL:
-                for (const auto* a : n->args) walk(a);
-                break;
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    // FUNC_CALL children. Early-exits on first match via the `factor_remains`
+    // flag. Local struct keeps recursion stack-allocated (no heap via
+    // std::function type erasure).
+    struct FactorWalker {
+        const Expr* factor;
+        bool factor_remains = false;
+        void operator()(const Expr* n) {
+            if (factor_remains || !n) return;
+            if (expr_equal(*n, *factor)) { factor_remains = true; return; }
+            switch (n->type) {
+                case ExprType::NUM:
+                case ExprType::VAR:
+                    break;
+                case ExprType::BINOP:
+                    (*this)(n->left); (*this)(n->right); break;
+                case ExprType::UNARY_NEG:
+                    (*this)(n->child); break;
+                case ExprType::FUNC_CALL:
+                    for (const auto* a : n->args) (*this)(a);
+                    break;
+                case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+            }
         }
     };
-    walk(quotient);
-    return factor_remains ? nullptr : quotient;
+    FactorWalker walker{factor, false};
+    walker(quotient);
+    return walker.factor_remains ? nullptr : quotient;
 }
 
 // Forward declarations: helpers called from `symbolic_integrate`'s MUL /
@@ -2804,32 +2817,42 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
 // applying integration by parts to a MUL integrand. Higher rank → preferred
 // `u` (we want u to differentiate to something simpler; we want dv to have a
 // known antiderivative).
-//   Logarithmic    : log(...)               → 5
-//   Inverse-trig   : asin / acos / atan     → 4
-//   Algebraic      : x, x^n, c*x, c (var-free or numeric)  → 3
-//   Trigonometric  : sin / cos / tan        → 2
-//   Exponential    : e^Var(var)             → 1
-//   Anything else                            → 0  (does not qualify for LIATE)
 //
-// Pure-numeric and var-free constants get rank 3 (algebraic) so that `dv = 1`
+// Pure-numeric and var-free constants get rank `Algebraic` so that `dv = 1`
 // in `atan(x)*1`-style synthesised IBP entries is well-defined.
+enum class LiateRank : int {
+    None          = 0,  // does not qualify for LIATE
+    Exponential   = 1,  // e^Var(var)
+    Trigonometric = 2,  // sin / cos / tan
+    Algebraic     = 3,  // x, x^n, c*x, c (var-free or numeric)
+    InverseTrig   = 4,  // asin / acos / atan
+    Logarithmic   = 5,  // log(...)
+};
+// Threshold at which a single FUNC_CALL with no antiderivative-table entry is
+// promoted to a synthesised `f(x) * 1` IBP candidate (covers atan/asin/acos/log).
+constexpr int LIATE_MIN_RANK_FOR_IBP_SYNTHESIS = static_cast<int>(LiateRank::InverseTrig);
+
 [[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
     if (e.type == ExprType::FUNC_CALL && e.args.size() == 1) {
-        if (e.name == "log") return 5;
-        if (e.name == "asin" || e.name == "acos" || e.name == "atan") return 4;
-        if (e.name == "sin"  || e.name == "cos"  || e.name == "tan")  return 2;
+        if (e.name == "log") return static_cast<int>(LiateRank::Logarithmic);
+        if (e.name == "asin" || e.name == "acos" || e.name == "atan")
+            return static_cast<int>(LiateRank::InverseTrig);
+        if (e.name == "sin"  || e.name == "cos"  || e.name == "tan")
+            return static_cast<int>(LiateRank::Trigonometric);
     }
     if (e.type == ExprType::BINOP && e.op == BinOp::POW) {
         // e^Var(var) — exponential. Var("e") is the base.
         if (is_var(e.left)  && e.left->name == "e"
-            && is_var(e.right) && e.right->name == var) return 1;
+            && is_var(e.right) && e.right->name == var)
+            return static_cast<int>(LiateRank::Exponential);
         // Var(var)^n with n constant — algebraic.
         if (is_var(e.left)  && e.left->name == var
-            && !contains_var(*e.right, var)) return 3;
+            && !contains_var(*e.right, var))
+            return static_cast<int>(LiateRank::Algebraic);
     }
     // Algebraic atoms / linear forms: Var(var), Num, var-free expressions, NEG of same.
-    if (is_var(e) && e.name == var) return 3;
-    if (!contains_var(e, var)) return 3;
+    if (is_var(e) && e.name == var) return static_cast<int>(LiateRank::Algebraic);
+    if (!contains_var(e, var))      return static_cast<int>(LiateRank::Algebraic);
     if (e.type == ExprType::UNARY_NEG && e.child)
         return liate_priority(*e.child, var);
     if (e.type == ExprType::BINOP && e.op == BinOp::MUL) {
@@ -2839,7 +2862,7 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
         if (!l_has && r_has) return liate_priority(*e.right, var);
         if (l_has && !r_has) return liate_priority(*e.left,  var);
     }
-    return 0;
+    return static_cast<int>(LiateRank::None);
 }
 
 [[nodiscard]] inline ExprPtr symbolic_integrate(const Expr& e, const std::string& var) {
@@ -2934,7 +2957,7 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
                 case BinOp::POW: {
                     // Var(var)^n (n constant numeric, n != -1) → x^(n+1)/(n+1)
                     // The n == -1 branch is reachable only via the post-simplify()
-                    // form `POW(Var(var), Num(-1))` (e.g. through unfold_formula_call_*
+                    // form `POW(Var(var), Num(-1))` (e.g. through unfold_formula_call_body
                     // whose body re-simplifies before reaching this dispatcher); the
                     // direct parse path `x^(-1)` produces POW(Var(var), UNARY_NEG(Num(1)))
                     // and falls through to nullptr → the DIV `1/x` branch above handles
@@ -2965,14 +2988,18 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
             const Expr* u = e.args[0];
             if (!is_var(u) || u->name != var) return nullptr;
             // Registry lookup (Future #49): per-builtin antiderivative table.
-            auto it = builtin_meta().find(e.name);
-            if (it != builtin_meta().end() && it->second.integrate != nullptr)
+            const auto& reg = builtin_meta();
+            const auto it = reg.find(e.name);
+            if (it != reg.end() && it->second.integrate != nullptr)
                 return it->second.integrate(var);
-            // No table entry. If the function sits at L or I in LIATE (rank ≥ 4),
-            // synthesise `f(x) * 1` and let IBP handle it (`atan(x)`, `log(x)`,
-            // `asin(x)`, `acos(x)`). Trig builtins (rank 2) all have table
-            // entries; the synthesised path is unreachable for them.
-            if (liate_priority(e, var) >= 4) {
+            // No table entry. If the function sits at L or I in LIATE
+            // (rank ≥ LIATE_MIN_RANK_FOR_IBP_SYNTHESIS), synthesise `f(x) * 1`
+            // and let IBP handle it (`atan(x)`, `log(x)`, `asin(x)`, `acos(x)`).
+            // Trig builtins (rank Trigonometric) all have table entries; the
+            // synthesised path is unreachable for them.
+            if (liate_priority(e, var) >= LIATE_MIN_RANK_FOR_IBP_SYNTHESIS) {
+                // const_cast: arena nodes are mutably owned even when held through
+                // const Expr&; the substitute path doesn't mutate.
                 const auto* const product = E::BinOpExpr(BinOp::MUL, const_cast<Expr*>(&e), E::Num(1));
                 return try_ibp_integrate(*product, var);
             }
@@ -3012,26 +3039,33 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
     // root `&e` itself — picking g = e produces a pathological "cancel
     // against my own derivative" loop and leaves `log(e)` artifacts via the
     // general POW-derivative rule for `e^...` integrands.
+    // gather: root's children visited at d = U_SUB_DEPTH - 1; grandchildren at d = U_SUB_DEPTH - 2.
+    // Local struct (vs std::function) keeps the recursion stack-allocated.
     std::vector<ExprPtr> candidates;
-    std::function<void(const Expr*, int, bool)> gather = [&](const Expr* n, int d, bool is_root) {
-        if (!n || d < 0) return;
-        if (!is_root && contains_var(*n, var) && !(is_var(*n) && n->name == var)) {
-            const bool dup = std::any_of(candidates.begin(), candidates.end(),
-                [&](const ExprPtr& c) { return expr_equal(*c, *n); });
-            if (!dup) candidates.push_back(const_cast<Expr*>(n));
-        }
-        switch (n->type) {
-            case ExprType::NUM: case ExprType::VAR: break;
-            case ExprType::BINOP:
-                gather(n->left, d - 1, false); gather(n->right, d - 1, false); break;
-            case ExprType::UNARY_NEG:
-                gather(n->child, d - 1, false); break;
-            case ExprType::FUNC_CALL:
-                for (const auto* a : n->args) gather(a, d - 1, false);
-                break;
-            case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+    struct Gatherer {
+        const std::string& var;
+        std::vector<ExprPtr>& candidates;
+        void operator()(const Expr* n, int d, bool is_root) {
+            if (!n || d < 0) return;
+            if (!is_root && contains_var(*n, var) && !(is_var(*n) && n->name == var)) {
+                const bool dup = std::any_of(candidates.begin(), candidates.end(),
+                    [&](const ExprPtr& c) { return expr_equal(*c, *n); });
+                if (!dup) candidates.push_back(const_cast<Expr*>(n));
+            }
+            switch (n->type) {
+                case ExprType::NUM: case ExprType::VAR: break;
+                case ExprType::BINOP:
+                    (*this)(n->left, d - 1, false); (*this)(n->right, d - 1, false); break;
+                case ExprType::UNARY_NEG:
+                    (*this)(n->child, d - 1, false); break;
+                case ExprType::FUNC_CALL:
+                    for (const auto* a : n->args) (*this)(a, d - 1, false);
+                    break;
+                case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
+            }
         }
     };
+    Gatherer gather{var, candidates};
     gather(&e, U_SUB_DEPTH, true);
 
     // Sort candidates ascending by leaf count — try the simplest g first.

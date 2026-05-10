@@ -10,8 +10,11 @@ enum class TokenType : uint8_t {
     NUMBER, IDENT,
     PLUS, MINUS, STAR, SLASH, CARET,
     LPAREN, RPAREN, LBRACKET, RBRACKET, EQUALS, QUESTION, COMMA,
-    END
+    END,
+    COUNT_
 };
+static_assert(static_cast<int>(TokenType::COUNT_) == 15,
+    "TokenType count drift — update lexer dispatch table if adding/removing tokens.");
 
 struct Token {
     TokenType type;
