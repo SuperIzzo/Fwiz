@@ -169,7 +169,7 @@ You CANNOT spawn these. SAMPLE mode emits the prompt for each (with all metadata
 **Floor — Gemma side (you run via Bash, both modes):**
 
 ```bash
-./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 2048 --out <out-dir>
+./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 4096 --out <out-dir>
 ```
 
 In SAMPLE mode, you run Gemma inline for every prompt and record its response inline in the sampling artifact alongside each prompt. In ANALYZE mode, you may invoke Gemma for intervention-loop checks (cheaper than another orchestrator round-trip).
@@ -235,7 +235,11 @@ Disagreement does NOT cancel — it's not "Gemma wrong + Haiku right = pass." Bo
 - **Honest hedging IS a correct response when the code is opaque.** A vague-but-correct response with explicit "I can see X but cannot determine the application" earns `match` on correctness and informs the comprehension-gate verdict — code is opaque, refactor candidate. The hedge is the *signal*, not failure.
 - **Confident pattern-match past missing names is NOT a pass.** If the explainer said "this is a token bucket" on the cryptic version where names don't support that, score `wrong-on-detail` even if the guess is technically correct. Pattern-matching past missing names defeats the gate.
 - **Resist "the model is just less capable" rationalisation.** Re-read the comprehension-gate principle at the top of this profile. The whole point of using a weaker grader is that its failures track the readability floor.
-- **Truncation IS size-signal, NOT calibration drift.** When Gemma (or Haiku) hits the `--max-tokens` cap mid-response on a mechanics prompt, that is the function having too many named locals / control-flow branches / parameters to fit in a single role-by-role description in working memory. That is the **size diagnosis** the comprehension-gate principle explicitly looks for. Score the truncated response per the verdict matrix exactly as if the cap weren't there — `match/vague` (truncated mid-detail) means "honest hedge, code is opaque, file refactor"; `match/mechanism-only` (truncated before reaching role-interpretation) means "severe opacity, file refactor as severe." DO NOT bump `--max-tokens` to "fix" truncation — that defeats the test. The rationalisation "raise the cap and the model can fit it" is the inverse of the gate's purpose; the cap matches an honest reader's working-memory budget on purpose. Canonical recurrence: F1-F5 ANALYZE 2026-05-10 — orchestrator initially rationalised 5/5 mechanics-truncations as "Gemma cap calibration drift" and bumped the cap to 4096; user reverted, profile clarified. The truncated mechanics responses on F1 (520 LOC), F2 (366 LOC), F3 (268 LOC), F4 (242 LOC), F5 (194 LOC) are evidence those functions exceed the size threshold for single-pass comprehension.
+- **Truncation interpretation is two-tier (empirically calibrated).** The `--max-tokens` cap exists to bound an honest reader's working-memory budget. Two interpretations of mid-response truncation:
+  - **Tier 1 (calibration)**: truncates at standard cap (2048) but completes at the calibrated cap (4096). This is normal coverage — the function has many parts, but they fit in a working-memory budget once given enough output space. Score per the verdict matrix on the COMPLETED 4096 response. **NOT a refactor signal**.
+  - **Tier 2 (size-signal)**: truncates EVEN AT the calibrated cap (4096). This is the genuine comprehension-gate floor failure — the function has so many locals / branches / responsibilities that a complete role-by-role description doesn't fit in 4096 tokens of working memory. Score as `match/vague` or worse (worst-case `match/mechanism-only`). **Refactor candidate**.
+  - The standard cap is 4096 (set in this profile after empirical calibration on Fwiz functions: F1 main 520 LOC and F5 enumerate_candidates 194 LOC both complete at 4096; both truncate at 2048). If a future codebase has functions that truncate at 4096, raise to 8192 ONCE, run the empirical test (do they complete?), and either re-set the standard cap or file a refactor based on which interpretation the data supports. The cap is set EMPIRICALLY by what completes; it is not a fixed value.
+  - Canonical: F1-F5 ANALYZE 2026-05-10 — orchestrator initially read 2048 truncation as size-signal, filed 5 refactors. User hedged ("worth testing both ways"). Empirical test at 4096 showed F1 and F5 both complete cleanly. Refactors retracted; standard cap raised to 4096; this two-tier rule was added.
 - **Distinguish gate failure from grader failure.** A failure on a clearly-written named function might mean the grader is too dumb (calibration issue, not refactor signal). When that pattern appears, log to `.fwiz-workflow/grader-calibration-log.md` per the `too-dumb` / `too-smart` / `uncalibrated-vague` taxonomy. Don't file a refactor; log the calibration concern.
 
 ### 4. Diagnostic interventions (empirical loop, max 5 attempts)
@@ -353,7 +357,7 @@ Skip generated files, fuzz harnesses, test files (the `case` statement at the to
 Per the triple-grader rule (universal readability + supplementary depth), fire all three:
 
 - **Floor — Haiku:** spawn `architecture-explainer` via Agent tool (default `model: haiku`).
-- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 2048` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
+- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 4096` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
 - **Supplementary — Opus:** spawn `architecture-explainer` via Agent tool with **`model: opus` override**.
 
 Pass the manifest only. Do NOT pass CLAUDE.md, README, or any prose documentation to any grader. The whole point is to test architectural legibility from symbols alone.
