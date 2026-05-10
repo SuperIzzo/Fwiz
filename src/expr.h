@@ -7,7 +7,6 @@
 #include <sstream>
 #include <iomanip>
 #include <set>
-#include <unordered_set>
 #include <map>
 #include <vector>
 #include <deque>
@@ -649,6 +648,7 @@ inline const BinOpInfo& binop_info(BinOp op) {
     // cleanly), but BinOpInfo is an aggregate with no constexpr constructor —
     // the brace-init list above is not a constant expression in C++17 because
     // of the aggregate-init rules. C++20 fixes this with constexpr aggregate.
+    // static const: aggregate-init not constexpr-able in C++17 (C++20 fixes)
     static const BinOpInfo table[] = {
         {" + ", 1, [](double l, double r) { return l + r; }},   // ADD
         {" - ", 1, [](double l, double r) { return l - r; }},   // SUB
@@ -1707,15 +1707,12 @@ struct CondClause {
 // op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape structurally —
 // no extra fields on CondClause. Current set is single-entry; additional
 // predicates ship per-consumer schedule (see Future.md).
-inline const std::unordered_set<std::string>& predicate_names() {
-    // static const: unordered_set runtime-init, not constexpr-able in C++17
-    static const std::unordered_set<std::string> s = {"is_neg_num"};
-    return s;
-}
-
+// Predicate names recognised by the rule-condition language. Direct string
+// compare while the set has 1 entry; switch to a static set when count >= 3.
+// See Future.md #65 for per-consumer predicate schedule.
 [[nodiscard]] inline bool is_predicate_clause(const CondClause& c) {
     return c.lhs && c.lhs->type == ExprType::FUNC_CALL
-        && predicate_names().count(c.lhs->name) != 0;
+        && c.lhs->name == "is_neg_num";
 }
 
 struct Condition {
@@ -2670,6 +2667,7 @@ inline ExprPtr tan_integrate(const std::string& var) {
 }
 
 inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
+    // static const: std::map runtime-init, not constexpr-able in C++17
     static const std::map<std::string, BuiltinMeta> registry = {
         {"sin",  {sin_diff,  sin_integrate}},
         {"cos",  {cos_diff,  cos_integrate}},
@@ -2846,6 +2844,7 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
     // flag. Local struct keeps recursion stack-allocated (no heap via
     // std::function type erasure).
     struct FactorWalker {
+        // const Expr* (pointee not mutated): factor identity captured for expr_equal compare
         const Expr* factor;
         bool factor_remains = false;
         void operator()(const Expr* n) {
@@ -2894,6 +2893,10 @@ enum class LiateRank : int {
 // Threshold at which a single FUNC_CALL with no antiderivative-table entry is
 // promoted to a synthesised `f(x) * 1` IBP candidate (covers atan/asin/acos/log).
 constexpr int LIATE_MIN_RANK_FOR_IBP_SYNTHESIS = static_cast<int>(LiateRank::InverseTrig);
+// Pin LIATE_MIN_RANK_FOR_IBP_SYNTHESIS semantics: must be >= Trigonometric (2) to exclude
+// pure-trig synthesis (which would loop); InverseTrig (4) is the documented floor.
+static_assert(LIATE_MIN_RANK_FOR_IBP_SYNTHESIS >= static_cast<int>(LiateRank::Trigonometric),
+              "LIATE_MIN_RANK_FOR_IBP_SYNTHESIS must exclude pure-trig synthesis");
 
 [[nodiscard]] inline int liate_priority(const Expr& e, const std::string& var) {
     if (e.type == ExprType::FUNC_CALL && e.args.size() == 1) {

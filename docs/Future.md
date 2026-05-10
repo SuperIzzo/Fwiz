@@ -760,6 +760,8 @@ Readability-driven refactor candidates filed by the blind-spot critic. Each carr
 
 ## #R2. Refactor: `resolve_integral_calls` 4-arg control-flow restructure
 
+**DONE-by-retest 2026-05-11** — Two consecutive floor-grader passes (cycle-cleanup-bundle close + F22 retest) constitute resolution per floor-vs-supplementary discipline. See #R2 status update below.
+
 **From:** Cycle I-M2 blind-spot critic (function-scope). Haiku-B failed at T1 (wrong-on-detail) on the symbolic-vs-numeric dispatch in the 4-arg branch: the `if (val) { if (finite) return Num; /* fall through to numeric */ } else { return diff; }` shape has asymmetric early-return — the symbolic-bounds path returns directly, the NaN/inf path silently falls through. T3 only passes because the comment explicitly labels "fall through to numeric path" and "symbolic bounds — keep the closed form".
 
 **Proposed:** Extract the 4-arg branch into a helper `resolve_definite_integral(antideriv, target, var, lo_expr, hi_expr) → ExprPtr` that hides the dispatch behind explicit named returns:

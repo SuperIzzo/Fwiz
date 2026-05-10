@@ -8474,7 +8474,7 @@ void test_simplify_exp_log() {
     // Load builtin rewrite rules for simplifier
     FormulaSystem builtin_sys;
     builtin_sys.load_builtins();
-    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules);
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules, &builtin_sys.rewrite_exhaustive_flags_);
 
     // e^(log(x)) → x
     ASSERT_EQ(expr_to_string(simplify(parse("e^(log(x))"))), "x",
@@ -12774,6 +12774,18 @@ void test_symbolic_integrate_definite_symbolic() {
     }
 }
 
+void test_integral_definite_nested_comma_bounds() {
+    SECTION("Cleanup: nested-comma bounds in definite integral");
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // bounds wrap function calls with comma args — depth-tracking must not split inside
+    const double v = resolve_definite_integral(
+        "v = integral(x^2, x, abs(0), abs(3))\n");
+    ASSERT(std::abs(v - 9.0) < 1e-6,
+           "integral(x^2, x, abs(0), abs(3)) = 9 (nested-comma bounds)");
+}
+
 void test_symbolic_integrate_ibp() {
     SECTION("symbolic_integrate: integration by parts via LIATE (M3 BLOCKING #1-#3, DESIRABLE #7)");
 
@@ -13544,6 +13556,21 @@ void test_future53_predicate_check_condition() {
         ASSERT(!check_condition(cond, {}),
                "is_neg_num with null expr_bindings → false (fail-safe)");
     }
+
+    // Conjunction: predicate AND comparison — both must hold
+    {
+        FormulaSystem sys2;
+        sys2.load_string("foo^n = bar iff is_neg_num(n) && n < 0\n");
+        const auto& cond2 = *sys2.rewrite_rules.back().condition;
+        std::map<std::string, ExprPtr> eb_neg3{{"n", Expr::Num(-3)}};
+        std::map<std::string, ExprPtr> eb_pos3{{"n", Expr::Num(3)}};
+        std::map<std::string, double>  nb_neg3{{"n", -3.0}};
+        std::map<std::string, double>  nb_pos3{{"n", 3.0}};
+        ASSERT(check_condition(cond2, nb_neg3, &eb_neg3),
+               "is_neg_num(-3) && -3 < 0 → true");
+        ASSERT(!check_condition(cond2, nb_pos3, &eb_pos3),
+               "is_neg_num(3) && 3 < 0 → false (predicate false short-circuits AND)");
+    }
 }
 
 void test_future53_comparison_permissive_preserved() {
@@ -13902,6 +13929,7 @@ int main() {
     // Symbolic integration M2 (2026-05-10 cycle): u-sub + definite + Simpson
     test_symbolic_integrate_u_sub();
     test_symbolic_integrate_definite_symbolic();
+    test_integral_definite_nested_comma_bounds();
     // Symbolic integration M3 (2026-05-10 cycle): IBP/LIATE + BuiltinMeta registry
     test_symbolic_integrate_ibp();
     test_builtin_meta_registry();

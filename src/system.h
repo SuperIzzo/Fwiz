@@ -2456,14 +2456,16 @@ private:
             }
 
             // Predicate-clause form (Future #53): no comparison operator + parses
-            // as a FUNC_CALL whose head name is in `predicate_names()`. Encoded
-            // as `CondClause{lhs=FUNC_CALL(name,{arg}), rhs=nullptr, op=EQ}`.
+            // as a FUNC_CALL whose head name is one of the recognised predicates
+            // (direct string compare while set is single-entry; mirror
+            // `is_predicate_clause` in expr.h). Encoded as
+            // `CondClause{lhs=FUNC_CALL(name,{arg}), rhs=nullptr, op=EQ}`.
             if (op_pos == std::string::npos) {
                 auto tok = Lexer(clause_str).tokenize();
                 Parser pp(tok);
                 auto e = pp.parse_expr();
                 if (e && e->type == ExprType::FUNC_CALL
-                    && predicate_names().count(e->name) != 0) {
+                    && e->name == "is_neg_num") {
                     cond.clauses.push_back({e, nullptr, CondOp::EQ});
                     continue;
                 }
