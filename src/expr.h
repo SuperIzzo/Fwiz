@@ -7,6 +7,7 @@
 #include <sstream>
 #include <iomanip>
 #include <set>
+#include <unordered_set>
 #include <map>
 #include <vector>
 #include <deque>
@@ -1701,6 +1702,22 @@ struct CondClause {
     CondOp op;
 };
 
+// Typed-binding predicates for rule conditions (Future #53). A predicate clause
+// is encoded as `CondClause{lhs=FUNC_CALL("is_*", {Var("name")}), rhs=nullptr,
+// op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape structurally —
+// no extra fields on CondClause. Current set is single-entry; additional
+// predicates ship per-consumer schedule (see Future.md).
+inline const std::unordered_set<std::string>& predicate_names() {
+    // static const: unordered_set runtime-init, not constexpr-able in C++17
+    static const std::unordered_set<std::string> s = {"is_neg_num"};
+    return s;
+}
+
+[[nodiscard]] inline bool is_predicate_clause(const CondClause& c) {
+    return c.lhs && c.lhs->type == ExprType::FUNC_CALL
+        && predicate_names().count(c.lhs->name) != 0;
+}
+
 struct Condition {
     std::vector<CondClause> clauses;
     std::vector<CondLogic> connectors; // size = clauses.size() - 1
@@ -1768,10 +1785,28 @@ struct Condition {
 };
 
 // Check if a condition is satisfied given current bindings.
-// Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied.
+// Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied
+// for COMPARISON clauses (permissive-true). PREDICATE clauses use fail-safe
+// semantics: unknown binding → false. `expr_bindings` is optional — only rule-
+// condition callers (e.g. `apply_rewrite_rules`) pass it; equation-context callers
+// pass nullptr and predicate clauses then short-circuit to false (Future #53).
 [[nodiscard]] inline bool check_condition(const Condition& cond,
-                            const std::map<std::string, double>& bindings) {
+                            const std::map<std::string, double>& bindings,
+                            const std::map<std::string, ExprPtr>* expr_bindings = nullptr) {
     auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
+        // Predicate clauses (Future #53): typed dispatch on the bound ExprPtr.
+        // Fail-safe semantics — any unknown/missing/wrong-shape arg → false.
+        if (is_predicate_clause(c)) {
+            const std::string& name = c.lhs->name;
+            if (c.lhs->args.size() != 1) return false;
+            if (!is_var(c.lhs->args[0])) return false;
+            const std::string& var_name = c.lhs->args[0]->name;
+            if (!expr_bindings) return false;
+            auto it = expr_bindings->find(var_name);
+            if (it == expr_bindings->end()) return false;
+            if (name == "is_neg_num") return is_neg_num(it->second);
+            return false; // unknown predicate name — fail-safe
+        }
         ExprPtr lhs = c.lhs, rhs = c.rhs;
         std::set<std::string> vars;
         collect_vars(lhs, vars);
@@ -1843,6 +1878,12 @@ inline std::string condition_to_string(const Condition& cond,
     for (size_t i = 0; i < cond.clauses.size(); i++) {
         if (i > 0) out += (cond.connectors[i-1] == CondLogic::AND) ? " && " : " || ";
         const auto& c = cond.clauses[i];
+        if (is_predicate_clause(c)) {
+            // Predicate clauses (Future #53): render as `is_name(arg)`.
+            // `expr_to_string` already handles FUNC_CALL pretty-printing.
+            out += expr_to_string(c.lhs);
+            continue;
+        }
         ExprPtr l = c.lhs, r = c.rhs;
         for (auto& [var, val] : bindings) {
             l = substitute(l, var, val);
@@ -2468,14 +2509,8 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                         for (int64_t i = 0; i < exp; i++) { rn *= n; rd *= d; }
                         return make_rational(rn, rd);
                     }
-                    // not migratable: x^n wildcard would loop on symbolic exp; see Future.md typed-binding-predicates
-                    if (is_num(r) && r->num < 0) {
-                        if (r->num == -1.0)
-                            return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1), l);
-                        return Expr::BinOpExpr(BinOp::DIV, Expr::Num(1),
-                            Expr::BinOpExpr(BinOp::POW, l, Expr::Num(-r->num)));
-                    }
-                    // x^0, x^1, x^0.5, (x^a)^b now in BUILTIN_REWRITE_RULES
+                    // x^0, x^1, x^0.5, (x^a)^b, x^(-n) now in BUILTIN_REWRITE_RULES
+                    // (T3.6 migrated via `is_neg_num(n)` predicate, Future #53)
                     return Expr::BinOpExpr(BinOp::POW, l, r);
                 case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }
@@ -2507,7 +2542,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                     if (it != global_bindings->end()) numeric[var] = it->second;
                 }
             }
-            if (!check_condition(*rule.condition, numeric)) continue;
+            if (!check_condition(*rule.condition, numeric, &*bindings)) continue;
             const AssumptionSource source = (exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index])

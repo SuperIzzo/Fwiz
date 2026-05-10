@@ -671,6 +671,10 @@ i ^ 2 = -1
 x^a / x^b = x^(a - b) iff x != 0
 abs(x) / x = sign(x) iff x != 0
 abs(x) / x = undefined iff x = 0
+# Negative-exponent canonicalization (T3.6, Future #53): x^(-N) → 1/x^N.
+# The `is_neg_num(n)` predicate gates firing on numeric-negative exponents only,
+# so symbolic exponents (`x^y`) do not trigger infinite rewrite loops.
+x^n = 1 / x^(-n) iff is_neg_num(n)
 )";
 
     // Built-in function definitions — loaded as sub-systems when called.
@@ -2451,7 +2455,20 @@ private:
                 }
             }
 
-            if (op_pos == std::string::npos) continue; // malformed clause, skip
+            // Predicate-clause form (Future #53): no comparison operator + parses
+            // as a FUNC_CALL whose head name is in `predicate_names()`. Encoded
+            // as `CondClause{lhs=FUNC_CALL(name,{arg}), rhs=nullptr, op=EQ}`.
+            if (op_pos == std::string::npos) {
+                auto tok = Lexer(clause_str).tokenize();
+                Parser pp(tok);
+                auto e = pp.parse_expr();
+                if (e && e->type == ExprType::FUNC_CALL
+                    && predicate_names().count(e->name) != 0) {
+                    cond.clauses.push_back({e, nullptr, CondOp::EQ});
+                    continue;
+                }
+                continue; // malformed clause, skip
+            }
 
             const std::string lhs_str = trim(clause_str.substr(0, op_pos));
             const std::string rhs_str = trim(clause_str.substr(op_pos + op_len));

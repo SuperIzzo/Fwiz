@@ -657,25 +657,37 @@ The `diff(...)=?` query path returns a `ValueSet` (CLI Surface 2) and so should 
 
 **Reopen trigger:** range-propagation through `resolve_all` lands (independent feature), OR a user surfaces a `diff(...)=?` query whose natural answer is an interval.
 
-## 53. Typed-binding predicates in `.fw` rule conditions
+## 53. Typed-binding predicates in `.fw` rule conditions — DONE (2026-05-10)
 
-Extend the rule-condition language with predicates `is_num(x)`, `is_neg_num(x)`, `is_int(x)` that test the runtime binding of a wildcard: `is_num(x)` is true only when `x` binds to a numeric literal — NOT permissive-unknown (unknown → false, not true). This is the foundational extension that would unblock three blocked migrations and one blocked rule: T3.5 (rational arithmetic in `simplify_div`), T3.6 (`x^(-n)` rendering), and Future #31 (`abs(x) = x iff x >= 0`). Without this, the rule engine's wildcard semantics treat any binding — symbolic or numeric — identically, making it impossible to safely restrict a rule to numeric-only operands.
+Mechanism shipped with `is_neg_num` as the initial predicate. `is_neg_num(n)` in a rule condition tests that wildcard `n` binds to a negative numeric literal; fail-safe semantics (unknown or non-Num binding → false). Encoded as `CondClause{lhs=FUNC_CALL("is_neg_num", {Var("n")}), rhs=nullptr, op=CondOp::EQ}`. T3.6 (`x^(-n) → 1/x^n`) is the first consumer — migration complete (see #55). Predicate set extends per-consumer schedule: `is_int` ← T3.5/#54 cycle; `is_pos_num` ← #31 cycle; `is_num` ← #49 BuiltinMeta migration cycle. Four consumers audited at escalation time (2026-05-10): T3.5, T3.6, #31, BuiltinMeta #49; each triggers its own predicate addition when that consumer cycle begins.
 
-**Reopen trigger**: a third C++ simplifier block resists migration for the same reason (wildcard binds both numeric and symbolic, rational arithmetic is C++-only), OR Future #31 (`abs(x) = x iff x >= 0`) is reopened, OR T3.5/T3.6 are reopened.
-
-**Escalation (2026-05-10, Future #16 M1):** Tier 1 antiderivative table (`symbolic_integrate` in `expr.h`) is the **3rd consumer** of the same wildcard-restriction need — `Var(var)^n` matching with `n` constant requires the same numeric-literal predicate. M1 ships with a C++ if-chain (matching diff's pattern); M3's `BuiltinMeta` registry (DONE 2026-05-10, Future #49) is the **4th consumer** carrying both diff and integrate metadata as C++ function pointers — the `.fw`-rule migration of these tables is gated on #53. Recommend prioritising in PLAN-NEXT.
+**Reopen trigger**: a new consumer cycle starts that needs an additional predicate (see NEW item below for the per-consumer schedule), OR Future #31 (`abs(x) = x iff x >= 0`) is reopened, OR T3.5 is reopened.
 
 ## 54. T3.5 non-migration: constant reassociation in `simplify_div`
 
-The constant-reassociation block in `simplify_div` (expr.h) cannot migrate to `.fw` rewrite rules. Root cause: the block extracts numeric factors from symbolic expressions using `make_rational` — a C++-only operation — and rebalances the numeric side. The rule engine's wildcard semantics bind `b` to any expression (symbolic or numeric) indistinguishably, so a rule condition like `iff is_num(a)` cannot be expressed today.
+The constant-reassociation block in `simplify_div` (expr.h) cannot migrate to `.fw` rewrite rules. Root cause: the block extracts numeric factors from symbolic expressions using `make_rational` — a C++-only operation — and rebalances the numeric side. The typed-binding predicate blocker (`iff is_num(a)` unrepresentable in rule conditions) was cleared by Future #53 (2026-05-10). The remaining blocker is rule-RHS semantics: `make_rational` is a C++-only operation producing structural `DIV(Num, Num)` nodes; the rule engine cannot express this on the RHS today.
 
-**Reopen trigger**: typed-binding predicates (Future #53) ship AND `make_rational` is callable from rule RHS evaluation.
+**Reopen trigger**: `make_rational` is callable from rule RHS evaluation, AND `is_int` predicate is added to `predicate_names()` (per #53 per-consumer schedule).
 
-## 55. T3.6 non-migration: `x^(-n) → 1/x^n`
+## 55. T3.6 non-migration: `x^(-n) → 1/x^n` — DONE (2026-05-10)
 
-The `x^(-n)` rewriting in the simplifier cannot migrate to a `.fw` rewrite rule. Root cause: permissive-condition semantics would treat `x^y` (symbolic exponent) as satisfying any numeric-sign condition on `y` (unknown → permissive), causing infinite rewriting loops on symbolic exponents. The check that `n` is a negative numeric literal requires `is_neg_num(n)` — a typed-binding predicate not yet in the rule engine.
+Migrated. The C++ block at `expr.h:2471-2477` (`is_num(r) && r->num < 0` branch) was deleted; replaced by `.fw` rule `x^n = 1 / x^(-n) iff is_neg_num(n)` in `BUILTIN_REWRITE_RULES` (system.h). Fail-safe predicate semantics prevent the rule from firing on symbolic exponents (`x^y` with Var `y` → false). The `-1` special case merges naturally: `x^(-1)` → `1 / x^1` → `x^1 = x` → `1 / x`. Regression guards: `b^(-1) → 1/b`, `b^(-2) → 1/b^2`, `b^(-3) → 1/b^3`, `x^y` not rewritten, `0^(-1)` still folds to `+inf` via numeric-fold path before rule engine sees the node — all confirmed by new tests in `test_future53_t36_negative_exp_migration`.
 
-**Reopen trigger**: typed-binding predicates (Future #53) ship.
+## 65. Additional `.fw` typed-binding predicates (per-consumer schedule)
+
+Three predicates have named consumers but were not shipped in #53 (which delivered `is_neg_num` only, per minimalism critique). Each predicate ships in the cycle that consumes it:
+
+- `is_int(n)` — binding is `Num` with integer value (`is_integer_value(e->num)`). Consumer: T3.5/#54 migration (needs `is_int` in rule condition AND `make_rational` callable from rule RHS — both blockers must clear).
+- `is_pos_num(n)` — binding is `Num` with value > 0. Consumer: Future #31 (`abs(x) = x iff x >= 0` partial form, partial form `abs(x) = x iff is_pos_num(x)` is deliverable without full global-condition propagation).
+- `is_num(n)` — binding is any `Num`. Consumer: Future #49 BuiltinMeta migration to `.fw` rules (needs integration-variable context threading as the independent secondary blocker).
+
+**Reopen trigger (each):** the named consumer cycle starts. The predicate machinery (encoding, `predicate_names()` extension, `check_condition` dispatch branch) is already in place — adding a new predicate is one dispatch line + tests.
+
+## 66. `is_num(arbitrary_expr)` argument-shape validation
+
+v1 of the typed-binding predicate mechanism (Future #53) enforces single-Var argument in `parse_condition` dispatch — `is_predicate_clause` checks `c.lhs->args[0]->type == VAR`. A non-Var argument (e.g. `is_num(x+1)`) currently passes through silently: `parse_condition` will look up a binding named `"x+1"` which does not exist, and the predicate returns false (fail-safe). No parse-time error is raised.
+
+**Reopen trigger:** user reports a rule with `is_num(<structured_arg>)` that silently fails to fire when they expected it to. Fix: add a parse-time `runtime_error` (or at minimum a stderr warning) when the predicate argument is not a bare identifier.
 
 ## 56. Issue 1 severity escalation option
 

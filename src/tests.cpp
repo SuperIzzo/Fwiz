@@ -13454,6 +13454,154 @@ void test_periodicity_regression_quadratic() {
                + std::to_string(vs.discrete().size()) + ")");
 }
 
+// === Future #53: Typed-binding predicates for .fw rule conditions ===
+
+void test_future53_predicate_parse() {
+    SECTION("Future #53: parse is_neg_num(n) as predicate clause");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // Load a rule with predicate condition via public load_string; inspect
+    // the resulting rewrite_rules to verify clause structure.
+    FormulaSystem sys;
+    sys.load_string("foo^n = bar iff is_neg_num(n)\n");
+    ASSERT(!sys.rewrite_rules.empty(), "rule loaded");
+    const auto& rule = sys.rewrite_rules.back();
+    ASSERT(rule.condition.has_value(), "rule has condition");
+    const auto& cond = *rule.condition;
+    ASSERT(cond.clauses.size() == 1, "predicate clause count == 1");
+    const auto& cl = cond.clauses[0];
+    ASSERT(cl.lhs && cl.lhs->type == ExprType::FUNC_CALL,
+           "predicate clause lhs is FUNC_CALL");
+    ASSERT(cl.lhs && cl.lhs->name == "is_neg_num", "predicate name preserved");
+    ASSERT(cl.lhs && cl.lhs->args.size() == 1 && is_var(cl.lhs->args[0])
+           && cl.lhs->args[0]->name == "n",
+           "predicate arg is Var(\"n\")");
+    ASSERT(!cl.rhs, "predicate rhs is nullptr");
+
+    // Mixed: is_neg_num(x) && x < 0
+    FormulaSystem sys2;
+    sys2.load_string("foo^x = bar iff is_neg_num(x) && x < 0\n");
+    ASSERT(!sys2.rewrite_rules.empty(), "mixed rule loaded");
+    const auto& mr = sys2.rewrite_rules.back();
+    ASSERT(mr.condition.has_value() && mr.condition->clauses.size() == 2,
+           "mixed predicate+comparison: 2 clauses");
+    ASSERT(mr.condition->clauses[0].lhs
+           && mr.condition->clauses[0].lhs->type == ExprType::FUNC_CALL,
+           "clause[0] is predicate (FUNC_CALL lhs)");
+    ASSERT(mr.condition->clauses[1].lhs && is_var(mr.condition->clauses[1].lhs)
+           && mr.condition->clauses[1].lhs->name == "x",
+           "clause[1] is comparison (Var lhs)");
+
+    // Existing comparison parses unchanged
+    FormulaSystem sys3;
+    sys3.load_string("foo^n = bar iff n < 0\n");
+    ASSERT(!sys3.rewrite_rules.empty(), "comparison rule loaded");
+    const auto& cr = sys3.rewrite_rules.back();
+    ASSERT(cr.condition.has_value() && cr.condition->clauses.size() == 1,
+           "comparison clause count");
+    ASSERT(cr.condition->clauses[0].lhs && is_var(cr.condition->clauses[0].lhs),
+           "comparison clause lhs is Var (unchanged)");
+}
+
+void test_future53_predicate_check_condition() {
+    SECTION("Future #53: check_condition predicate dispatch");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    FormulaSystem sys;
+    sys.load_string("foo^n = bar iff is_neg_num(n)\n");
+    const auto& cond = *sys.rewrite_rules.back().condition;
+
+    // Predicate fires on Num(-3) → true
+    {
+        std::map<std::string, ExprPtr> eb{{"n", Expr::Num(-3)}};
+        ASSERT(check_condition(cond, {}, &eb),
+               "is_neg_num(Num(-3)) → true");
+    }
+    // Predicate fires on Num(3) → false
+    {
+        std::map<std::string, ExprPtr> eb{{"n", Expr::Num(3)}};
+        ASSERT(!check_condition(cond, {}, &eb),
+               "is_neg_num(Num(3)) → false");
+    }
+    // Var → false (fail-safe)
+    {
+        std::map<std::string, ExprPtr> eb{{"n", Expr::Var("y")}};
+        ASSERT(!check_condition(cond, {}, &eb),
+               "is_neg_num(Var(\"y\")) → false (fail-safe)");
+    }
+    // Absent → false
+    {
+        std::map<std::string, ExprPtr> eb;
+        ASSERT(!check_condition(cond, {}, &eb),
+               "is_neg_num(absent) → false (fail-safe)");
+    }
+    // No expr_bindings (equation context, nullptr default) → false
+    {
+        ASSERT(!check_condition(cond, {}),
+               "is_neg_num with null expr_bindings → false (fail-safe)");
+    }
+}
+
+void test_future53_comparison_permissive_preserved() {
+    SECTION("Future #53: comparison clause permissive-true preserved");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    FormulaSystem sys;
+    sys.load_string("foo^n = bar iff n < 0\n");
+    const auto& cond = *sys.rewrite_rules.back().condition;
+
+    // Comparison with absent n → true (permissive-unknown, unchanged behavior)
+    ASSERT(check_condition(cond, {}),
+           "n < 0 with absent n → true (permissive preserved)");
+    // Comparison with n = -3 → true
+    ASSERT(check_condition(cond, {{"n", -3.0}}),
+           "n < 0 with n=-3 → true");
+    // Comparison with n = 3 → false
+    ASSERT(!check_condition(cond, {{"n", 3.0}}),
+           "n < 0 with n=3 → false");
+}
+
+void test_future53_t36_negative_exp_migration() {
+    SECTION("Future #53: T3.6 x^(-n) → 1/x^n migration via .fw rule");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    FormulaSystem builtin_sys;
+    builtin_sys.load_builtins();
+    RewriteRulesGuard rr_guard(&builtin_sys.rewrite_rules,
+                                &builtin_sys.rewrite_exhaustive_flags_);
+
+    // T3.6 regression: b^(-1) → 1/b
+    ASSERT_EQ(expr_to_string(simplify(parse("b^(-1)"))), "1 / b",
+        "T3.6: b^(-1) → 1/b");
+    // T3.6 regression: b^(-2) → 1/b^2
+    ASSERT_EQ(expr_to_string(simplify(parse("b^(-2)"))), "1 / b^2",
+        "T3.6: b^(-2) → 1/b^2");
+    // T3.6 regression: b^(-3) → 1/b^3
+    ASSERT_EQ(expr_to_string(simplify(parse("b^(-3)"))), "1 / b^3",
+        "T3.6: b^(-3) → 1/b^3");
+    // T3.6 fail-safe: symbolic exponent NOT rewritten (no infinite loop)
+    {
+        const auto* r = simplify(parse("x^y"));
+        const auto s = expr_to_string(r);
+        ASSERT(s == "x^y", std::string("T3.6 fail-safe: x^y stays unrewritten (got '") + s + "')");
+    }
+    // 0^(-1) regression: numeric fold to +inf BEFORE rule fires
+    {
+        const auto* e = simplify(parse("0^(-1)"));
+        auto v = evaluate(*e);
+        ASSERT(v.has_value() && std::isinf(v.value()),
+               "T3.6 regression: 0^(-1) folds to +inf (unchanged)");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -13777,6 +13925,12 @@ int main() {
     test_periodicity_12h_main_pass1_dedup_parity();
     test_periodicity_12e_roundtrip_parse();
     test_periodicity_regression_quadratic();
+
+    // Future #53: typed-binding predicates
+    test_future53_predicate_parse();
+    test_future53_predicate_check_condition();
+    test_future53_comparison_permissive_preserved();
+    test_future53_t36_negative_exp_migration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
