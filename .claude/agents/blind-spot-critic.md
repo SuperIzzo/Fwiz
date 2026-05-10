@@ -169,7 +169,7 @@ You CANNOT spawn these. SAMPLE mode emits the prompt for each (with all metadata
 **Floor — Gemma side (you run via Bash, both modes):**
 
 ```bash
-./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 2048 --out <out-dir>
+./tools/calibrate-grader.py --prompt <prompt-file> --models gemma-4-e2b-q4-xl --max-tokens 4096 --out <out-dir>
 ```
 
 In SAMPLE mode, you run Gemma inline for every prompt and record its response inline in the sampling artifact alongside each prompt. In ANALYZE mode, you may invoke Gemma for intervention-loop checks (cheaper than another orchestrator round-trip).
@@ -352,7 +352,7 @@ Skip generated files, fuzz harnesses, test files (the `case` statement at the to
 Per the triple-grader rule (universal readability + supplementary depth), fire all three:
 
 - **Floor — Haiku:** spawn `architecture-explainer` via Agent tool (default `model: haiku`).
-- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 2048` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
+- **Floor — Gemma:** invoke `tools/calibrate-grader.py --prompt <manifest-as-prompt> --models gemma-4-e2b-q4-xl --max-tokens 4096` via Bash. Wrap the manifest in the architecture-explainer's instruction body.
 - **Supplementary — Opus:** spawn `architecture-explainer` via Agent tool with **`model: opus` override**.
 
 Pass the manifest only. Do NOT pass CLAUDE.md, README, or any prose documentation to any grader. The whole point is to test architectural legibility from symbols alone.
