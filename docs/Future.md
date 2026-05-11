@@ -707,6 +707,35 @@ Three predicates have named consumers but were not shipped in #53 (which deliver
 
 **Reopen trigger (each):** the named consumer cycle starts. The predicate machinery (encoding, `predicate_names()` extension, `check_condition` dispatch branch) is already in place — adding a new predicate is one dispatch line + tests.
 
+## 67. CLI / `.fw` dispatch-path unification for `integral`/`diff` queries
+
+**From:** user observation 2026-05-11 on Future #16 review — the `.fw` file form `F = integral(x^2, x)` and the CLI form `integral(x^2, x) = ?F` evaluate to the same result but travel through **two parallel dispatch layers**:
+
+| Layer | `.fw` path | CLI path |
+|-------|------------|----------|
+| Parse | `parse_line` → ordinary equation in `equations[]` | `parse_cli_query` detects `integral(...)` LHS → builds `CLIIntegralQuery` struct |
+| Hold  | `equations[]` (and `solved_symbolic_`) | `query.integral_queries[]` (separate vector) |
+| Resolve | `resolve_integral_in_equations` (load-time, generic `resolve_at_load<Rewriter>`) | `Pass 1.6` in `main.cpp` re-serializes back to `.fw` syntax + calls `load_string` + same pass |
+| Render | `resolve_all(target)` + standard render | `Pass 1.6` ad-hoc render block |
+
+The Pass 1.6 dispatcher at `main.cpp:596-635` literally does `injected += iq.alias + " = integral(...)"; sys.load_string(injected)` — re-serializing CLI form INTO `.fw` form to share the resolve pass. The parallel struct + dispatcher block is a redundant pipe layer. Same shape applies to `CLIDiffQuery` / Pass 1.5.
+
+**Visible cost** (observed 2026-05-11):
+1. **`--table` + `integral(...)=?` doesn't compose**: table driver iterates `query.queries` for output columns, not `query.integral_queries`. The integral computes but never renders as a column. Workaround works via inline-binding `F = integral(...)` in `.fw`, but the direct CLI form is broken. This is structural, not incidental.
+2. **CLI binding RHS can't accept `integral`/`diff`**: `F = integral(x^2, x)` on the CLI fails with `"Invalid value 'integral(x^2, x)' for variable 'F'"` because `parse_cli_query`'s value-side path is `std::stod → Parser+evaluate`, and `evaluate` on an unresolved `integral` FUNC_CALL returns empty. Users naturally expect this to work (the .fw file form does).
+
+**Proposed bridge** — extend CLI binding RHS to absorb `integral`/`diff` expressions by injecting them as synthetic equations BEFORE the resolve pass, same flow as `.fw` files:
+
+1. In `parse_cli_query`, when a binding's RHS parses to a FUNC_CALL whose name is `integral`/`diff`/`integrate` (i.e. a "resolve-at-load" call), inject `<binding_var> = <expr>` into the system as a synthetic equation via `load_string` BEFORE returning. The binding itself is then a regular query target (no special struct).
+2. Reframe `integral(...) = ?alias` and `diff(...) = ?alias` as sugar for `alias = integral(...); alias = ?` (parse-time rewrite, not a separate dispatch layer).
+3. Delete `CLIIntegralQuery` + `CLIDiffQuery` structs, Pass 1.5, Pass 1.6 dispatcher blocks. ~100 LOC removed.
+4. Add CLI-binding-with-resolve-RHS path in `parse_cli_query`. ~30 LOC added.
+
+**Net LOC**: ~-70.
+**Side effect**: `--table` + integral composition works for free (integral queries become regular queries via the synthetic alias). The visible composition bug closes without separate work.
+
+**Reopen trigger**: this item itself (no external trigger needed — it's an architectural cleanup with concrete user-visible bugs to fix). Schedule when next cleanup-adjacent slot opens, or when the next CLI feature surfaces friction from the parallel pipe layer.
+
 ## 66. `is_num(arbitrary_expr)` argument-shape validation
 
 v1 of the typed-binding predicate mechanism (Future #53) enforces single-Var argument in `parse_condition` dispatch — `is_predicate_clause` checks `c.lhs->args[0]->type == VAR`. A non-Var argument (e.g. `is_num(x+1)`) currently passes through silently: `parse_condition` will look up a binding named `"x+1"` which does not exist, and the predicate returns false (fail-safe). No parse-time error is raised.
