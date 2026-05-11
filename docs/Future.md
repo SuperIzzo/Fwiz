@@ -53,30 +53,61 @@ For numeric-solver equations, `numeric_memo_` accumulates per-key memoized resul
 
 ## 7. Units and Dimensional Analysis
 
-### Problem
+### Split — engine vs stdlib (clarified 2026-05-11)
 
-`speed = distance / time` should know that `100km / 2hr = 50 km/hr`, and reject `100kg / 2hr` as dimensionally invalid.
+This item splits along the engine/stdlib axis per the project's wrapper-tier discipline:
 
-### Proposed syntax
+- **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. The minimum engine hook so that `100kg` parses and binds to a number-with-attached-unit-tag, with a generic API for any unit symbol. **Requires API design** — how does the suffix attach to a number in the AST? Is it a `FUNC_CALL("with_unit", {Num(100), Var("kg")})` (analogous to vec/mat sugar)? A new field on `Expr`? A `@unit kg` annotation handled at parse time only? This is the actual core work.
+- **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
+- **#7b (NEW SUB-ITEM — PARKED)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). This is the typed-binding-predicate escalation: only fires if a `.fw` predicate can't express it. Reopen trigger: user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture.
+
+### Problem (#7)
+
+`speed = distance / time` should know that `100km / 2hr = 50 km/hr`. The minimum engine support: `100km` is a parseable token (suffix-bearing number). The arithmetic and dimensional reasoning live in stdlib `.fw` rules.
+
+### Proposed syntax (#7 engine surface)
 
 ```
-# units.fw
-distance [m]
-time [s]
-speed [m/s] = distance / time
+# inline value with unit suffix
+fwiz physics(force=?, mass=100kg)
+fwiz speed(distance=10km, time=2hr)
 ```
 
-Or inline:
-```bash
-fwiz physics(force=? [N], mass=10 [kg])
+```fw
+# in a .fw file — suffix is parsed as engine-level token
+m = 100kg
+v = 50km/hr
 ```
 
-### Capabilities
+### Open API design questions (#7)
 
-- Automatic unit conversion within compatible dimensions
-- Dimensional analysis: reject `mass + time` at parse time
-- Unit inference: if `speed = distance / time` and distance is in km, time in hr, speed is in km/hr
-- SI prefix handling: km → 1000m, ms → 0.001s
+These are the actual design surface — what this cycle (when scheduled) decides:
+
+1. **Suffix → AST mapping**: how does `100kg` become an AST node? Three candidates:
+   - (A) `FUNC_CALL("with_unit", {Num(100), Var("kg")})` — sugar like vec/mat
+   - (B) A new annotation field on existing Num/Expr — heavier; touches `sizeof(Expr)`
+   - (C) Parser desugar at parse time: `100kg` → `100 * kg` where `kg` is a regular Var. Stdlib `.fw` files define `kg = 1 [si_mass]` or similar.
+   - Recommendation: lean (C) — least invasive, leverages existing variable-binding machinery, lets stdlib do all the semantic work.
+2. **Suffix grammar**: which characters can follow a number? `kg`, `m/s`, `m^2`, `μs`? Lexer needs to know where the number ends and the suffix begins.
+3. **Compound suffixes**: `km/hr`, `m/s^2`, `kg*m/s^2` — how complex can the suffix grammar get without a full unit-expression parser?
+4. **Disambiguation**: `100m` vs a defined variable `m`? If `m` is bound, does `100m` mean `100 * m` (binding) or `100 [meters]` (unit suffix)? Likely the same thing under (C), which is the elegance argument for (C).
+5. **Round-tripping**: `--derive` output preserves suffixes or expands? `--approximate` mode?
+
+### Capabilities (in-scope for #7 core)
+
+- Lexer recognizes `<number><identifier>` as `<number> * <identifier>` (or similar minimal binding)
+- The identifier is a regular `Var` — semantics deferred to `.fw` rules
+- Round-tripping safe: output of `--derive` re-parses identically
+
+### Capabilities (deferred to #7a stdlib / #7b)
+
+- The unit catalog (SI base + derived) — stdlib `.fw` files
+- Conversion rules (`1km = 1000m`) — stdlib `.fw` rewrite rules
+- Display formatting in user's preferred unit — stdlib option
+- Dimensional analysis rejection — #7b (typed-predicate escalation)
+
+### Reopen trigger for #7
+This item is **in-scope core, awaiting cycle scheduling**. Reopen trigger: user requests unit-bearing arithmetic, OR LLM ergonomics work surfaces unit-suffix-parsing as a friction point, OR a stdlib design (#8) requires it as a prerequisite.
 
 ## 8. Standard Library
 
