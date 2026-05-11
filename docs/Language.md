@@ -19,10 +19,13 @@ For a gentle introduction, see [../README.md](../README.md).
 8. [Queries and Multiple Returns](#8-queries-and-multiple-returns)
 9. [Recursion](#9-recursion)
 10. [Rewrite Rules](#10-rewrite-rules)
+    - [10.6 Typed-Binding Predicates](#106-typed-binding-predicates)
 11. [Built-in Functions](#11-built-in-functions)
 12. [Built-in Constants](#12-built-in-constants)
 13. [Special Values](#13-special-values)
 14. [Standard Library](#14-standard-library)
+15. [Vector and Matrix Literals](#15-vector-and-matrix-literals)
+16. [Complex Numbers](#16-complex-numbers)
 
 ---
 
@@ -543,6 +546,16 @@ double(x) = 2 * x
 triple(x) = 3 * x
 ```
 
+### 10.6 Typed-Binding Predicates
+
+Some rule conditions test the *type* of a wildcard binding rather than comparing values. Current predicate set: `is_neg_num(n)` — true iff `n` binds to a negative numeric literal.
+
+```
+x ^ n = 1 / x ^ (-n) iff is_neg_num(n)
+```
+
+This rewrites `x^(-2)` as `1 / x^2` only when the exponent is a known negative literal; it does not fire on a symbolic exponent like `-k`. Fail-safe semantics: if `n` is not bound or is non-numeric, the predicate returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
+
 ---
 
 ## 11. Built-in Functions
@@ -562,16 +575,18 @@ Defined via the built-in section mechanism (§6.4). All accept real arguments an
 | `log(x)` | Natural logarithm | `x > 0` |
 | `sign(x)` | Sign: −1, 0, or +1 | all real |
 | `diff(f, x)` | Symbolic derivative of `f` with respect to `x` | `x` must be a bare variable name |
+| `integral(f, x)` | Symbolic antiderivative of `f` with respect to `x` | `x` must be a bare variable name |
+| `integral(f, x, a, b)` | Definite integral of `f` from `a` to `b` | `x` bare; `a`, `b` any expressions |
 
 `diff(f, x)` is a parser-level builtin: when it appears in a `.fw` equation body, the derivative is computed symbolically at load time and the result (a simplified expression tree) is inlined in place of the call. `f` may be any expression or the name of another variable defined in the same system (the post-load pass substitutes its equation's RHS before differentiating).
+
+`integral(f, x)` is likewise resolved at load time when used in an equation body. The indefinite form returns an antiderivative expression. The 4-arg definite form uses symbolic F(b) − F(a) as its primary path; when symbolic integration cannot close the antiderivative, it falls back to adaptive Simpson's rule numerically. When neither path succeeds, the `integral(...)` call is preserved unevaluated. `diff` and `integral` are also accepted as CLI query targets — see [CLI.md §1](CLI.md#1-syntax).
 
 ```
 # sensitivity.fw
 force = mass * acceleration
 sensitivity = diff(force, mass)    # inlined as: sensitivity = acceleration
 ```
-
-`diff(f, x)` is also accepted as a CLI query target — see [CLI.md §1](CLI.md#1-syntax).
 
 Out-of-domain inputs produce NaN at evaluation time.
 
@@ -588,8 +603,9 @@ Available in any equation without declaration:
 | `pi`  | 3.14159265... | Circle constant |
 | `e`   | 2.71828182... | Euler's number |
 | `phi` | 1.61803398... | Golden ratio |
+| `i`   | (no numeric value; NaN binding) | Imaginary unit (`i^2 = -1`). Symbolic-only — forces the symbolic channel. See §16. |
 
-In `--derive` mode these are preserved symbolically:
+In `--derive` mode `pi`, `e`, and `phi` are preserved symbolically:
 
 ```bash
 $ fwiz --derive physics(circumference=?, radius=r)
@@ -665,3 +681,61 @@ x = asin(result)
 ```
 
 This file is **reference documentation** — the actual built-ins are compiled into the fwiz binary. Read it when you want to define your own `@extern`-backed function in C++: copy the pattern, register via `register_function()`, and your new function behaves like a native built-in.
+
+---
+
+## 15. Vector and Matrix Literals
+
+fwiz supports vector and matrix literals using bracket syntax. No new `ExprType` is introduced — they are represented internally as `FUNC_CALL("vec", ...)` and `FUNC_CALL("mat", ...)` nodes, so `sizeof(Expr)` is unchanged.
+
+### 15.1 Vector Literals
+
+```
+v = [1, 2, 3]           # row vector
+w = [a, b+1, c^2]       # symbolic elements allowed
+```
+
+A bracketed, comma-separated list without `..` (which would trigger range parsing in the CLI) is a vector literal. It parses as `FUNC_CALL("vec", e1, e2, e3)`.
+
+### 15.2 Matrix Literals
+
+```
+m = [[1, 0], [0, 1]]    # 2x2 identity matrix
+```
+
+A list of vector literals, one per row. Parses internally as `FUNC_CALL("mat", vec_row1, vec_row2, ...)`.
+
+### 15.3 Auto-simplification
+
+Element-wise add/sub between same-shape literals and scalar multiplication (scalar × vec or scalar × mat) simplify automatically. Shape mismatch (e.g. adding a 2×2 to a 2×3, or taking the dot product of vectors of different lengths) propagates `undefined`.
+
+### 15.4 Matrix Builtins
+
+| Builtin | Effect | Scope |
+|---------|--------|-------|
+| `matmul(A, B)` | Matrix product | Both arguments must be matrices; compatible inner dimensions |
+| `det(M)` | Determinant | 2×2 and 3×3 only |
+| `inv(M)` | Matrix inverse | 2×2 only |
+| `transpose(M)` | Transpose | Any rectangular matrix |
+
+```bash
+$ fwiz --derive '(M=?) M = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])'
+M = [[19, 22], [43, 50]]
+```
+
+Matrix-vector products require lifting the vector to a single-column matrix (e.g. `matmul(R, [[3], [4]])`, not `matmul(R, [3, 4])`). Out-of-scope shapes for `det`, `inv`, or `matmul` propagate `undefined`. `evaluate()` returns empty for any `vec`/`mat` node, so matrix-valued results need `--derive` to surface; `det` returns a scalar and works in solve mode too.
+
+---
+
+## 16. Complex Numbers
+
+The imaginary unit `i` is a built-in symbolic constant. Its numeric binding is NaN by design — fwiz routes complex arithmetic through the symbolic channel only.
+
+```bash
+$ fwiz '(z=?) z = i * i'
+z = -1
+```
+
+The simplifier applies the builtin rewrite rules `i * i = -1` and `i^2 = -1`. Any expression containing `i` that reaches the numeric evaluator returns empty (`evaluate()` returns empty), so the numeric solver, conditions, and verify mode all reject complex operands — they never silently produce a real approximation.
+
+**Current scope:** single-step reductions like `i^2 → -1` work. Multi-step complex arithmetic like `(1+i)*(1-i) → 2` requires distributing MUL over ADD first, which is not yet implemented. See `docs/Future.md` for the planned follow-up.

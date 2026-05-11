@@ -11,8 +11,10 @@ For the CLI reference, see [CLI.md](CLI.md).
 2. [Algebraic Capabilities](#2-algebraic-capabilities)
 3. [Equation Ordering](#3-equation-ordering)
 4. [Multiple Solutions](#4-multiple-solutions)
+   - [4.5 Periodic Solutions](#45-periodic-solutions)
 5. [Numeric Mode](#5-numeric-mode)
 6. [Symbolic Derivation](#6-symbolic-derivation)
+   - [6.5 Symbolic Integration](#65-symbolic-integration)
 7. [Verification](#7-verification)
 8. [Exploration](#8-exploration)
 9. [Output Formatting](#9-output-formatting)
@@ -89,6 +91,18 @@ $ fwiz f(x=?, y=9)       # y = x^2, x > 0
 x = 3
 ```
 
+### 4.5 Periodic Solutions
+
+Trig equations whose solutions are infinite in number return a **periodic family** rather than a discrete dump. Each family is rendered as `base + k * period` with an implicit integer parameter `k` ranging over all integers.
+
+```bash
+$ fwiz --no-numeric '(x=?, result=1/2) result = sin(x)'
+x = 1 / 6 * pi + k * 2 * pi  # k in Z
+x = 5 / 6 * pi + k * 2 * pi  # k in Z
+```
+
+Each algebraic branch renders as a separate line; the `# k in Z` trailing comment marks `k` as an integer parameter. The solver recognises trig origins automatically — no flag enables periodicity itself. `--no-numeric` is used here to suppress numeric probing, which would otherwise collapse the family to a single principal root; with numerics enabled the principal-branch value is returned instead. Pick any concrete integer for `k` to extract a specific root.
+
 ---
 
 ## 5. Numeric Mode
@@ -99,7 +113,7 @@ Enabled by default. Kicks in when algebraic strategies can't isolate the target 
 
 1. **Adaptive grid scan**: sample the search range at `--precision` points (default 200); identify sign changes
 2. **Bisection**: bracket each sign change
-3. **Newton's method**: refine to machine precision. When a symbolic derivative is available (`symbolic_diff_simplified` in `expr.h` returns non-null), Newton uses it directly — quadratic convergence with 2 evaluations per iteration. Falls back to central finite-differences when no symbolic derivative exists (e.g., custom `@extern` functions).
+3. **Newton's method**: refine to machine precision. When a symbolic derivative is available (`symbolic_diff_simplified` in `expr.h` returns non-null), Newton uses it directly — quadratic convergence with 2 evaluations per iteration. Falls back to central finite-differences when no symbolic derivative exists (e.g., custom `@extern` functions). The same `symbolic_diff_simplified` path is reused by integration by parts to pick optimal `u` candidates — when a Tier-1 derivative closes cleanly, the IBP heuristic uses it directly.
 
 Re-entrance guard prevents stack overflow when a numeric solve recursively calls another numeric solve. Results are memoized.
 
@@ -159,6 +173,29 @@ width = V / h / d
 `pi`, `e`, `phi`, `sqrt(2)`, etc. are preserved symbolically. Structural fractions flow through unchanged.
 
 Derive output is post-processed to distribute division over addition when the divisor is a numeric literal (`(a+b)/2 → a/2 + b/2`). This exposes like-terms to the simplifier, so cancellations like `-b/2 + b/2 → 0` fire reliably.
+
+### 6.5 Symbolic Integration
+
+`integral(f, x)` computes an indefinite antiderivative; `integral(f, x, a, b)` computes a definite integral. Both are parallel to `diff(f, x)` — no separate flag is needed.
+
+Integration proceeds through three tiers in order:
+
+**Tier 1 — atomic patterns (~25 closed-form rules):** constants, `x^n` power rule (integer, negative, and rational exponents), `1/x → log(x)`, `e^x`, `sin/cos/tan`, linearity over ADD/SUB, and scalar MUL/DIV.
+
+**Tier 2 — u-substitution:** derivative-divides pattern detection inside MUL chains (`try_u_sub_integrate`). Candidates are ranked by leaf count. Depth limit: 2 recursive attempts.
+
+**Tier 3 — integration by parts (LIATE heuristic):** `u` and `dv` are chosen by LIATE priority — Logarithmic(5) > Inverse-trig(4) > Algebraic(3) > Trig(2) > Exponential(1). Depth limit: 3. Cyclic IBP (e.g. `∫ e^x sin(x)`) is detected and left unevaluated rather than looping.
+
+```bash
+$ fwiz 'demo.fw(integral(x*cos(x), x)=?F)'
+F = x * sin(x) + cos(x)
+```
+
+Here IBP picks `u = x` (Algebraic, priority 3) and `dv = cos(x) dx`. (`demo.fw` can be any file — even an empty one — because the integrand is given as a literal expression rather than referenced by name.)
+
+**Definite form:** the primary path is symbolic F(b) − F(a) using the Tier 1/2/3 antiderivative. When that fails, `adaptive_simpson` provides a numeric fallback (tolerance `NUMERIC_TOLERANCE`, max depth 30). If any sample evaluates to NaN, the result preserves the `integral(...)` call unevaluated rather than emitting a misleading value.
+
+**Two surfaces:** inline `f = integral(g, x)` in a `.fw` file (resolved at load by the post-load pass); CLI query `integral(target, var)=?alias` or `integral(target, var, lo, hi)=?alias` (dispatched in `main.cpp` Pass 1.6, parallel to `diff`'s Pass 1.5). Unrecognised forms always preserve the `integral(...)` call.
 
 ---
 

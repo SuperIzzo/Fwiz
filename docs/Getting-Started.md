@@ -208,7 +208,107 @@ You can also share a small standard library. fwiz ships one in `stdlib/`:
 
 Copy or symlink `stdlib/stdlib.fw` into your project directory to use the helpers. For the full story — resolution rules, when to split, typical layouts — see [Language.md §7.6](Language.md#76-project-structure).
 
-## 10. Where Next?
+## 10. Recent Features
+
+fwiz keeps growing. Here are six features added in the most recent cycles, with one runnable example each.
+
+### Symbolic integration
+
+Ask for an antiderivative via the CLI `integral(...)=?` query target — parallel to `diff(...)=?`. Create a small file:
+
+```
+# demo.fw
+f = x^2
+```
+
+Then query the indefinite integral:
+
+```bash
+$ fwiz 'demo.fw(integral(f, x)=?antideriv)'
+antideriv = x^3 / 3
+```
+
+Definite integrals work inline because the result is a number:
+
+```bash
+$ fwiz '(area=?) area = integral(x^2, x, 0, 3)'
+area = 9
+```
+
+Integration uses three tiers: closed-form patterns, u-substitution, and integration by parts (LIATE heuristic). Unrecognised forms preserve the `integral(...)` call unevaluated. See [Solver.md §6.5](Solver.md#65-symbolic-integration).
+
+### Inverse-solve through an integral
+
+Because `integral` is part of the algebra, fwiz can solve for an integration bound. Given `area.fw`:
+
+```
+A = integral(x^2, x, 0, b)
+```
+
+```bash
+$ fwiz 'area(A=9, b=?)'
+b = 3
+```
+
+### Batch sweeps — `--table`
+
+Evaluate a query across a range of inputs and get a TSV table:
+
+```bash
+$ fwiz --table 'examples/triangle(C=?, a=[1..5], b=4, c=5)'
+a   C
+1   180
+2   108.2099569
+3   90
+4   77.36437491
+5   66.42182152
+```
+
+The header shows the range variables (in CLI order) followed by the query aliases. Scalar inputs like `b=4, c=5` apply per row but don't appear as columns. Ranges support custom steps (`[0..2*pi @ pi/4]`) and compound concatenation (`[1..3, 7..9]`). Add `--zip` to pair inputs element-wise instead of taking the cartesian product. See [CLI.md §6](CLI.md#6-batch--table-mode).
+
+### Vector and matrix literals
+
+Write vectors and matrices directly:
+
+```bash
+$ fwiz --derive '(v=?) v = [1, 2, 3] + [4, 5, 6]'
+v = [5, 7, 9]
+
+$ fwiz '(d=?) d = det([[1, 2], [3, 4]])'
+d = -2
+
+$ fwiz --derive '(M=?) M = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])'
+M = [[19, 22], [43, 50]]
+```
+
+Element-wise add/sub and scalar multiplication simplify automatically. Builtins: `matmul`, `det` (2×2 and 3×3), `inv` (2×2), `transpose`. Matrix-valued results need `--derive` because the numeric solver doesn't reduce matrices to scalars; `det` returns a scalar and works in either mode. See [Language.md §15](Language.md#15-vector-and-matrix-literals).
+
+### Complex numbers
+
+The imaginary unit `i` is a built-in symbolic constant:
+
+```bash
+$ fwiz '(z=?) z = i * i'
+z = -1
+```
+
+Complex arithmetic is symbolic-only — fwiz routes it through the simplifier rather than the numeric evaluator. See [Language.md §16](Language.md#16-complex-numbers).
+
+### Periodic solutions
+
+Trig equations with infinitely many roots return a parametric family. Use `--no-numeric` to suppress single-root probing and ask for the symbolic family instead:
+
+```bash
+$ fwiz --no-numeric '(x=?, result=1/2) result = sin(x)'
+x = 1 / 6 * pi + k * 2 * pi  # k in Z
+x = 5 / 6 * pi + k * 2 * pi  # k in Z
+```
+
+Each line is one branch of the family; the `# k in Z` comment marks `k` as an integer parameter. Pick any integer to get a concrete root.
+
+---
+
+## 11. Where Next?
 
 You now know the essentials. When you're ready for more:
 
