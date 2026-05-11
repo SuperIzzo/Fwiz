@@ -2786,6 +2786,10 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
 //  Symbolic integration (Future #16, M1 — indefinite Tier 1; M2 — u-sub + definite)
 // ============================================================================
 //
+// Numeric counterpart: `adaptive_simpson` (defined later in §Numerical solvers,
+// near `newton_solve`) — the definite-integral fallback when symbolic_integrate
+// returns nullptr. Dispatch lives in `resolve_integral_calls` (system.h).
+//
 // `symbolic_integrate(e, var)` produces ∫e d(var) as a fresh ExprPtr in the
 // active arena. Per-AST-class switch + per-builtin if-chain for FUNC_CALL.
 // Mirrors `symbolic_diff` exactly: same return-on-`nullptr`-on-miss contract.
@@ -3738,7 +3742,9 @@ template<class F>
 
 // Adaptive Simpson's rule on [a, b] with recursive bisection. Used as the
 // numeric fallback for definite `integral(f, x, a, b)` when the symbolic
-// antiderivative path returns nullptr (Future #16, M2). Standard estimator:
+// antiderivative path returns nullptr (Future #16, M2). Paired with
+// `symbolic_integrate` (defined earlier in §Symbolic integration); dispatch
+// lives in `resolve_integral_calls` (system.h). Standard estimator:
 // |S(a,b) - S(a,m) - S(m,b)| / 15 ≈ error of S(a,b). When the estimate is
 // below tolerance, accept S(a,m) + S(m,b) as the integral; otherwise recurse
 // on each half with halved tolerance, capped by `max_depth` to prevent

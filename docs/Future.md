@@ -786,15 +786,13 @@ The fall-through-on-NaN/inf becomes an explicit early-fall-through `if (val && s
 
 **Reopen trigger:** Any third site renaming `e`/`i`/`pi`/`phi` locally without comment updates; OR a future cycle's grader re-flagging `vec_mat_det`. If the pattern recurs, extract a rule: "when renaming a builtin-constant collision, the comment must use the renamed identifier."
 
-## #R4. Refactor: symbolic / numeric integration cross-references
+## #R4. Refactor: symbolic / numeric integration cross-references — DONE 2026-05-11
 
-**From:** Cycle I-M2 blind-spot critic (file-scope, src/expr.h §Symbolic integration). file-explainer at T3 scored vague-but-correct on Components/Relationships/Pattern: the symbolic helpers (`try_cancel`, `try_u_sub_integrate`, `symbolic_integrate`, `symbolic_integrate_simplified`) cluster at lines 2616–2878 and the numeric counterpart (`adaptive_simpson`, `adaptive_simpson_recurse`, `INTEGRATION_TOLERANCE`, `ADAPTIVE_SIMPSON_MAX_DEPTH`) lives at lines 3329–3391, separated by ~430 LOC of unrelated solver / Newton / bisection code. A reader of the symbolic section does not realise the numeric block is the same Future #16 milestone's other half.
+**Shipped 2026-05-11**: Cross-reference comments added at both ends. Symbolic-integration section header (expr.h:2785-2791) now points at `adaptive_simpson` as the numeric counterpart; `adaptive_simpson` intro comment (expr.h:3741-3744) now points back at `symbolic_integrate` and names `resolve_integral_calls` as the dispatch site. No code moves. The structural gap is closed by making the cross-file-region link explicit.
 
-**Proposed:** Add cross-reference comments on each end:
-- On the symbolic section header: `// Numeric counterpart: adaptive_simpson (line ~3329, after numeric solver helpers) — definite-integral fallback when symbolic_integrate returns nullptr.`
-- On the adaptive_simpson intro comment (already mentions "numeric fallback for definite `integral(f, x, a, b)`"): add `// Paired with symbolic_integrate (line ~2690 in §Symbolic integration above); dispatch is `resolve_integral_calls` in system.h.`
+**From:** Cycle I-M2 blind-spot critic (file-scope, src/expr.h §Symbolic integration). file-explainer at T3 scored vague-but-correct on Components/Relationships/Pattern: the symbolic helpers cluster at lines 2616–2878 and the numeric counterpart lives at lines 3329–3391, separated by ~430 LOC of unrelated solver / Newton / bisection code. A reader of the symbolic section did not realise the numeric block is the same Future #16 milestone's other half.
 
-No code moves. The structural gap closes by making the cross-file-region link explicit.
+**Resolved by:** Mutual cross-reference comments — closing the structural gap without moving code.
 
 **Pattern coverage:** This is one site of a broader pattern in expr.h (3500+ LOC, multiple feature-areas interleaved). The file-organisation rule extracted from this finding (Code-Style.md §File-organisation rules) generalises the principle.
 
