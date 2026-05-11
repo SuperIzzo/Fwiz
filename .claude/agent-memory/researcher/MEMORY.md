@@ -8,3 +8,4 @@
 - [Complex/Matrix/Struct CAS external research](project_complex_matrix_struct_external.md) — SymPy/Maxima/Mathematica/Maple/SageMath design patterns for #13/#14/#15; brief at .fwiz-workflow/research-brief-external.md
 - [Symbolic Integration CAS research](project_symbolic_integration.md) — 5-CAS survey for integral(f,x) arc; tiered ladder, derivative-divides, IBP/LIATE, no Risch; brief at .fwiz-workflow/research-brief-integration.md
 - [Typed-binding predicates Future #53](project_typed_binding_predicates.md) — 4 consumers audited; T3.6 STRAIGHTFORWARD (is_neg_num); T3.5/#31/integration PARTIAL; Approach C recommended; brief at .fwiz-workflow/research-brief.md
+- [Batch/Table Mode Future #5](project_batch_table_mode.md) — Option C (CLI-only range) recommended; `..` absent from lexer; pre-check before Lexer call; range_bindings parallel to bindings; 15 open questions; brief at .fwiz-workflow/research-brief.md

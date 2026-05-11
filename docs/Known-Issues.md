@@ -125,6 +125,14 @@ Three-cycle Integrals arc complete. M1: indefinite Tier 1; M2: u-substitution, d
 
 **No `--integrate` flag:** integration is a per-query operation with natural in-file syntax; no global render mode exists. See Future #64 for the deferred-flag rationale.
 
+## 14. `--table` performance at large row counts (2026-05-11)
+
+Two known performance limitations for very large tables:
+
+**Arena accumulation:** the `ExprArena::Scope` wrapping the table driver loop grows across all rows without a flush point. For tables reaching the 1M-row soft-warning threshold with constant-recognizable output, arena RSS can reach ~960 MB. Mitigation tracked in Future.md #5f (checkpoint/reset API or string-direct `fmt_exact_double` variant).
+
+**Bindings-copy-per-row:** `emit_row` (main.cpp) copies the full fixed-bindings map (`query.bindings`, O(M) for M fixed variables) before overlaying the K range-dimension values. For M ≥ 5 fixed bindings and N ≥ 100K rows this is N×M unnecessary copies. Mitigation tracked in Future.md #5e (pre-allocated base copy held outside the loop). Neither limitation affects correctness.
+
 ## 8. `--cse 3` default is over-aggressive on dense formula sets — RESOLVED
 
 Resolved by Option C refactor (commit `<hash-placeholder>`). `--cse N` semantics

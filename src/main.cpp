@@ -36,11 +36,15 @@ int main(int argc, const char* argv[]) {
                   << "  --fit [N]      fit a curve (depth N, default 2: compose templates)\n"
                   << "  --output FILE  write fitted equation to a .fw file\n"
                   << "  --precision N  set sample density (default 200)\n"
+                  << "  --table        evaluate across range inputs, emit TSV\n"
+                  << "                 ranges: a=[1..10], a=[0..1 @ 0.1], a=[1..5, 7..10]\n"
+                  << "  --zip          with --table: zip ranges element-wise (default: cartesian)\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
                   << "         fwiz --verify all triangle(A=40, B=60, C=80)\n"
                   << "         fwiz --derive triangle(C=?, a=a, b=b, c=c)\n"
+                  << "         fwiz --table triangle(C=?, a=[1..10], b=4, c=5)\n"
                   << "         fwiz 'examples/nested_demo(result=?, nested_inner(z=?x, p=3))'\n";
         return 1;
     }
@@ -56,6 +60,8 @@ int main(int argc, const char* argv[]) {
         int fit_depth = FIT_DEFAULT_DEPTH;
         bool numeric_mode = true;
         bool approximate_mode = false;
+        bool table_mode = false;
+        bool zip_mode = false;
         int sys_samples = NUMERIC_DEFAULT_SAMPLES;
         std::string verify_arg;
         std::string output_file;
@@ -103,6 +109,8 @@ int main(int argc, const char* argv[]) {
             else if (arg == "--no-numeric")   numeric_mode = false;
             else if (arg == "--approximate")  approximate_mode = true;
             else if (arg == "--exact")        approximate_mode = false;
+            else if (arg == "--table")        table_mode = true;
+            else if (arg == "--zip")          zip_mode = true;
             else if (arg == "--output") {
                 if (i + 1 < argc) output_file = argv[++i];
                 else { std::cerr << "Error: --output requires a filename\n"; return 1; }
@@ -127,6 +135,24 @@ int main(int argc, const char* argv[]) {
         }
 
         const bool has_verify = !verify_arg.empty();
+        // Future #5: --table is a row-shaped output mode; incompatible with
+        // anything that produces non-row-shaped output (symbolic equations,
+        // verification report, fit equation, full enumeration). Inverted
+        // enumeration (one guard naming all conflicting modes) keeps the
+        // matrix linear as new output modes land — adding a new mode only
+        // requires extending this single condition.
+        if (table_mode) {
+            if (derive_mode || has_verify || fit_mode || explore || explore_full) {
+                std::cerr << "Error: --table is incompatible with "
+                             "--derive/--verify/--fit/--explore\n";
+                return 1;
+            }
+            level = TraceLevel::NONE;  // --steps/--calc would interleave with TSV
+        }
+        if (zip_mode && !table_mode) {
+            std::cerr << "Error: --zip requires --table\n";
+            return 1;
+        }
         const bool allow_missing = explore || explore_full || has_verify || derive_mode || fit_mode;
         const bool allow_symbolic = derive_mode || fit_mode;
 
@@ -179,6 +205,161 @@ int main(int argc, const char* argv[]) {
         // `output_var = "x"`) routes the inner result into the parent scope.
         for (auto& fc : query.nested_calls)
             sys.formula_calls.push_back(std::move(fc));
+
+        // --- Table mode (Future #5) ---
+        if (table_mode) {
+            if (query.range_bindings.empty())
+                throw std::runtime_error(
+                    "--table requires at least one range binding (e.g., a=[1..10])");
+
+            // Cartesian-product row-count soft cap. Warn-and-continue (NOT a
+            // hard error) — a user requesting `[1..1000] x [1..1000]` already
+            // knows they want 1M rows. `--table-max-rows N` is a parked
+            // Future.md item (reopen trigger: friction report).
+            constexpr size_t TABLE_WARN_ROWS = 1'000'000;
+            if (!zip_mode) {
+                size_t total_rows = 1;
+                bool too_large = false;
+                for (const auto& rb : query.range_bindings) {
+                    if (rb.second.empty()) break;  // any_empty handled below — no warning needed
+                    if (total_rows > TABLE_WARN_ROWS / rb.second.size()) {
+                        too_large = true;
+                        break;
+                    }
+                    total_rows *= rb.second.size();
+                }
+                if (too_large)
+                    std::cerr << "Warning: --table cartesian product is large "
+                                 "(> " << TABLE_WARN_ROWS << " rows)\n";
+            }
+
+            // Zip mismatch warning (Python/numpy zip() semantics — truncate to min).
+            if (zip_mode) {
+                size_t min_len = query.range_bindings[0].second.size();
+                size_t max_len = min_len;
+                for (const auto& rb : query.range_bindings) {
+                    min_len = std::min(min_len, rb.second.size());
+                    max_len = std::max(max_len, rb.second.size());
+                }
+                if (min_len != max_len)
+                    std::cerr << "Warning: --zip ranges have different lengths ("
+                              << min_len << " vs " << max_len
+                              << "); truncating to " << min_len << " rows\n";
+            }
+
+            // Output stream: stdout default; --output FILE redirects.
+            std::ostream* outp = &std::cout;
+            std::ofstream out_file;
+            if (!output_file.empty()) {
+                out_file.open(output_file);
+                if (!out_file.is_open()) {
+                    std::cerr << "Error: cannot write to " << output_file << '\n';
+                    return 1;
+                }
+                outp = &out_file;
+            }
+            std::ostream& out = *outp;
+
+            // fmt_exact_double allocates Expr nodes (constant recognition)
+            // into the arena; one scope wraps every row.
+            const ExprArena::Scope table_fmt_scope(sys.arena);
+            sys.populate_aliases_();
+
+            // Header row: range vars (CLI order) then query aliases (CLI order).
+            // Tab-separated; deterministic shape per output stream contract.
+            {
+                bool first = true;
+                for (const auto& rb : query.range_bindings) {
+                    if (!first) out << '\t';
+                    first = false;
+                    out << rb.first;
+                }
+                for (const auto& qv : query.queries)
+                    out << '\t' << qv.alias;
+                out << '\n';
+            }
+
+            // Emit one TSV row given an index vector into range_bindings.
+            // numeric_memo_ keys on target + serialized bindings, so different
+            // row values produce different keys — safe across rows.
+            auto emit_row = [&](const std::vector<double>& row_vals) {
+                auto bindings_copy = query.bindings;
+                for (size_t i = 0; i < query.range_bindings.size(); i++)
+                    bindings_copy[query.range_bindings[i].first] = row_vals[i];
+
+                bool first = true;
+                for (const double v : row_vals) {
+                    if (!first) out << '\t';
+                    first = false;
+                    out << fmt_solve_result(v, !approximate_mode, sys.aliases_);
+                }
+
+                for (const auto& qv : query.queries) {
+                    out << '\t';
+                    try {
+                        auto result = sys.resolve_all(qv.variable, bindings_copy);
+                        if (result.is_discrete() && !result.discrete().empty()) {
+                            const auto it = sys.numeric_results_.find(qv.variable);
+                            const bool exact = (it == sys.numeric_results_.end()) || it->second;
+                            out << fmt_solve_result(result.discrete()[0],
+                                                    exact && !approximate_mode,
+                                                    sys.aliases_);
+                        } else {
+                            out << '?';  // no discrete result (range, periodic, or empty)
+                        }
+                    } catch (const std::exception&) {
+                        out << '?';  // solve error for this row
+                    }
+                }
+                out << '\n';
+            };
+
+            if (zip_mode) {
+                const size_t n = std::accumulate(
+                    query.range_bindings.begin(), query.range_bindings.end(),
+                    query.range_bindings[0].second.size(),
+                    [](size_t acc, const auto& rb) {
+                        return std::min(acc, rb.second.size());
+                    });
+                for (size_t i = 0; i < n; i++) {
+                    std::vector<double> row;
+                    row.reserve(query.range_bindings.size());
+                    std::transform(
+                        query.range_bindings.begin(), query.range_bindings.end(),
+                        std::back_inserter(row),
+                        [i](const auto& rb) { return rb.second[i]; });
+                    emit_row(row);
+                }
+            } else {
+                // Cartesian product via odometer: rightmost index advances
+                // fastest (matches MATLAB meshgrid / Mathematica Table column
+                // order). Any empty range collapses the product to zero rows.
+                const bool any_empty = std::any_of(
+                    query.range_bindings.begin(), query.range_bindings.end(),
+                    [](const auto& rb) { return rb.second.empty(); });
+                if (!any_empty) {
+                    std::vector<size_t> idx(query.range_bindings.size(), 0);
+                    bool done = false;
+                    while (!done) {
+                        std::vector<double> row;
+                        row.reserve(query.range_bindings.size());
+                        for (size_t i = 0; i < query.range_bindings.size(); i++)
+                            row.push_back(query.range_bindings[i].second[idx[i]]);
+                        emit_row(row);
+
+                        done = true;
+                        for (size_t k = query.range_bindings.size(); k-- > 0;) {
+                            if (++idx[k] < query.range_bindings[k].second.size()) {
+                                done = false;
+                                break;
+                            }
+                            idx[k] = 0;
+                        }
+                    }
+                }
+            }
+            return 0;
+        }
 
         // --- Derive mode ---
         if (derive_mode) {

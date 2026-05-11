@@ -157,6 +157,9 @@ Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive 
 - `fit.h`: `sample_function`, `fit_base`, `fit_all`, template functions, `recognize_constant`
 - Constants: `FIT_DEFAULT_SAMPLES`, `FIT_MAX_DEGREE`, `FIT_R2_THRESHOLD`, `FIT_DEFAULT_DEPTH`
 
+### Batch / table mode (since 2026-05-11)
+`--table` evaluates a query across one or more range-valued inputs and emits a TSV table. Range grammar `[start..stop]` (integer step 1, endpoints inclusive); `[start..stop @ step]` (custom step, count-based generation); `[range1, range2, ...]` (compound — concatenated values). Bounds can be expressions: `[0..2*pi @ pi/4]`. Descending ranges require explicit negative step: `[10..1 @ -1]`. Header is range vars then query aliases, both in CLI order. Cartesian product by default; `--zip` for element-wise; `--output FILE` for redirection. Unsolvable rows render as `?`. Mutually exclusive with `--derive/--verify/--fit/--explore`. `parse_range` lives in `system.h` next to `parse_cli_query`; the iteration driver sits in `main.cpp` between nested-call injection and the existing dispatch.
+
 ## Key conventions
 
 Read `docs/Developer.md` for the full guide. Summary:

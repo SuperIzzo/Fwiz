@@ -13629,6 +13629,234 @@ void test_future53_t36_negative_exp_migration() {
     }
 }
 
+// === Future #5 — Batch/Table mode ===
+
+void test_table_range_parse() {
+    SECTION("Future #5: parse_range grammar + range_bindings");
+
+    // BLOCKING: integer range [1..10] = 10 values
+    {
+        auto q = parse_cli_query("f(x=?, a=[1..10])");
+        ASSERT(q.range_bindings.size() == 1, "[1..10]: one range binding");
+        ASSERT(q.range_bindings[0].first == "a", "[1..10]: name = a");
+        ASSERT(q.range_bindings[0].second.size() == 10, "[1..10] = 10 values");
+        ASSERT_NUM(q.range_bindings[0].second[0], 1.0, "[1..10]: first = 1");
+        ASSERT_NUM(q.range_bindings[0].second[9], 10.0, "[1..10]: last = 10");
+    }
+
+    // BLOCKING: fractional step [1..10 @ 0.5] = 19 values
+    {
+        auto q = parse_cli_query("f(x=?, a=[1..10 @ 0.5])");
+        ASSERT(q.range_bindings[0].second.size() == 19,
+               "[1..10 @ 0.5] = 19 values");
+        ASSERT_NUM(q.range_bindings[0].second[0],  1.0, "frac: first = 1.0");
+        ASSERT_NUM(q.range_bindings[0].second[18], 10.0, "frac: last = 10.0");
+    }
+
+    // BLOCKING: endpoint inclusion [0..1 @ 0.1] = 11 values
+    {
+        auto q = parse_cli_query("f(x=?, a=[0..1 @ 0.1])");
+        ASSERT(q.range_bindings[0].second.size() == 11,
+               "[0..1 @ 0.1] = 11 values");
+        ASSERT_NUM(q.range_bindings[0].second[0],  0.0, "endpoint: first = 0.0");
+        ASSERT_NUM(q.range_bindings[0].second[10], 1.0, "endpoint: last = 1.0");
+    }
+
+    // BLOCKING: compound range [1..5, 6..10] = 10 values (concatenated)
+    {
+        auto q = parse_cli_query("f(x=?, a=[1..5, 6..10])");
+        ASSERT(q.range_bindings[0].second.size() == 10,
+               "compound: [1..5, 6..10] = 10 values");
+        ASSERT_NUM(q.range_bindings[0].second[0],  1.0, "compound: first = 1");
+        ASSERT_NUM(q.range_bindings[0].second[4],  5.0, "compound: end of first sub-range");
+        ASSERT_NUM(q.range_bindings[0].second[5],  6.0, "compound: start of second sub-range");
+        ASSERT_NUM(q.range_bindings[0].second[9], 10.0, "compound: last = 10");
+    }
+
+    // BLOCKING: descending with explicit step [10..1 @ -1] = 10 values
+    {
+        auto q = parse_cli_query("f(x=?, a=[10..1 @ -1])");
+        ASSERT(q.range_bindings[0].second.size() == 10,
+               "[10..1 @ -1] = 10 values");
+        ASSERT_NUM(q.range_bindings[0].second[0], 10.0, "desc: first = 10");
+        ASSERT_NUM(q.range_bindings[0].second[9],  1.0, "desc: last = 1");
+    }
+
+    // BLOCKING: expression bounds [0..2*pi @ pi/4] = 9 values
+    {
+        auto q = parse_cli_query("f(x=?, a=[0..2*pi @ pi/4])");
+        ASSERT(q.range_bindings[0].second.size() == 9,
+               "[0..2*pi @ pi/4] = 9 values");
+        ASSERT_NUM(q.range_bindings[0].second[0], 0.0, "expr: first = 0");
+        ASSERT_NUM(q.range_bindings[0].second[8], 2 * M_PI, "expr: last = 2*pi");
+    }
+
+    // BLOCKING: malformed range [1..] — missing stop
+    {
+        bool threw = false;
+        try { auto q = parse_cli_query("f(x=?, a=[1..])"); (void)q; }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "[1..] throws (missing stop)");
+    }
+
+    // BLOCKING: empty range [5..3 @ 1] — start > stop with positive step
+    {
+        bool threw = false;
+        try { auto q = parse_cli_query("f(x=?, a=[5..3 @ 1])"); (void)q; }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "[5..3 @ 1] empty range throws");
+    }
+
+    // BLOCKING: zero step [1..10 @ 0]
+    {
+        bool threw = false;
+        try { auto q = parse_cli_query("f(x=?, a=[1..10 @ 0])"); (void)q; }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "[1..10 @ 0] zero step throws");
+    }
+
+    // BLOCKING: descending without explicit step [10..1]
+    {
+        bool threw = false;
+        try { auto q = parse_cli_query("f(x=?, a=[10..1])"); (void)q; }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "[10..1] descending without explicit step throws");
+    }
+
+    // BLOCKING: scalar binding unchanged (regression)
+    {
+        auto q = parse_cli_query("f(x=?, b=4)");
+        ASSERT_NUM(q.bindings.at("b"), 4.0, "scalar b=4 unchanged");
+        ASSERT(q.range_bindings.empty(), "no range_bindings for scalar input");
+    }
+
+    // BLOCKING: vec literal [1,2,3] (no ..) falls through to expression path → throws
+    {
+        bool threw = false;
+        try { auto q = parse_cli_query("f(x=?, a=[1,2,3])"); (void)q; }
+        catch (const std::runtime_error&) { threw = true; }
+        ASSERT(threw, "vec literal [1,2,3] without .. throws in numeric mode");
+    }
+
+    // BLOCKING: bracket-depth fix — compound range arg not split at inner comma
+    {
+        // Without the bracket-depth fix in the comma-splitter, the inner comma
+        // between sub-ranges would split the arg into "a=[1..5 @ 1" + "6..10 @ 1]"
+        // and parse_range would never be called with the full string.
+        auto q = parse_cli_query("f(x=?, a=[1..5 @ 1, 6..10 @ 1])");
+        ASSERT(q.range_bindings.size() == 1,
+               "bracket-depth fix: still ONE arg, not two");
+        ASSERT(q.range_bindings[0].second.size() == 10,
+               "bracket-depth fix: compound range = 10 values");
+    }
+
+    // BLOCKING: CLI-order preservation for multiple range vars
+    {
+        auto q = parse_cli_query("f(z=?, b=[10..12], a=[1..3])");
+        ASSERT(q.range_bindings.size() == 2, "two range vars");
+        ASSERT(q.range_bindings[0].first == "b", "CLI order: b first");
+        ASSERT(q.range_bindings[1].first == "a", "CLI order: a second");
+    }
+
+    // DESIRABLE: single-value range [5..5] = 1 value
+    {
+        auto q = parse_cli_query("f(x=?, a=[5..5])");
+        ASSERT(q.range_bindings[0].second.size() == 1, "[5..5] = 1 value");
+        ASSERT_NUM(q.range_bindings[0].second[0], 5.0, "[5..5] = {5}");
+    }
+}
+
+void test_table_mode_binary_integration() {
+    SECTION("Future #5: --table binary integration");
+
+    write_fw("/tmp/tftab.fw", "z = a + b\n");
+
+    // BLOCKING: header has range var names + query alias
+    {
+        int rc = system("./bin/fwiz --table '/tmp/tftab(z=?, a=[1..3], b=[10..30 @ 10])' "
+                        "2>/dev/null | head -1 | grep -qE '^a\tb\tz$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table: header is 'a\\tb\\tz'");
+    }
+
+    // BLOCKING: cartesian 3x3 = 9 data rows (10 total lines with header)
+    {
+        int rc = system("./bin/fwiz --table '/tmp/tftab(z=?, a=[1..3], b=[10..30 @ 10])' "
+                        "2>/dev/null | wc -l | grep -q '^10$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table cartesian 3x3 = 10 lines (1 header + 9 rows)");
+    }
+
+    // BLOCKING: a row evaluates correctly (a=1,b=10 → z=11)
+    {
+        int rc = system("./bin/fwiz --table '/tmp/tftab(z=?, a=[1..3], b=[10..30 @ 10])' "
+                        "2>/dev/null | grep -qE '^1\t10\t11'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table: row a=1,b=10 → z=11");
+    }
+
+    // BLOCKING: --table --zip 3,3 → 3 data rows
+    {
+        int rc = system("./bin/fwiz --table --zip '/tmp/tftab(z=?, a=[1..3], b=[10..12])' "
+                        "2>/dev/null | wc -l | grep -q '^4$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table --zip 3,3 = 4 lines (1 header + 3 rows)");
+    }
+
+    // BLOCKING: --table --zip 3,4 → 3 rows (min) + stderr warning
+    {
+        int rc = system("./bin/fwiz --table --zip '/tmp/tftab(z=?, a=[1..3], b=[1..4])' "
+                        "2>/tmp/tftab_zip_warn.txt | wc -l | grep -q '^4$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table --zip mismatch truncates to min");
+        int rc_w = system("grep -q 'Warning:.*--zip' /tmp/tftab_zip_warn.txt");
+        ASSERT(WEXITSTATUS(rc_w) == 0, "--table --zip mismatch: stderr warning");
+    }
+
+    // BLOCKING: --table + --derive → error (mutual exclusion)
+    {
+        int rc = system("./bin/fwiz --table --derive '/tmp/tftab(z=?, a=[1..3])' "
+                        "2>/tmp/tftab_mut.txt >/dev/null");
+        ASSERT(WEXITSTATUS(rc) != 0, "--table + --derive errors");
+        int rc_e = system("grep -q 'incompatible' /tmp/tftab_mut.txt");
+        ASSERT(WEXITSTATUS(rc_e) == 0, "--table + --derive: error message printed");
+    }
+
+    // BLOCKING: --zip without --table → error
+    {
+        int rc = system("./bin/fwiz --zip '/tmp/tftab(z=?, a=1, b=2)' "
+                        "2>/tmp/tftab_zip_err.txt >/dev/null");
+        ASSERT(WEXITSTATUS(rc) != 0, "--zip without --table errors");
+        int rc_e = system("grep -q 'requires --table' /tmp/tftab_zip_err.txt");
+        ASSERT(WEXITSTATUS(rc_e) == 0, "--zip without --table: error message printed");
+    }
+
+    // BLOCKING: --table --output FILE writes TSV to file
+    {
+        unlink("/tmp/tftab_out.tsv");
+        int rc = system("./bin/fwiz --table --output /tmp/tftab_out.tsv "
+                        "'/tmp/tftab(z=?, a=[1..3], b=10)' >/dev/null 2>&1");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table --output FILE: exit 0");
+        struct stat st;
+        const bool exists = (stat("/tmp/tftab_out.tsv", &st) == 0);
+        ASSERT(exists, "--table --output FILE: file exists");
+        int rc2 = system("wc -l /tmp/tftab_out.tsv | grep -q '^4 '");
+        ASSERT(WEXITSTATUS(rc2) == 0, "--table --output FILE: 1 header + 3 rows");
+    }
+
+    // BLOCKING: unsolvable row → '?'
+    // Build a system where one row is unsolvable: sqrt(x) with x=-1
+    {
+        write_fw("/tmp/tftab_ns.fw", "y = sqrt(x)\n");
+        // Use a range that includes a negative value (no real sqrt) and a positive.
+        int rc = system("./bin/fwiz --table '/tmp/tftab_ns(y=?, x=[-1..1 @ 1])' "
+                        "2>/dev/null | grep -qE '^-1\t\\?'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table: unsolvable row emits '?'");
+    }
+
+    // BLOCKING: real triangle.fw integration
+    {
+        int rc = system("./bin/fwiz --table 'examples/triangle(C=?, a=[3..5], b=4, c=5)' "
+                        "2>/dev/null | wc -l | grep -q '^4$'");
+        ASSERT(WEXITSTATUS(rc) == 0, "--table examples/triangle: 1 header + 3 rows");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -13959,6 +14187,10 @@ int main() {
     test_future53_predicate_check_condition();
     test_future53_comparison_permissive_preserved();
     test_future53_t36_negative_exp_migration();
+
+    // Future #5: Batch/Table mode (2026-05-11 cycle)
+    test_table_range_parse();
+    test_table_mode_binary_integration();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

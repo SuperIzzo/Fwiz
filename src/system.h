@@ -3794,6 +3794,11 @@ struct CLIQuery {
     std::vector<CLIDiffQuery> diff_queries;  // Future #6: diff(...)=? targets
     std::vector<CLIIntegralQuery> integral_queries;  // Future #16: integral(...)=? targets
     std::map<std::string, double> bindings;
+    // Future #5: table-mode range bindings — CLI-order-preserving (parallel to
+    // `queries`). Each entry is (var_name, expanded values). Populated only
+    // when a `..`-bearing bracketed value (e.g. `a=[1..10]`) is parsed; empty
+    // for all existing CLI paths.
+    std::vector<std::pair<std::string, std::vector<double>>> range_bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
     // Future #21 (nested form): top-level args that are themselves formula
     // calls — `outer(result=?, inner(z=?x, p=3))`. Parsed via the same
@@ -3803,6 +3808,116 @@ struct CLIQuery {
     // result into the parent scope as a regular variable.
     std::vector<FormulaCall> nested_calls;
 };
+
+// Future #5: parse a bracketed range value like `[1..10]`, `[1..10 @ 0.5]`, or
+// the compound form `[1..5, 6..10]`. Returns the expanded numeric sequence.
+// Sub-range grammar: `start..stop[ @ step]`. Defaults: step=1 when ascending
+// and unspecified; descending REQUIRES explicit negative step (refuses silent
+// direction-swap). Endpoints both inclusive; count is `round((stop-start)/
+// step)+1`, then values are generated as `start + i*step` (count-based, NOT
+// repeated addition — avoids IEEE 754 drift). Bounds may be expressions
+// (`pi/4`, `2*pi`) — reuses the same `Parser + evaluate` idiom that scalar
+// CLI values use below. Throws `std::runtime_error` on malformed input, empty
+// range, zero step, or unevaluable bound expressions.
+[[nodiscard]] inline std::vector<double> parse_range(const std::string& val) {
+    if (val.size() < 2 || val.front() != '[' || val.back() != ']')
+        throw std::runtime_error("parse_range: expected '[...]' got '" + val + "'");
+    const std::string inner = val.substr(1, val.size() - 2);
+
+    // Split on top-level commas (track paren AND bracket depth for nested
+    // expression bounds like `f(a, b)` inside a bound).
+    std::vector<std::string> sub_ranges;
+    { int depth = 0; size_t start = 0;
+      for (size_t i = 0; i < inner.size(); i++) {
+          const char c = inner[i];
+          if      (c == '(' || c == '[') depth++;
+          else if (c == ')' || c == ']') depth--;
+          else if (c == ',' && depth == 0) {
+              sub_ranges.push_back(trim(inner.substr(start, i - start)));
+              start = i + 1;
+          }
+      }
+      sub_ranges.push_back(trim(inner.substr(start)));
+    }
+
+    // Bound parser: stod fast-path, then Parser+evaluate fallback for expressions.
+    // Same idiom `parse_cli_query` uses for scalar args, just hoisted into a lambda.
+    auto parse_bound = [](const std::string& s) -> double {
+        if (s.empty())
+            throw std::runtime_error("parse_range: missing bound");
+        double v = 0; size_t pos = 0;
+        try { v = std::stod(s, &pos); }
+        // NOLINTNEXTLINE(bugprone-empty-catch) — fall through to expression path
+        catch (const std::invalid_argument&) { pos = 0; }
+        // NOLINTNEXTLINE(bugprone-empty-catch) — fall through to expression path
+        catch (const std::out_of_range&) { pos = 0; }
+        if (pos == s.size()) return v;
+        try {
+            ExprArena temp_arena;
+            const ExprArena::Scope scope(temp_arena);
+            auto expr = Parser(Lexer(s).tokenize()).parse_expr();
+            if (auto val_opt = evaluate(*simplify(expr)))
+                return val_opt.value();
+        // NOLINTNEXTLINE(bugprone-empty-catch) — failure handled by throw below
+        } catch (const std::runtime_error&) {}
+        throw std::runtime_error("parse_range: cannot evaluate bound '" + s + "'");
+    };
+
+    std::vector<double> values;
+    for (const auto& sr : sub_ranges) {
+        const size_t dotdot = sr.find("..");
+        if (dotdot == std::string::npos)
+            throw std::runtime_error("parse_range: missing '..' in sub-range '" + sr + "'");
+        const std::string start_str = trim(sr.substr(0, dotdot));
+        std::string rest = trim(sr.substr(dotdot + 2));
+        if (start_str.empty() || rest.empty())
+            throw std::runtime_error("parse_range: malformed sub-range '" + sr + "'");
+
+        std::string stop_str, step_str;
+        const size_t at_pos = rest.find('@');
+        if (at_pos == std::string::npos) {
+            stop_str = rest;
+            // step_str stays empty → resolved after start/stop
+        } else {
+            stop_str = trim(rest.substr(0, at_pos));
+            step_str = trim(rest.substr(at_pos + 1));
+            if (stop_str.empty() || step_str.empty())
+                throw std::runtime_error("parse_range: malformed '@ step' in '" + sr + "'");
+        }
+        if (stop_str.empty())
+            throw std::runtime_error("parse_range: missing stop value in '" + sr + "'");
+
+        const double start_v = parse_bound(start_str);
+        const double stop_v  = parse_bound(stop_str);
+        double step_v = 0.0;
+        if (step_str.empty()) {
+            if (start_v > stop_v)
+                throw std::runtime_error("parse_range: '" + sr +
+                    "' descending without explicit step (use '@ -1' to confirm direction)");
+            step_v = 1.0;
+        } else {
+            step_v = parse_bound(step_str);
+        }
+
+        if (step_v == 0.0)
+            throw std::runtime_error("parse_range: zero step in '" + sr + "'");
+        if (step_v > 0.0 && start_v > stop_v)
+            throw std::runtime_error("parse_range: empty range '" + sr +
+                "' (start > stop with positive step)");
+        if (step_v < 0.0 && start_v < stop_v)
+            throw std::runtime_error("parse_range: empty range '" + sr +
+                "' (start < stop with negative step)");
+
+        // Count-based generation: avoids float drift from repeated addition.
+        // `round` handles cases like 0..1 @ 0.1 where (stop-start)/step = 9.999...
+        const double raw_count = (stop_v - start_v) / step_v;
+        const auto count = static_cast<size_t>(std::round(raw_count)) + 1;
+        values.reserve(values.size() + count);
+        for (size_t i = 0; i < count; i++)
+            values.push_back(start_v + static_cast<double>(i) * step_v);
+    }
+    return values;
+}
 
 [[nodiscard]] inline CLIQuery parse_cli_query(const std::string& input,
                                 bool allow_no_queries = false,
@@ -3864,13 +3979,17 @@ struct CLIQuery {
         }
     }
 
-    // Split arguments by comma (respecting nested parens)
+    // Split arguments by comma (respecting nested parens AND brackets).
+    // Future #5: bracket-depth fix — vec/mat literals and table ranges embed
+    // commas inside `[...]`; without bracket tracking, `a=[1..5, 6..10]` would
+    // split incorrectly at the inner comma. Mirrors the integral inner scanner
+    // below at the `integral(...)` 4-arg piece split.
     std::vector<std::string> args;
     { int depth = 0; size_t start = lparen + 1;
       // justified: char-cursor with substr(start, i - start) and start = i+1
       for (size_t i = start; i <= rparen; i++) {
-          if (input[i] == '(') depth++;
-          else if (input[i] == ')') depth--;
+          if      (input[i] == '(' || input[i] == '[') depth++;
+          else if (input[i] == ')' || input[i] == ']') depth--;
           if ((input[i] == ',' && depth == 0) || i == rparen) {
               auto a = trim(input.substr(start, i - start));
               if (!a.empty()) args.push_back(a);
@@ -4033,6 +4152,13 @@ struct CLIQuery {
             q.queries.push_back({name, alias, strict});
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
+        } else if (val.front() == '[' && val.find("..") != std::string::npos) {
+            // Future #5: bracketed value containing '..' → range binding.
+            // The `..` token is invalid Lexer input; route to `parse_range`
+            // BEFORE any Lexer call. Vec literals `[1,2,3]` lack `..` and
+            // fall through to the existing expression-parse path below.
+            q.range_bindings.emplace_back(name, parse_range(val));
+            continue;
         } else {
             double v = 0;
             size_t pos = 0;

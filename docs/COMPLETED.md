@@ -12,6 +12,34 @@ Adaptive grid scan + Newton/bisection refinement. Strategy 6 in `enumerate_candi
 
 Remaining enhancements tracked in Future.md #4-residual.
 
+## 5. Batch/Table Mode — ✅ DONE (2026-05-11)
+
+CLI-only `--table` flag emits a TSV table evaluating a query across one or more range-valued inputs. Single-milestone cycle (~310 LOC). Driver lives in `main.cpp` between nested-call injection and the `--derive` dispatch; range parsing lives in `system.h` next to `parse_cli_query`.
+
+**Syntax:**
+```bash
+fwiz --table triangle(C=?, a=[1..10], b=4, c=5)
+fwiz --table --zip f(z=?, a=[1..3], b=[10..12])
+fwiz --table --output out.tsv f(z=?, a=[0..1 @ 0.1])
+```
+
+Range grammar (parsed by free function `parse_range` before any Lexer call): `[start..stop]` (integer step 1, both endpoints inclusive); `[start..stop @ step]` (custom step, count-based generation — `start + i*step` avoids float drift); `[range1, range2, ...]` (compound — concatenated values). Bounds may be expressions (`[0..2*pi @ pi/4]`) — reuses the existing `Parser + evaluate` idiom. Descending ranges require explicit negative step (`[10..1 @ -1]`); empty ranges, zero step, malformed inputs all throw.
+
+Behaviour:
+- **Cartesian product** (default) or **zip** (`--zip`).
+- Header row: range vars (CLI order) then query aliases (CLI order).
+- Per-row: copy `query.bindings`, overlay range values, call `resolve_all`, format with `fmt_solve_result`, emit tab-separated. Unsolvable → `?`.
+- Soft cap at 1M cartesian rows (stderr warning, continues).
+- Zip mismatched lengths: truncate to min, stderr warning.
+- Mutual exclusion: `--table` is incompatible with `--derive/--verify/--fit/--explore` (inverted enumeration — one guard for all non-row-shaped output modes). `--zip` without `--table` errors.
+- `--output FILE` redirects TSV to file. `--approximate`/`--exact`/`--precision` follow global flags per-cell.
+
+Comma-splitter in `parse_cli_query` extended to track `[]` alongside `()` so `a=[1..5, 6..10]` parses as one arg (mirror of the integral inner scanner). `CLIQuery::range_bindings` is `vector<pair<string, vector<double>>>` — CLI-order preserving.
+
+Four follow-ups parked in Future.md: `--table-max-rows N` (5a), in-file declarative range (5b), `--all-results` (5c), `--nan` sentinel (5d). Each has a concrete reopen trigger.
+
+Tests: 3279 → 3330 (+51). LOC: ~280 (under the 310 budget). Gates: test + sanitize + cppcheck clean.
+
 ## 6. Symbolic Differentiation — ✅ DONE (2026-04-26)
 
 `symbolic_diff(const Expr&, const std::string& var) → ExprPtr` (expr.h). Two-level dispatch: per-AST-class switch for ADD/SUB/MUL/DIV/POW/NEG, inline if-chain for FUNC_CALL covering 9 builtins (sin, cos, tan, asin, acos, atan, log, sqrt, abs). `symbolic_diff_simplified` wrapper calls `simplify()` on the result. Returns `nullptr` for unknown FUNC_CALLs — used as a "leave-symbolic" signal by the post-load pass.

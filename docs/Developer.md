@@ -55,13 +55,13 @@ Current capabilities:
 - Curve fitting (`--fit`) with template matching and recursive composition
 - Built-in constants (`pi`, `e`, `phi`, `i` — imaginary unit with NaN binding since 2026-05-09)
 - Vector/matrix literals (`[1,2,3]`, `[[1,0],[0,1]]`) with element-wise ops and `matmul`/`det`/`inv`/`transpose` builtins (since 2026-05-10)
+- Batch/table mode (`--table`) — evaluate formula across range inputs; output as TSV; `[start..stop @ step]` range syntax; compound ranges; cartesian and `--zip` element-wise modes (since 2026-05-11)
 - Irrational number recognition (pi, e, sqrt(2), sqrt(3) in fitted coefficients)
 - Structural fractions (`1/3` preserved, not folded to `0.333...`; exact rational arithmetic)
 - Constant recognition in derive output (log(2), log(3), sqrt(N), pi, e)
 - Output formatting: `--approximate` (collapse to float) / `--exact` (default, human-readable fractions and constants); `fmt_exact_double` shared helper closes solve/derive asymmetry
 
 Planned (see Future.md):
-- **Batch/table mode** — parameter sweeps with range syntax
 - **Units** — dimensional analysis and automatic conversion
 - **Fraction representation** — exact arithmetic
 - **LaTeX export**
@@ -320,6 +320,8 @@ Inside `derive_all`: the cap is applied BEFORE the CSE pass (so helpers reflect 
 Results validated — NaN and infinity rejected, causing fallback to next equation.
 
 Error messages are specific: "No equation found for 'x'", "no value for 'y'", "all equations produced invalid results".
+
+**Table mode (`--table`, `--zip`)** — batch evaluation across range inputs; output as TSV. `parse_range(const std::string&) → vector<double>` (system.h, free function before `parse_cli_query`) parses `[start..stop]`, `[start..stop @ step]`, and compound `[r1, r2, ...]` forms. Bounds accept literal numbers or arbitrary expressions via the existing `Parser + evaluate` idiom. Count-based value generation (`start + i*step`) avoids IEEE 754 drift from repeated addition. `CLIQuery::range_bindings` (`vector<pair<string, vector<double>>>`, CLI-order-preserving) carries the expanded sequences. The iteration driver lives in `main.cpp`: cartesian product (odometer, rightmost-fastest) or `--zip` (element-wise to min length). Mutual exclusion: `--table` cannot combine with `--derive`, `--verify`, `--fit`, `--explore`, or `--explore-full`. `--steps`/`--calc` trace is suppressed in table mode to keep the TSV stream clean. The comma-splitter in `parse_cli_query` was extended to track `[]` depth (alongside `()`) so compound range args such as `a=[1..5, 6..10]` are not split at the inner comma.
 
 ### fit.h
 

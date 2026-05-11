@@ -13,45 +13,43 @@ Core landed; see COMPLETED.md #4.
 - Periodicity detection — core shipped (#12 DONE); numeric gap-based detection deferred (#12a)
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
-## 5. Batch/Table Mode
+## 5. Batch/Table Mode — DONE (2026-05-11)
 
-### Problem
+Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.
 
-Users often want to evaluate a formula across a range of inputs — parameter sweeps, lookup tables, sensitivity analysis.
+### 5a. `--table-max-rows N` (parked)
 
-### Proposed syntax
+**Trigger:** a user hits the soft 1M-row stderr warning and reports it as friction (either wants to silence it, or wants a hard cap below 1M). Currently `--table` warns at ~1M cartesian rows and continues; an explicit `--table-max-rows N` would let users set both a hard cap and a hard-error threshold without writing a wrapper.
 
-```bash
-fwiz --table triangle(C=?, a=[1..10], b=4, c=5)
-```
+### 5b. In-file declarative range (parked)
 
-Range syntax (Python-inspired with step):
-```
-[1..10]              # 1, 2, 3, ..., 10 (integer step)
-[1..10 @ 0.5]        # 1, 1.5, 2, ..., 10 (custom step)
-[0..1 @ 0.1]         # 0, 0.1, 0.2, ..., 1
-[1..10 @ 0.1, 11..100 @ 1]  # compound: fine near 0, coarse further out
-```
+**Trigger:** a second consumer asks for `v = [1..10]` as a first-class vec/mat literal (e.g. `--fit` wanting sample-point specification, or numeric solver scan-range syntax). Today `parse_range` is CLI-only — the `[start..stop @ step]` grammar lives in `system.h` next to `parse_cli_query`, not in the Lexer/Parser. Promoting it to a parser-level range-to-vec materialization is consistent with the vec/mat work (#14) and would reuse `parse_range` directly.
 
-### Output
+### 5c. `--all-results` table mode (parked)
 
-Tab-separated table, one row per input combination:
-```
-a       C
-1       168.4630527
-2       153.4349488
-3       133.4321...
-...
-```
+**Trigger:** user with a multi-root system wants every solution per row, not just the first. Today `--table` emits the first element of `resolve_all().discrete()`. The change is mechanical (emit one row per result, repeating the input columns) but breaks the deterministic 1-row-per-input-tuple shape, so it needs an opt-in flag.
 
-Multiple range inputs → cartesian product (or zip mode with `--zip`).
+### 5d. `--nan` sentinel (parked)
 
-### Use cases
+**Trigger:** concrete pandas/gnuplot/R interop failure where `?` (Fwiz convention) breaks a downstream pipeline. `--nan` would emit `NaN` (numpy/R convention) instead. Today users can `sed 's/?/NaN/g'`; a flag becomes worth adding once a real consumer complains.
 
-- Parameter sweeps for engineering design
-- Generating lookup tables
-- Plotting data (pipe to gnuplot: `fwiz --table ... | gnuplot`)
-- Sensitivity analysis: how does output change across input range?
+### 5e. Bindings-copy-per-row optimization (parked)
+
+Inside `emit_row` (main.cpp), each row starts with `auto bindings_copy = query.bindings` — an O(M) copy of all M fixed bindings — then overlays K range-dimension keys. For tables with M ≥ 5 fixed bindings and N ≥ 100K rows this produces N×M unnecessary copies. Mitigation: hold one pre-allocated base copy outside the loop, overlay only the K range-dimension keys per row (O(K log M) per row instead of O(M)). No API change needed; the driver block in `main.cpp` owns the loop.
+
+**Trigger:** user-reported latency on tables with N ≥ 100K rows and M ≥ 5 fixed bindings.
+
+### 5f. Arena accumulation across table rows (parked)
+
+The single `ExprArena::Scope` wrapping the entire table loop grows without bound across rows. At the 1M-row threshold with constant-recognizable output, the arena can reach ~960 MB. Two mitigation options: (a) add `ExprArena::checkpoint()` / `reset_to(checkpoint)` API for periodic flush while preserving the recognized-form ExprPtrs referenced by the current row's output; (b) a `fmt_exact_double` string-direct variant that avoids arena allocation entirely for the display path. Neither option requires changing the solver or the TSV format.
+
+**Trigger:** user memory-pressure report at 1M rows, or the 1M-row soft-warning threshold reached in practice with observed RSS growth.
+
+### 5g. `numeric_memo_` clear in table mode (parked)
+
+For numeric-solver equations, `numeric_memo_` accumulates per-key memoized results across all rows. In table mode the memo is safe (each key encodes all bindings, so no stale reuse), but the map grows unboundedly for large tables. A single `numeric_memo_.clear()` before the table loop (NOT between rows) would cap memory at one row's worth of memo entries at a time.
+
+**Trigger:** numeric-equation table at ≥ 100K rows with measurable RSS growth attributable to the memo map.
 
 ## 7. Units and Dimensional Analysis
 
@@ -554,14 +552,9 @@ Entry remains valid; not obsolete.
 
 ## 39. Shared CSE helper preamble across `--table` rows
 
-`--cse` (Cycle B) extracts subexpressions per `derive_all` invocation. A
-future `--table` mode that emits multiple parameterized rows (e.g. one row
-per `(a, b, c)` triple) should share a single `# Helpers` preamble across
-all rows when the structural shape repeats. Reusing the existing
-`cse_extract` over the union of row-expressions gives this for free; only
-the print block needs new layout logic.
+`--cse` (Cycle B) extracts subexpressions per `derive_all` invocation. `--table` mode (shipped 2026-05-11, Future #5) emits multiple parameterized rows but does not share a `# Helpers` preamble — each row is a numeric result, not a symbolic equation. This item activates if a future mode combines `--table` with symbolic output (e.g., `--derive --table` were allowed, or a per-row symbolic-form option were added). In that case, running `cse_extract` over the union of row-expressions and emitting a single `# Helpers` header would reuse the existing primitive with only a new print-block layout.
 
-**Reopen trigger**: when `--table` is designed.
+**Reopen trigger**: a future mode produces one symbolic equation per table row, making shared helpers worthwhile.
 
 ## 40. Chain-rule CSE composition for symbolic differentiation
 
