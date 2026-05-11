@@ -800,13 +800,15 @@ No code moves. The structural gap closes by making the cross-file-region link ex
 
 **Reopen trigger:** Any future cycle's file-scope critic re-flagging the symbolic-integration section; OR a third milestone shipping a non-contiguous surface in expr.h (`symbolic_diff` already has `diff()`-as-builtin in expr.h + post-load resolver in system.h, but those are cross-file by design — a same-file split is the trigger).
 
-## #R5. Refactor: `try_ibp_integrate` render-order branch extraction
+## #R5. Refactor: `try_ibp_integrate` render-order branch extraction — DONE 2026-05-11
+
+**Shipped 2026-05-11**: `canonicalize_ibp_product(u, V, var) → ExprPtr` extracted (expr.h, beside `mul_through_div` — the symmetric pair). The 13-line render-order docstring moved into the helper; `try_ibp_integrate` now reads as `u_V = canonicalize_ibp_product(u, V, var); result = SUB(u_V, int_V_du); return simplify(result)`. Forward declaration added beside `try_u_sub_integrate` / `try_ibp_integrate`. Code-Style.md §Empirically-derived rules updated to cite all three sites (R1/R2/R5). All tests green (3279/3279); sanitize + analyze-fast clean.
 
 **From:** Cycle I-M3 blind-spot critic (function-scope). Haiku-B failed at T1+T2 (wrong-on-detail) on the three-way render-order branch at function tail (`if V_is_div ... else if V_is_var && u_is_call ... else ...`). T3 only passes because the comment block enumerates each render-order case explicitly. **Third occurrence of the load-bearing-comment-papers-over-structural-complexity pattern in the integration arc** (cf. R1 `try_u_sub_integrate` cse_replace naming, R2 `resolve_integral_calls` 4-arg fall-through). Cycle-I-M2 rule "load-bearing comments must point at a structural cause" applies — the structural cause is mixed-responsibility: `try_ibp_integrate` does both IBP (math) AND canonical-render-order shaping (presentation).
 
-**Proposed:** Extract the render-order branch into a named helper `canonicalise_ibp_product(u, V, var) → ExprPtr` that returns the `u*V` term with the correct operand order. The IBP function then reads as:
+**Proposed:** Extract the render-order branch into a named helper `canonicalize_ibp_product(u, V, var) → ExprPtr` that returns the `u*V` term with the correct operand order. The IBP function then reads as:
 ```cpp
-const ExprPtr u_V        = canonicalise_ibp_product(u, V, var);
+const ExprPtr u_V        = canonicalize_ibp_product(u, V, var);
 const ExprPtr result_raw = Expr::BinOpExpr(BinOp::SUB, u_V, int_V_du);
 return simplify(result_raw);
 ```

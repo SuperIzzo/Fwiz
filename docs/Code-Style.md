@@ -192,13 +192,14 @@ Function-scope rules. Appended by the blind-spot critic when function-scope Haik
 
 **Convention:** when a function passes the comprehension gate at T3 (with comments) but fails at T1/T2 because a comment explicitly tells the reader "what's really happening" (e.g. "cse_replace does exactly this with structural eq", "fall through to numeric path", "see also …"), the comment is a refactor signal. The *first* response is to remove the structural cause — rename, restructure, or extract — so the comment becomes redundant. Only when the structural cause is genuinely unfixable (e.g. cross-cutting algorithmic context) does the comment stay as load-bearing.
 
-**Anti-pattern:** the comment is the first line of defence. Two examples in Cycle I-M2:
-- `try_u_sub_integrate` calling `cse_replace` for non-CSE structural rewriting, with a comment saying so. The rename (or wrapper) is the structural fix; the comment is the symptom.
-- `resolve_integral_calls` 4-arg branch's `if (val) { if (finite) return; /* fall through */ } else { return diff; }` asymmetric early-return, where the comment names the asymmetry. Extracting an explicit dispatch helper is the structural fix.
+**Anti-pattern:** the comment is the first line of defence. Three sites in the integration arc, all same shape:
+- **R1** — `try_u_sub_integrate` calling `cse_replace` for non-CSE structural rewriting, with a comment saying so (Cycle I-M2). The rename (or wrapper) is the structural fix; the comment is the symptom. Shipped 2026-05-11 as `replace_subtree_by_name`.
+- **R2** — `resolve_integral_calls` 4-arg branch's `if (val) { if (finite) return; /* fall through */ } else { return diff; }` asymmetric early-return (Cycle I-M2), where the comment names the asymmetry. Extracting an explicit dispatch helper is the structural fix. DONE-by-retest 2026-05-11.
+- **R5** — `try_ibp_integrate` render-order branch's `if V_is_div ... else if V_is_var && u_is_call ... else ...` three-way shape (Cycle I-M3), where the 13-line comment block enumerates each render-order case. Extracting `canonicalize_ibp_product(u, V, var)` carries the docstring into the helper; the IBP function carries only the IBP algorithm. Shipped 2026-05-11.
 
 **Reason:** T3-only-passes mean a reader without the comment cannot follow. Comments rot, drift, get stripped by IDE flows, and are skipped by Haiku-grade readers under context pressure. Code that reads correctly without leaning on comments is durable; code that requires a comment to disambiguate the next step is not.
 
-**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` and `resolve_integral_calls` 4-arg branch (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable.
+**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable.
 
 ### Rule: heuristic-priority / rank functions returning small magic ints should use a named-constant `enum class`
 

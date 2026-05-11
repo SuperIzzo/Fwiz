@@ -2875,6 +2875,8 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
 // FUNC_CALL cases. Defined below.
 [[nodiscard]] inline ExprPtr try_u_sub_integrate(const Expr& e, const std::string& var);
 [[nodiscard]] inline ExprPtr try_ibp_integrate(const Expr& e, const std::string& var);
+[[nodiscard]] inline ExprPtr canonicalize_ibp_product(
+    const ExprPtr& u, const ExprPtr& V, const std::string& var);
 
 // LIATE priority — used by `try_ibp_integrate` to choose `u` vs `dv` when
 // applying integration by parts to a MUL integrand. Higher rank → preferred
@@ -3217,6 +3219,27 @@ inline thread_local int ibp_depth_ = 0;
     return Expr::BinOpExpr(BinOp::MUL, a, b);
 }
 
+// Canonical operand order for the u*V term in integration-by-parts output.
+// IBP produces u*V - ∫V*du; the operand order of u*V matters for
+// downstream rendering (the simplifier respects the syntactic order):
+//   - V is a DIV (e.g. dv = x^2 → V = x^3/3): build `V_num * u / V_denom`
+//     so the algebraic dv-derived term renders before the function `u`,
+//     and the simplifier preserves the structural fraction (avoids
+//     `0.333 * log(x) * x^3`).
+//   - V is exactly `Var(var)` (e.g. dv = 1 → V = x), and u is a FUNC_CALL:
+//     emit `V * u` (algebraic before function — `x * atan(x)`).
+//   - Otherwise plain `MUL(u, V)` — for `x*e^x` (u=x, V=e^x) yields
+//     `x * e^x` not `e^x * x`.
+[[nodiscard]] inline ExprPtr canonicalize_ibp_product(
+    const ExprPtr& u, const ExprPtr& V, const std::string& var) {
+    const bool V_is_div  = V && V->type == ExprType::BINOP && V->op == BinOp::DIV;
+    const bool V_is_var  = V && is_var(*V) && V->name == var;
+    const bool u_is_call = u && u->type == ExprType::FUNC_CALL;
+    if (V_is_div)              return mul_through_div(V, u);
+    if (V_is_var && u_is_call) return Expr::BinOpExpr(BinOp::MUL, V, u);
+    return Expr::BinOpExpr(BinOp::MUL, u, V);
+}
+
 [[nodiscard]] inline ExprPtr try_ibp_integrate(const Expr& e, const std::string& var) {
     if (e.type != ExprType::BINOP || e.op != BinOp::MUL) return nullptr;
     if (ibp_depth_ >= IBP_MAX_DEPTH) return nullptr;
@@ -3255,25 +3278,9 @@ inline thread_local int ibp_depth_ = 0;
     if (!int_V_du) return nullptr;
 
     // u*V - ∫V*du
-    // Render order:
-    //   - V is a DIV (e.g. dv = x^2 → V = x^3/3): build `V_num * u / V_denom`
-    //     so the algebraic dv-derived term renders before the function `u`,
-    //     and the simplifier preserves the structural fraction (avoids
-    //     `0.333 * log(x) * x^3`).
-    //   - V is exactly `Var(var)` (e.g. dv = 1 → V = x), and u is a FUNC_CALL:
-    //     emit `V * u` (algebraic before function — `x * atan(x)`).
-    //   - Otherwise plain `MUL(u, V)` — for `x*e^x` (u=x, V=e^x) yields
-    //     `x * e^x` not `e^x * x`.
-    const bool V_is_div = V && V->type == ExprType::BINOP && V->op == BinOp::DIV;
-    const bool V_is_var = V && is_var(*V) && V->name == var;
-    const bool u_is_call = u && u->type == ExprType::FUNC_CALL;
-    ExprPtr u_V;
-    if (V_is_div)              u_V = mul_through_div(V, u);
-    else if (V_is_var && u_is_call)
-                               u_V = Expr::BinOpExpr(BinOp::MUL, V, u);
-    else                       u_V = Expr::BinOpExpr(BinOp::MUL, u, V);
-    ExprPtr result = Expr::BinOpExpr(BinOp::SUB, u_V, int_V_du);
-    return simplify(result);
+    const ExprPtr u_V        = canonicalize_ibp_product(u, V, var);
+    const ExprPtr result_raw = Expr::BinOpExpr(BinOp::SUB, u_V, int_V_du);
+    return simplify(result_raw);
 }
 
 // ============================================================================
