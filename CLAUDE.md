@@ -16,6 +16,7 @@ make test-clang   # optional: rebuild + run tests under clang++ (soft-skip if no
 make analyze-fast # cppcheck only (~1-2 min, per-cycle gate)
 make analyze-full # clang-tidy (~10s after 2026-05-07 hang fix; was hung indefinitely before)
 make analyze      # both tiers (analyze-fast + analyze-full)
+make valgrind     # memcheck on full test suite (~5-8 min; user-triggered batch oracle)
 make fuzz         # libFuzzer harness for parser; Clang-only; pre-release / post-parser-change check
 ```
 
@@ -191,7 +192,8 @@ USER BRIEF → RESEARCH → DESIGN → IMPLEMENT → REVIEW → PLAN-NEXT → re
 
 **Quality bar (tiered oracle)**:
 - **Per-cycle gate**: `make test && make sanitize && make analyze-fast` (cppcheck — ~1-2 min). Must pass before cycle close.
-- **User-triggered batch**: `make analyze-full` (clang-tidy — **~10 s** post-fix). Earlier framing claimed "1-2 h on this header-heavy codebase"; that was a fiction — the tool was hanging indefinitely on `bugprone-exception-escape` for ~9 cycles, never producing output. The 2026-05-07 hang fix excluded `bugprone-exception-escape` and `bugprone-unchecked-optional-access` (a known LLVM regression hang); the bisection lives in `.fwiz-workflow/debug-analyze-full-hang.md`. Orchestrator tracks "N cycles since last clang-tidy" and audits residuals against the cumulative diff since last green baseline. **Escalation rule**: if a user-triggered tool is "pending" for 3+ cycles with zero successful runs, do not keep recommending it — escalate to a debugger-agent diagnostic instead.
+- **User-triggered batch (static)**: `make analyze-full` (clang-tidy — **~10 s** post-fix). Earlier framing claimed "1-2 h on this header-heavy codebase"; that was a fiction — the tool was hanging indefinitely on `bugprone-exception-escape` for ~9 cycles, never producing output. The 2026-05-07 hang fix excluded `bugprone-exception-escape` and `bugprone-unchecked-optional-access` (a known LLVM regression hang); the bisection lives in `.fwiz-workflow/debug-analyze-full-hang.md`. Orchestrator tracks "N cycles since last clang-tidy" and audits residuals against the cumulative diff since last green baseline. **Escalation rule**: if a user-triggered tool is "pending" for 3+ cycles with zero successful runs, do not keep recommending it — escalate to a debugger-agent diagnostic instead.
+- **User-triggered batch (runtime)**: `make valgrind` (memcheck on the full test suite — ~5-8 min with `--track-origins=yes`). Complementary to `make sanitize` — ASan/UBSan are faster (and the per-cycle gate) but valgrind catches certain uninitialized-read and heap-layout patterns ASan misses, and is compiler-portable. **Clean baseline established 2026-05-12** (3330/3330 tests, 0 errors, 0 leaks). Output captured to `/tmp/fwiz-valgrind.log`; printed only on failure. Run after substantial allocator-pattern changes or before release. Soft-skips if valgrind is not on PATH.
 - **Periodic**: data locality / disassembly audits on hot paths (perf-auditor agent).
 
 **Core principle**: least code, least features, maximum flexibility, tiny fast core, infinite extendability via .fw rules.

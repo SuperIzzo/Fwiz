@@ -100,6 +100,32 @@ analyze-full:
 analyze: analyze-fast analyze-full
 	@echo "All static analysis complete."
 
+# --- Runtime memcheck ---
+# Valgrind memcheck on the full test suite. Complementary to `sanitize`:
+# ASan/UBSan catch most things faster (~1 min total under `make sanitize`),
+# but valgrind catches certain uninitialized-read patterns ASan misses and
+# is compiler-portable. ~5-8 min wall on the 3330-test suite (with
+# --track-origins). NOT in the per-cycle gate — runs as a user-triggered
+# batch oracle parallel to `analyze-full`. Use after substantial allocator
+# changes or before release. Output captured to /tmp/fwiz-valgrind.log;
+# printed only on failure. Valgrind errors propagate via --error-exitcode=1.
+# Soft-skip if valgrind is not on PATH.
+valgrind: $(TEST)
+	@if which valgrind > /dev/null 2>&1; then \
+		echo "=== valgrind memcheck (may take 5-8 min) ===" ; \
+		if valgrind --error-exitcode=1 --leak-check=full \
+				--show-leak-kinds=all --track-origins=yes -q \
+				./$(TEST) > /tmp/fwiz-valgrind.log 2>&1; then \
+			echo "Valgrind memcheck complete (clean). Log: /tmp/fwiz-valgrind.log"; \
+		else \
+			echo "Valgrind FOUND ERRORS — full log follows:"; \
+			cat /tmp/fwiz-valgrind.log; \
+			exit 1; \
+		fi; \
+	else \
+		echo "valgrind not installed, skipping"; \
+	fi
+
 bin:
 	mkdir -p bin
 
