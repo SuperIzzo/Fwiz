@@ -48,7 +48,7 @@ Post-load pass `resolve_diff_in_equations` (system.h): rewrites `diff(named_var,
 
 Two API surfaces:
 1. In-file builtin: `sensitivity = diff(force, mass)` — parser-level recognition replaces the call with the differentiated tree at load time.
-2. CLI query: `fwiz kinematic.fw 'diff(distance, time)=?'` — `CLIDiffQuery` struct in `parse_cli_query`; dispatched in `main.cpp` Pass 1.5 by injecting a synthetic equation then running the post-load pass. Falls back to printing the symbolic expression when free variables remain.
+2. CLI query: `fwiz kinematic.fw 'diff(distance, time)=?'` — synthesised as `<alias> = diff(...)` by `parse_cli_query` and loaded via `sys.load_string`; standard post-load pass resolves it. Falls back to printing the symbolic expression when free variables remain. (Unified with the `.fw` path in Future #67 — `CLIDiffQuery` struct and Pass 1.5 dispatcher deleted.)
 
 `solved_symbolic_` carries derivative results (confirmed via `test_symbolic_diff_provenance`), validating the pre-positioned carrier.
 
@@ -129,3 +129,13 @@ Correctness, migration, and style items from the code-quality audit. Zero user-v
 - **M3 (style + perf):** T3.1 (`recognize_constant` static lookup tables — zero per-call allocation), T3.7 (`auto S = simplify` alias deleted), T3.9 (no-op `equations.size() >= 2` guard in Strategy 7 removed), T3.10 (`resolve_memoized` cache-key `reserve()` added), CondOp::COUNT_ convention compliance (`assert(false)` in switch). T3.2, T3.3 deferred (profiling-gated). T3.8 deferred to T4.1 file-split atomic diff.
 
 Reopen triggers added: Future.md #53 (typed-binding predicates), #54 (T3.5 rationale), #55 (T3.6 rationale), #56 (Issue 1 option-b escalation), #57 (recognize_constant std::map → sorted std::array). T4.1 payload updated to include T3.8 rename.
+
+## 67. CLI / `.fw` dispatch-path unification for `integral`/`diff` queries — DONE (2026-05-12)
+
+Two parallel dispatch paths for the same semantic operation collapsed into one. `parse_cli_query` now synthesises `<alias> = diff/integral(...)` equations into a new `CLIQuery::synthetic_equations` string (+ a `synthetic_aliases` set for the symbolic-fallback render path). main.cpp loads it via a single `sys.load_string` after the file/inline source; the standard query loop handles the alias as a regular query. `CLIDiffQuery` / `CLIIntegralQuery` structs deleted; Pass 1.5 / Pass 1.6 dispatcher blocks (~50 LOC each) in main.cpp deleted.
+
+Net production LOC: -65 (-83 main.cpp, +18 system.h). Tests: 3340 → 3343 (+3 net).
+
+**Two visible bugs closed**:
+- `--table` + `integral(...) = ?A` now composes naturally — integral queries flow through `q.queries[]` which the table driver already iterates.
+- CLI binding RHS form `F = integral(x^2, x)` now works (combined with `F=?` → `F = x^3 / 3`). Previously errored "Invalid value" because the value-side path tried `evaluate()` on the integral FUNC_CALL, which returns empty by design.

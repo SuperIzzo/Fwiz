@@ -3762,37 +3762,11 @@ struct CLIQueryVar {
     bool strict = false;    // ?! mode — error if multiple results
 };
 
-// Future #6: `diff(target_expr, var)=?[alias]` CLI query target.
-//   target_expr is the unparsed expression text (parsed at dispatch time
-//                against the loaded FormulaSystem's arena).
-//   var        is the differentiation variable.
-//   alias      is the output name (default: "diff_<var>").
-struct CLIDiffQuery {
-    std::string target_text;
-    std::string var;
-    std::string alias;
-};
-
-// Future #16 (M1): `integral(target_expr, var)=?[alias]` CLI query target.
-// Mirrors CLIDiffQuery exactly; default alias is "integral_<var>".
-// M2: `lo_text` / `hi_text` carry the optional definite-integral bounds. Both
-// empty for the indefinite form `integral(f, x)=?`; both populated for the
-// 4-arg form `integral(f, x, a, b)=?`. Parsed-time strings (no Expr yet).
-struct CLIIntegralQuery {
-    std::string target_text;
-    std::string var;
-    std::string lo_text;  // empty if indefinite
-    std::string hi_text;  // empty if indefinite
-    std::string alias;
-};
-
 struct CLIQuery {
     std::string filename;
     std::string section;        // section name (from file.section syntax)
     std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
-    std::vector<CLIDiffQuery> diff_queries;  // Future #6: diff(...)=? targets
-    std::vector<CLIIntegralQuery> integral_queries;  // Future #16: integral(...)=? targets
     std::map<std::string, double> bindings;
     // Future #5: table-mode range bindings — CLI-order-preserving (parallel to
     // `queries`). Each entry is (var_name, expanded values). Populated only
@@ -3807,6 +3781,20 @@ struct CLIQuery {
     // dispatch. The synthetic alias (`x` above) routes the inner call's
     // result into the parent scope as a regular variable.
     std::vector<FormulaCall> nested_calls;
+    // Future #67: post-load synthetic equations from CLI sugar.
+    // Populated by parse_cli_query when an arg is recognised as a resolve-at-
+    // load FUNC_CALL (currently `integral(...)`/`diff(...)` — same set as the
+    // load_with_sections post-load passes). Loaded by main.cpp via
+    // `sys.load_string(q.synthetic_equations, "<cli-resolve-at-load>")`
+    // AFTER the file / inline source, BEFORE the standard query dispatch
+    // loop. Empty for all existing non-resolve-at-load CLI paths.
+    // `synthetic_aliases` records the alias names emitted alongside (a subset
+    // of `queries[i].alias`). Pass 2's resolve-failure fallback uses this set
+    // to print the symbolic RHS for free-variable cases (e.g.
+    // `diff(distance, time)=?slope` with no `velocity=` binding → `slope =
+    // velocity`), matching the pre-unification Pass 1.5 / 1.6 behaviour.
+    std::string synthetic_equations;
+    std::set<std::string> synthetic_aliases;
 };
 
 // Future #5: parse a bracketed range value like `[1..10]`, `[1..10 @ 0.5]`, or
@@ -4072,9 +4060,11 @@ struct CLIQuery {
         if (name.empty())
             throw std::runtime_error("Missing variable name in '" + arg + "'");
 
-        // Future #6: `diff(target_expr, var)=?[alias]` — match the literal
-        // prefix `diff(` and require a trailing `)`. The target/var split
-        // happens at parse-line time using the same comma-at-depth-0 rule.
+        // Future #6 + #67: `diff(target_expr, var)=?[alias]` — synthesised
+        // into a regular equation `<alias> = diff(target, var)` and a regular
+        // `CLIQueryVar` so the standard Pass 2 query loop handles dispatch.
+        // The post-load `resolve_diff_in_equations` pass rewrites it after
+        // the system's source loads.
         if (val.size() >= 1 && val[0] == '?'
             && name.size() > 5 && name.compare(0, 5, "diff(") == 0
             && name.back() == ')') {
@@ -4095,15 +4085,18 @@ struct CLIQuery {
             std::string rest = trim(val.substr(1));
             if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — diff is single-result
             const std::string alias = rest.empty() ? ("diff_" + dvar) : rest;
-            q.diff_queries.push_back({target, dvar, alias});
+            q.synthetic_equations += alias + " = diff(" + target + ", " + dvar + ")\n";
+            q.queries.push_back({alias, alias, false});
+            q.synthetic_aliases.insert(alias);
             continue;
         }
 
-        // Future #16 (M1+M2): `integral(target_expr, var)=?[alias]` (indefinite)
-        // or `integral(target_expr, var, lo, hi)=?[alias]` (definite, 4-arg).
-        // The split harvests ALL top-level commas (paren AND bracket depth ==
-        // 0 — vec/mat literals embed COMMAs inside [...] just like
-        // `parse_call_args`). Then 2-arg / 4-arg forms dispatch by piece count;
+        // Future #16 (M1+M2) + #67: `integral(target_expr, var)=?[alias]` or
+        // 4-arg `integral(target_expr, var, lo, hi)=?[alias]`. Synthesised
+        // into a regular equation + a regular query alias, the same way diff
+        // above is. The split harvests ALL top-level commas (paren AND bracket
+        // depth == 0 — vec/mat literals embed COMMAs inside [...] just like
+        // `parse_call_args`). 2-arg / 4-arg forms dispatch by piece count;
         // any other count is an error.
         if (val.size() >= 1 && val[0] == '?'
             && name.size() > 9 && name.compare(0, 9, "integral(") == 0
@@ -4136,7 +4129,14 @@ struct CLIQuery {
             std::string rest = trim(val.substr(1));
             if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — integral is single-result
             const std::string alias = rest.empty() ? ("integral_" + ivar) : rest;
-            q.integral_queries.push_back({target, ivar, lo_text, hi_text, alias});
+            if (pieces.size() == 2) {
+                q.synthetic_equations += alias + " = integral(" + target + ", " + ivar + ")\n";
+            } else {
+                q.synthetic_equations += alias + " = integral(" + target + ", " + ivar
+                                       + ", " + lo_text + ", " + hi_text + ")\n";
+            }
+            q.queries.push_back({alias, alias, false});
+            q.synthetic_aliases.insert(alias);
             continue;
         }
 
@@ -4160,6 +4160,24 @@ struct CLIQuery {
             q.range_bindings.emplace_back(name, parse_range(val));
             continue;
         } else {
+            // Future #67: `<name>=integral(...)` / `<name>=diff(...)` binding
+            // RHS. The value side carries a resolve-at-load FUNC_CALL — emit
+            // a synthetic equation so the post-load passes rewrite it just
+            // like an in-file `<name> = integral(...)`. The syntactic check
+            // (starts_with `integral(`/`diff(` AND ends with `)`) is the same
+            // set the resolve-at-load passes currently rewrite — wider forms
+            // like `2 * integral(...)` still fall through to the existing
+            // `Parser+evaluate` error path.
+            if (val.size() > 9 && val.compare(0, 9, "integral(") == 0 && val.back() == ')') {
+                q.synthetic_equations += name + " = " + val + "\n";
+                q.synthetic_aliases.insert(name);
+                continue;
+            }
+            if (val.size() > 5 && val.compare(0, 5, "diff(") == 0 && val.back() == ')') {
+                q.synthetic_equations += name + " = " + val + "\n";
+                q.synthetic_aliases.insert(name);
+                continue;
+            }
             double v = 0;
             size_t pos = 0;
             try { v = std::stod(val, &pos); }
@@ -4194,7 +4212,7 @@ struct CLIQuery {
         }
     }
 
-    if (q.queries.empty() && q.diff_queries.empty() && q.integral_queries.empty() && !allow_no_queries)
+    if (q.queries.empty() && !allow_no_queries)
         throw std::runtime_error("No query variable (use var=?)");
     return q;
 }

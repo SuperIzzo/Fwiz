@@ -197,6 +197,16 @@ int main(int argc, const char* argv[]) {
             sys.load_file(query.filename, query.section);
         }
 
+        // Future #67: post-load synthetic equations from CLI sugar
+        // (`integral(...)=?[alias]`, `diff(...)=?[alias]`, or binding RHS
+        // `<name>=integral(...)` / `<name>=diff(...)`). Loaded as a single
+        // chunk; the system's post-load passes (`resolve_diff_in_equations`,
+        // `resolve_integral_in_equations`) rewrite them to derivative /
+        // antiderivative trees. The dirty-flag mechanism (system.h) handles
+        // incremental re-resolution across multiple load_string calls.
+        if (!query.synthetic_equations.empty())
+            sys.load_string(query.synthetic_equations, "<cli-resolve-at-load>");
+
         // Future #21 (nested form): inject CLI-supplied nested formula calls
         // into the loaded system. Strategy 3 (FORMULA_FWD) and strategy 5
         // (FORMULA_REV) read `formula_calls` at solve time, so the inner call
@@ -529,122 +539,29 @@ int main(int argc, const char* argv[]) {
                         }
                     }
                 } catch (const std::exception& e) {
-                    if (has_verify) {
+                    // Future #67: free-variable case for synthetic-equation
+                    // aliases (diff/integral CLI sugar). Print the
+                    // (post-load-rewritten) symbolic RHS so users still get
+                    // an answer like `slope = velocity` instead of a thrown
+                    // error. Matches the pre-unification Pass 1.5/1.6
+                    // fallback behaviour.
+                    if (query.synthetic_aliases.count(q.alias)) {
+                        bool emitted = false;
+                        for (const auto& eq : sys.equations) {
+                            // cppcheck-suppress useStlAlgorithm
+                            if (eq.lhs_var == q.alias) {
+                                std::cout << q.alias << " = "
+                                          << expr_to_string(eq.rhs) << '\n';
+                                emitted = true;
+                                break;
+                            }
+                        }
+                        if (!emitted) std::cout << q.alias << " = ?\n";
+                    } else if (has_verify) {
                         std::cout << q.alias << " = ?\n";
                     } else {
                         throw;
                     }
-                }
-            }
-        }
-
-        // --- Pass 1.5: diff(...)=? CLI queries (Future #6) ---
-        // Each `diff(target, var)=?[alias]` is rewritten as a synthetic
-        // equation `<alias> = diff(target, var)` injected via load_string
-        // (idempotent — a fresh load on the same system appends, doesn't
-        // reset). The post-load pass simplifies it; subsequent resolve()
-        // produces either a symbolic form (if bindings are missing) or a
-        // numeric value (if all free vars are bound).
-        if (!query.diff_queries.empty()) {
-            std::string injected;
-            for (const auto& dq : query.diff_queries) {
-                injected += dq.alias + " = diff(" + dq.target_text + ", " + dq.var + ")\n";
-            }
-            sys.load_string(injected, "<cli-diff>");
-            for (const auto& dq : query.diff_queries) {
-                try {
-                    auto result = sys.resolve_all(dq.alias, query.bindings);
-                    if (result.is_discrete()) {
-                        auto it = sys.numeric_results_.find(dq.alias);
-                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
-                        for (auto r : result.discrete())
-                            std::cout << dq.alias << (exact ? " = " : " ~ ")
-                                      << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
-                        if (!result.discrete().empty())
-                            solved[dq.alias] = result.discrete()[0];
-                    } else if (result.has_periodic()) {
-                        // 12h: periodic families per-line '=' / '~' shape.
-                        auto it = sys.numeric_results_.find(dq.alias);
-                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
-                        for (const auto& line : result.periodic_render_lines())
-                            std::cout << dq.alias << (exact ? " = " : " ~ ") << line << '\n';
-                    } else {
-                        std::cout << dq.alias << " : " << result.to_string() << '\n';
-                    }
-                } catch (const std::runtime_error&) {
-                    // Fall back to symbolic form: print the (already-resolved)
-                    // RHS of the injected equation. The post-load pass turned
-                    // diff(...) into a derivative tree; if it can't reduce to
-                    // a number (free variables remain), we emit the symbolic
-                    // tree directly so users still get an answer.
-                    bool emitted = false;
-                    // not std::find_if: body emits to stdout (side effect) and sets emitted before break
-                    for (const auto& eq : sys.equations) {
-                        // cppcheck-suppress useStlAlgorithm
-                        if (eq.lhs_var == dq.alias) {
-                            std::cout << dq.alias << " = "
-                                      << expr_to_string(eq.rhs) << '\n';
-                            emitted = true;
-                            break;
-                        }
-                    }
-                    if (!emitted) std::cout << dq.alias << " = ?\n";
-                }
-            }
-        }
-
-        // --- Pass 1.6: integral(...)=? CLI queries (Future #16, M1) ---
-        // Mirrors Pass 1.5 (diff) — synthesize `<alias> = integral(target, var)`,
-        // load_string-inject, then resolve. The post-load
-        // `resolve_integral_in_equations` rewrites it to the antiderivative
-        // tree at load time (or preserves `integral(...)` symbolically if
-        // unrecognized). NO `--integrate` flag — only the in-file syntax.
-        if (!query.integral_queries.empty()) {
-            std::string injected;
-            for (const auto& iq : query.integral_queries) {
-                if (iq.lo_text.empty() || iq.hi_text.empty()) {
-                    injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var + ")\n";
-                } else {
-                    injected += iq.alias + " = integral(" + iq.target_text + ", " + iq.var
-                              + ", " + iq.lo_text + ", " + iq.hi_text + ")\n";
-                }
-            }
-            sys.load_string(injected, "<cli-integral>");
-            for (const auto& iq : query.integral_queries) {
-                try {
-                    auto result = sys.resolve_all(iq.alias, query.bindings);
-                    if (result.is_discrete()) {
-                        auto it = sys.numeric_results_.find(iq.alias);
-                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
-                        for (auto r : result.discrete())
-                            std::cout << iq.alias << (exact ? " = " : " ~ ")
-                                      << fmt_solve_result(r, exact && !approximate_mode, sys.aliases_) << '\n';
-                        if (!result.discrete().empty())
-                            solved[iq.alias] = result.discrete()[0];
-                    } else if (result.has_periodic()) {
-                        auto it = sys.numeric_results_.find(iq.alias);
-                        const bool exact = (it == sys.numeric_results_.end()) || it->second;
-                        for (const auto& line : result.periodic_render_lines())
-                            std::cout << iq.alias << (exact ? " = " : " ~ ") << line << '\n';
-                    } else {
-                        std::cout << iq.alias << " : " << result.to_string() << '\n';
-                    }
-                } catch (const std::runtime_error&) {
-                    // Free-variable case: print symbolic RHS (which is now the
-                    // antiderivative tree, or the unevaluated integral(...) if
-                    // no rule matched).
-                    bool emitted = false;
-                    // not std::find_if: body emits to stdout (side effect) and sets emitted before break
-                    for (const auto& eq : sys.equations) {
-                        // cppcheck-suppress useStlAlgorithm
-                        if (eq.lhs_var == iq.alias) {
-                            std::cout << iq.alias << " = "
-                                      << expr_to_string(eq.rhs) << '\n';
-                            emitted = true;
-                            break;
-                        }
-                    }
-                    if (!emitted) std::cout << iq.alias << " = ?\n";
                 }
             }
         }

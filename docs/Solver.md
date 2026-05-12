@@ -195,7 +195,7 @@ Here IBP picks `u = x` (Algebraic, priority 3) and `dv = cos(x) dx`. (`demo.fw` 
 
 **Definite form:** the primary path is symbolic F(b) − F(a) using the Tier 1/2/3 antiderivative. When that fails, `adaptive_simpson` provides a numeric fallback (tolerance `NUMERIC_TOLERANCE`, max depth 30). If any sample evaluates to NaN, the result preserves the `integral(...)` call unevaluated rather than emitting a misleading value.
 
-**Two surfaces:** inline `f = integral(g, x)` in a `.fw` file (resolved at load by the post-load pass); CLI query `integral(target, var)=?alias` or `integral(target, var, lo, hi)=?alias` (dispatched in `main.cpp` Pass 1.6, parallel to `diff`'s Pass 1.5). Unrecognised forms always preserve the `integral(...)` call.
+**Two surfaces:** inline `f = integral(g, x)` in a `.fw` file (resolved at load by the post-load pass); CLI query `integral(target, var)=?alias` or `integral(target, var, lo, hi)=?alias` (synthesised as `alias = integral(...)` by `parse_cli_query` and loaded via `sys.load_string` — Future #67). Unrecognised forms always preserve the `integral(...)` call.
 
 ---
 

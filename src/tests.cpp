@@ -12417,11 +12417,15 @@ void test_symbolic_diff_surface2_cli() {
 
     // Use parse_cli_query to verify the syntax is recognized.
     // The actual main.cpp dispatch is exercised separately via end-to-end runs.
+    // Future #67: diff(...)=? is now lowered to a regular q.queries entry plus
+    // a synthetic equation; no parallel CLIDiffQuery vector.
     auto q = parse_cli_query("/tmp/tdiff_s2.fw(diff(distance, time)=?, velocity=5)");
-    ASSERT(q.diff_queries.size() == 1, "parse_cli_query: 1 diff query");
-    if (q.diff_queries.size() == 1) {
-        ASSERT_EQ(q.diff_queries[0].var, "time", "diff target var = time");
+    ASSERT(q.queries.size() == 1, "parse_cli_query: 1 query (the diff alias)");
+    if (q.queries.size() == 1) {
+        ASSERT_EQ(q.queries[0].alias, "diff_time", "default diff alias = diff_time");
     }
+    ASSERT(q.synthetic_equations.find("diff_time = diff(distance, time)") != std::string::npos,
+           "synthetic_equations contains 'diff_time = diff(distance, time)'");
 }
 
 void test_symbolic_diff_surface2_e2e() {
@@ -12672,19 +12676,110 @@ void test_symbolic_integrate_surface_cli() {
     SECTION("symbolic_integrate: Surface 2 — integral(...)=? CLI query (BLOCKING #1)");
 
     // BLOCKING #1: parse_cli_query recognises integral(...)=?
+    // Future #67: integral(...)=? is now lowered to a regular q.queries entry
+    // plus a synthetic equation; no parallel CLIIntegralQuery vector.
     write_fw("/tmp/tint_cli.fw", "f = x^2\n");
     auto q = parse_cli_query("/tmp/tint_cli.fw(integral(f, x)=?)");
-    ASSERT(q.integral_queries.size() == 1, "parse_cli_query: 1 integral query");
-    if (q.integral_queries.size() == 1) {
-        ASSERT_EQ(q.integral_queries[0].var, "x", "integral target var = x");
-        ASSERT_EQ(q.integral_queries[0].alias, "integral_x", "default alias = integral_x");
+    ASSERT(q.queries.size() == 1, "parse_cli_query: 1 query (integral alias)");
+    if (q.queries.size() == 1) {
+        ASSERT_EQ(q.queries[0].alias, "integral_x", "default alias = integral_x");
     }
+    ASSERT(q.synthetic_equations.find("integral_x = integral(f, x)") != std::string::npos,
+           "synthetic_equations contains 'integral_x = integral(f, x)'");
 
     // With explicit alias
     auto q2 = parse_cli_query("/tmp/tint_cli.fw(integral(f, x)=?antideriv)");
-    ASSERT(q2.integral_queries.size() == 1, "parse_cli_query: 1 integral query with alias");
-    if (q2.integral_queries.size() == 1) {
-        ASSERT_EQ(q2.integral_queries[0].alias, "antideriv", "explicit alias = antideriv");
+    ASSERT(q2.queries.size() == 1, "parse_cli_query: 1 integral query with alias");
+    if (q2.queries.size() == 1) {
+        ASSERT_EQ(q2.queries[0].alias, "antideriv", "explicit alias = antideriv");
+    }
+    ASSERT(q2.synthetic_equations.find("antideriv = integral(f, x)") != std::string::npos,
+           "synthetic_equations contains 'antideriv = integral(f, x)'");
+
+    // Future #67 reviewer obs #6: 4-arg definite integral synthesis at parse-struct level.
+    // Only exercised end-to-end by --table test; pin the synthesised string shape here too.
+    auto q3 = parse_cli_query("/tmp/tint_cli.fw(integral(f, x, 0, 3)=?area)");
+    ASSERT(q3.queries.size() == 1, "4-arg integral: 1 query");
+    ASSERT(q3.synthetic_equations.find("area = integral(f, x, 0, 3)") != std::string::npos,
+           "4-arg integral: synthetic_equations contains 'area = integral(f, x, 0, 3)'");
+
+    // Future #67 reviewer BLOCKING #1: empty-query guard simplification verified.
+    // After dropping the diff_queries/integral_queries clauses from the guard, a CLI
+    // consisting only of `F=integral(x^2, x)` (no `F=?` query) must still throw —
+    // synthetic equations don't substitute for a query target.
+    bool threw = false;
+    try {
+        (void)parse_cli_query("/tmp/tint_cli.fw(F=integral(x^2, x))");
+    } catch (const std::runtime_error&) { threw = true; }
+    ASSERT(threw, "empty-query guard: synthetic-only CLI throws 'No query variable'");
+}
+
+// Future #67 regression A: --table composes with integral(...)=? after the
+// unification (integral queries are regular q.queries entries that the table
+// driver's existing inner loop handles).
+void test_future67_table_composes_with_integral() {
+    SECTION("Future #67: --table composes with integral(...)=?");
+
+    write_fw("/tmp/t67_table_int.fw", "f = x^2\n");
+
+    // Header: range var "b" then query alias "A". 4 lines = 1 header + 3 rows.
+    {
+        int rc = system("./bin/fwiz --table "
+                        "'/tmp/t67_table_int.fw(integral(f, x, 0, b)=?A, b=[1..3])' "
+                        "2>/dev/null | wc -l | grep -q '^4$'");
+        ASSERT(WEXITSTATUS(rc) == 0,
+               "--table with integral(...)=? produces 4 lines (1 header + 3 rows)");
+    }
+    {
+        int rc = system("./bin/fwiz --table "
+                        "'/tmp/t67_table_int.fw(integral(f, x, 0, b)=?A, b=[1..3])' "
+                        "2>/dev/null | head -1 | grep -qE '^b\tA$'");
+        ASSERT(WEXITSTATUS(rc) == 0,
+               "--table with integral: header is 'b\\tA'");
+    }
+    // b=3 → A = b^3/3 = 9
+    {
+        int rc = system("./bin/fwiz --table "
+                        "'/tmp/t67_table_int.fw(integral(f, x, 0, b)=?A, b=[1..3])' "
+                        "2>/dev/null | grep -qE '^3\t9'");
+        ASSERT(WEXITSTATUS(rc) == 0,
+               "--table with integral: row b=3 → A=9");
+    }
+}
+
+// Future #67 regression B: CLI binding RHS accepts integral(...) / diff(...).
+// Today's value-side path tries `std::stod` then `Parser+evaluate`; evaluate
+// on an unresolved `integral` FUNC_CALL returns empty, so the user gets
+// "Invalid value 'integral(...)' for variable 'F'". After unification, the
+// value-side path detects the resolve-at-load FUNC_CALL prefix and routes it
+// into q.synthetic_equations instead.
+void test_future67_binding_rhs_accepts_integral_and_diff() {
+    SECTION("Future #67: CLI binding RHS accepts integral(...) / diff(...)");
+
+    write_fw("/tmp/t67_bind.fw", "g = x\n");
+
+    // integral binding RHS
+    {
+        auto q = parse_cli_query("/tmp/t67_bind.fw(F=?, F=integral(x^2, x))");
+        ASSERT(q.queries.size() == 1, "F=? is the only query");
+        if (q.queries.size() == 1)
+            ASSERT_EQ(q.queries[0].alias, "F", "alias = F");
+        ASSERT(q.synthetic_equations.find("F = integral(x^2, x)") != std::string::npos,
+               "synthetic_equations contains 'F = integral(x^2, x)'");
+        ASSERT(q.bindings.find("F") == q.bindings.end(),
+               "F not in bindings (defined by the synthetic equation)");
+    }
+
+    // diff binding RHS — symmetric
+    {
+        auto q = parse_cli_query("/tmp/t67_bind.fw(D=?, D=diff(x^3, x))");
+        ASSERT(q.queries.size() == 1, "D=? is the only query");
+        if (q.queries.size() == 1)
+            ASSERT_EQ(q.queries[0].alias, "D", "alias = D");
+        ASSERT(q.synthetic_equations.find("D = diff(x^3, x)") != std::string::npos,
+               "synthetic_equations contains 'D = diff(x^3, x)'");
+        ASSERT(q.bindings.find("D") == q.bindings.end(),
+               "D not in bindings (defined by the synthetic equation)");
     }
 }
 
@@ -14153,6 +14248,8 @@ int main() {
     test_symbolic_integrate_unevaluated_fallback();
     test_symbolic_integrate_surface_inline();
     test_symbolic_integrate_surface_cli();
+    test_future67_table_composes_with_integral();
+    test_future67_binding_rhs_accepts_integral_and_diff();
     test_symbolic_integrate_resolve_at_load_consumers();
     // Symbolic integration M2 (2026-05-10 cycle): u-sub + definite + Simpson
     test_symbolic_integrate_u_sub();
