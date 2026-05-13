@@ -1,0 +1,51 @@
+# stdlib/physics/mechanics.fw — Newtonian mechanics formulas.
+#
+# Each formula is a plain bidirectional equation, so any single unknown
+# resolves via the standard solver (force=?, mass=?, accel=? all work
+# off the same line).
+#
+# This file inlines the SI-base bindings it depends on so that the
+# numeric unit-suffix forms (`mass=10kg`, `accel=9.81m/s^2`) collapse
+# end-to-end without a separate `stdlib/units/si-minimal.fw` load.
+# The values mirror `stdlib/units/si-minimal.fw`; if that catalog
+# changes its base policy, update this file in lockstep.
+#
+# Variable-naming rule (Units arc cycle 3): SI base-unit symbols
+# `m, kg, s, A, K, mol, cd` are RESERVED as scalars by the units
+# catalog. Physics quantities use verbose names (`mass`, `displacement`,
+# `area`) instead of single-letter shadows. `a`, `v`, `F` are fine
+# because they are not SI base-unit symbols.
+
+# --- Inlined SI base + derived units (mirrors stdlib/units/si-minimal.fw) ---
+m  = 1
+kg = 1
+s  = 1
+N  = kg * m / s^2
+Pa = N / m^2
+J  = N * m
+W  = J / s
+
+# --- Newton's second law. ---
+force = mass * accel
+
+# --- Earth-surface gravitational acceleration and weight. ---
+gravity = 981 / 100
+weight = mass * gravity
+
+# --- Linear momentum. ---
+momentum = mass * velocity
+
+# --- Kinetic energy. ---
+kinetic_energy = (mass * velocity^2) / 2
+
+# --- Mechanical work (constant force along straight-line displacement). ---
+work = force * displacement
+
+# --- Power. ---
+power = work / time
+
+# --- Pressure. ---
+pressure = force / area
+
+# --- Frequency-period reciprocity (both directions covered by the solver). ---
+frequency = 1 / period

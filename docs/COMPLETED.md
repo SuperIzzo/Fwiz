@@ -21,6 +21,13 @@ N-cycle campaign to add unit-of-measure support. Goal: `100kg` parses and binds;
 - `stdlib/units/si-minimal.fw` grown 16→42 lines: SI prefixes (km/mm/um/nm/Mm/Gm for length; g/mg for mass; ms/us/ns/min/hr/day for time) and 5 derived units (N/J/W/Pa/Hz), all defined in terms of SI base.
 - Tests: 3443 → 3493 (+50). All gates green.
 
+**Cycle 3** (2026-05-13): Physics formula catalog — first end-to-end demonstration that unit-bearing CLI inputs flow through real formulas.
+- `stdlib/physics/mechanics.fw` (~48 lines): Newton's 2nd law, weight, kinetic energy, momentum, work, power, pressure, frequency/period reciprocity. Inlines SI-base bindings it depends on (`m, kg, s, N, Pa, J, W`) so no separate units load is required.
+- Variable-naming hygiene: verbose names (`mass`, `displacement`, `area`, ...) so the formulas never shadow the SI base-unit symbols (`m`, `s`, `A`, `kg`) reserved by the units catalog. File header documents the rule.
+- `test_physics_mechanics` (8 assertions, ~80 LOC): 6 in-process `FormulaSystem` cases (Newton, weight, KE, momentum, pressure, bidirectional mass-solve) + 2 popen end-to-end CLI cases (force, kinetic-energy via unit-suffix args).
+- `docs/Language.md` §14.4: stdlib reference entry for the new catalog.
+- Tests: 3495 → 3505 (+10). All gates green.
+
 **Remaining cycles (queued):** `100m^2` fix (#74); dim-analysis stdlib; dimensional analysis rejection (#7b).
 
 ## Matrix-surface diagnostic-quality arc — ✅ COMPLETE (2026-05-13, ROADMAP gen-1)

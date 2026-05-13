@@ -736,6 +736,17 @@ speed = 25/18
 
 Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b.
 
+### 14.4 `stdlib/physics/mechanics.fw` — Newtonian mechanics (since 2026-05-13, cycle 3)
+
+Bidirectional Newtonian-mechanics equations: `force = mass * accel`, weight, kinetic energy, momentum, work, power, pressure, frequency/period reciprocity. Inlines the SI-base bindings it depends on (`m, kg, s, N, Pa, J, W`) so unit-suffix CLI args (`mass=10kg`, `accel=9.81*m/s^2`) resolve end-to-end without a separate units load. Variable names are deliberately verbose (`mass`, not `m`; `displacement`, not `s`; `area`, not `A`) to avoid shadowing the SI base-unit symbols bound by `stdlib/units/si-minimal.fw`.
+
+```bash
+$ fwiz 'stdlib/physics/mechanics.fw(force=?, mass=10kg, accel=9.81)'
+force = 981 / 10
+$ fwiz 'stdlib/physics/mechanics.fw(mass=?, force=98.1, accel=9.81)'
+mass = 10
+```
+
 ### 14.2 `stdlib/builtin.fw` — reference for C++ built-ins
 
 The `.fw` representation of the C++-backed built-ins (`sin`, `cos`, `sqrt`, `log`, etc.). Each section shows the `@extern` directive and the inverse equation used for reverse solving:

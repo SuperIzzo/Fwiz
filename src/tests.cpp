@@ -14852,6 +14852,106 @@ void test_unit_stdlib_catalog() {
     }
 }
 
+// Units arc cycle 3 deliverable B: physics formula catalog at
+// `stdlib/physics/mechanics.fw`. End-to-end coverage exercises the unit-
+// suffix surface from cycle 2 against the actual formula bodies and pins
+// each output to a rational/integer so floating-drift never flaps the
+// test. Variable names are deliberately verbose — see the file header
+// for the SI-symbol-shadowing rationale.
+void test_physics_mechanics() {
+    SECTION("Stdlib physics catalog (cycle 3: Newtonian mechanics)");
+
+    // (1) Newton's second law: force = mass * accel.
+    //     10kg * 9.81 (m/s^2) = 98.1 = 981/10.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("mass = 10 * kg\naccel = 981 / 100\n", "<probe>");
+        ASSERT_NUM(sys.resolve("force", {}), 98.1,
+                   "Newton's 2nd law: force = mass * accel");
+    }
+
+    // (2) Weight on Earth: weight = mass * gravity, gravity = 9.81.
+    //     70kg * 9.81 = 686.7.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("mass = 70 * kg\n", "<probe>");
+        ASSERT_NUM(sys.resolve("weight", {}), 686.7,
+                   "Weight: 70kg * 9.81");
+    }
+
+    // (3) Kinetic energy: 1/2 * 2 * 10^2 = 100.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("mass = 2 * kg\nvelocity = 10 * m / s\n", "<probe>");
+        ASSERT_NUM(sys.resolve("kinetic_energy", {}), 100,
+                   "KE: 1/2 * 2kg * (10m/s)^2 = 100");
+    }
+
+    // (4) Linear momentum: 5 * 4 = 20.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("mass = 5 * kg\nvelocity = 4 * m / s\n", "<probe>");
+        ASSERT_NUM(sys.resolve("momentum", {}), 20,
+                   "Momentum: 5kg * 4m/s = 20");
+    }
+
+    // (5) Pressure: 100N / 4m^2 = 25 Pa.
+    //     `4*m^2` (with explicit `*`) avoids the Future #74 precedence
+    //     trap on `4m^2`.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("force = 100 * N\narea = 4 * m^2\n", "<probe>");
+        ASSERT_NUM(sys.resolve("pressure", {}), 25,
+                   "Pressure: 100N / 4*m^2 = 25");
+    }
+
+    // (6) Bidirectional solve: given force and accel, solve for mass.
+    //     The same `force = mass * accel` equation runs in reverse.
+    {
+        FormulaSystem sys;
+        sys.load_file("stdlib/physics/mechanics.fw");
+        sys.load_string("force = 981 / 10\naccel = 981 / 100\n", "<probe>");
+        ASSERT_NUM(sys.resolve("mass", {}), 10,
+                   "Bidirectional: force=98.1, accel=9.81 -> mass=10");
+    }
+
+    // (7) End-to-end CLI via popen: full pipeline (parse_cli_query unit
+    //     suffix -> synthetic_equations -> load_file -> resolve).
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/physics/mechanics.fw(force=?, mass=10kg, accel=9.81)' 2>&1",
+                        "r");
+        ASSERT(p != nullptr, "popen: physics CLI test");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("force = 981 / 10") != std::string::npos
+                   || out.find("force = 98.1") != std::string::npos,
+               "CLI: force=?, mass=10kg, accel=9.81 -> 981/10 or 98.1 "
+               "(got '" + out + "')");
+    }
+
+    // (8) End-to-end CLI for the kinetic-energy formula — sanity-checks
+    //     the squared-velocity path through the unit-suffix front end.
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/physics/mechanics.fw(kinetic_energy=?, mass=2kg, velocity=10m/s)' 2>&1",
+                        "r");
+        ASSERT(p != nullptr, "popen: KE CLI test");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("kinetic_energy = 100") != std::string::npos,
+               "CLI: kinetic_energy with 2kg, 10m/s -> 100 "
+               "(got '" + out + "')");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -15195,6 +15295,9 @@ int main() {
     test_unit_suffix();
     test_unit_cli_resolve();
     test_unit_stdlib_catalog();
+
+    // Units arc cycle 3 (2026-05-13): physics formula catalog
+    test_physics_mechanics();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
