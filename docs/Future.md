@@ -835,7 +835,74 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
-## 76. Reserved-word denylist for NUMBER-IDENT desugar — IN-SCOPE
+## 78. Are constants units? Unify the constants/units catalog. — PARKED (needs design cycle)
+
+**Surfaced 2026-05-13** by the user immediately after the #76 denylist shipped: "if we're going to keep `i` and `pi` and `phi` as valid suffixes we have to define them as units... OR this surfaces an interesting question — can all constants be defined as units?"
+
+**The question.** Today's mental model:
+- **Builtin constants**: `pi`, `e`, `phi`, `i` are bound in fwiz's C++ source as scalar Vars with specific values.
+- **Units**: `kg`, `m`, `s`, etc. live in `stdlib/units/si-minimal.fw` as plain `kg = 1` bindings.
+
+But under cycle 1's NUMBER-IDENT desugar (Option C), both groups behave identically: `2pi` and `2kg` parse to `MUL(Num(2), Var(...))` and resolve through the standard Var-binding pipeline. **There is no language-level distinction between "constant" and "unit."** They are both "named scalar bindings the user can multiply against numbers."
+
+Three plausible framings:
+1. **Constants are organizational, not structural.** `pi`/`e`/`phi`/`i` live in C++ for performance / always-available reasons. `kg`/`m` live in stdlib for user-extensibility. The NUMBER-IDENT desugar treats both as multiplicands and that's correct. Today's situation.
+2. **All scalar bindings ARE units; constants are a subset.** A `stdlib/units/constants.fw` (or `stdlib/constants/math.fw`) catalog could declare `pi = 3.14159...`, `e = 2.71828...`, etc., mirroring the user-extensibility model. The C++ builtin bindings become a performance optimization, not a conceptual layer.
+3. **Units have dimension tags; constants don't.** Future #7b dim-analysis would distinguish `kg` (mass) from `pi` (dimensionless). Under this framing, constants ARE units — they just carry the dimensionless tag.
+
+**Why a design cycle is needed.**
+- The #76 denylist (`e` reserved) was justified as "looks like incomplete scientific notation." Under framing 2 or 3, the rationale is weaker — `e` is a "dimensionless unit," same as `pi`. Is the disambiguation still warranted, or should `2e` mean `2 * Euler` consistently with `2pi`?
+- Migrating `pi`/`e`/`phi`/`i` from C++ builtins to `stdlib/.fw` files is structurally clean but introduces a load-order dependency (stdlib must load before any user expression). Mitigations: auto-load, embed-as-source, etc.
+- Future #7b dim-analysis cannot proceed without settling this question — does `force = mass * pi` carry units `kg`, or `kg * dimensionless = kg`? The answer is "trivially the same" only if constants are dimensionless units.
+- Cycle 4 of the Units arc (dim-analysis) WILL need this resolved.
+
+**Recommended design pass timing**: before Units arc cycle 4 (dim-analysis), or as cycle 4's design phase itself.
+
+**Reopen trigger.** User requests `/plan-campaign`-style design cycle for this question, OR Units cycle 4 (dim-analysis) brief enters planning.
+
+## 77. `_` as multiplication separator for reserved-prefix identifiers — PARKED (needs design cycle)
+
+**Surfaced 2026-05-13** by the user immediately after Future #76 shipped: "for `i` we might have to accept `_` as a valid suffix so `i_km` or `i_f`". Follow-up clarification: "I'm not saying it's correct btw, it just sort of makes sense — we should have a proper plan-critic-visionary cycle for that."
+
+**Problem.** `ikm` parses as a single IDENT (`read_ident` is greedy). A user wanting `i * km` (imaginary unit × kilometer) must write `i*km` or `i * km` — there's no implicit-multiplication path for IDENT-IDENT adjacency. Same for `if` (imaginary × farad) which is also a language keyword. The Units arc's NUMBER-IDENT desugar (`100kg → 100 * km`) handles number-prefixed cases but offers nothing for the imaginary-unit-prefixed case that's common in complex/AC-circuit math.
+
+**Sketch (un-evaluated).** Reserve `_` as a prefix-multiplication separator for specific reserved single-character builtins: `i_km → i * km`, `e_X → e * X`, possibly `pi_X` etc. The lexer or parser would split the IDENT at the first `_` if the prefix is a reserved single-char.
+
+**Why this needs a design cycle.**
+- Conflicts with the established `<thing>_<thing>` convention for user-defined unit names (`km_per_hr = km / hr` — the cycle-1 stdlib pattern). If `e_X` means `e * X`, can users still define `e_squared` as a variable? Probably yes (the rule only fires for `e_` at the START of an expression). But the disambiguation needs careful design.
+- Asymmetric: `i_km` works but `i.km` doesn't. Why one symbol and not the other?
+- Scope creep risk: once `i_` and `e_` are reserved prefixes, does the same rule extend to `pi_`, `phi_`? What about user-defined constants like `mu0` (vacuum permeability)?
+- Backward-compat: existing `.fw` files may contain `i_*` identifiers (user-defined). Rule must not silently break them.
+- Better alternative may exist: just require explicit `*` in these cases (status quo). The "sort of makes sense" framing is honest — this may not be worth the design cost.
+
+**Design questions** (for the plan-critic-visionary cycle):
+1. Which prefixes are reserved? `{i, e}` only, or wider?
+2. Lexer-level split vs parser-level split — which is structurally cleaner?
+3. Backward-compat: how do we audit existing user `.fw` files for collision?
+4. Does the rule extend to NUMBER-IDENT cases (`2i_km → 2 * i * km`)?
+5. Is the rule worth the cost? (Status-quo alternative: require `i * km`.)
+
+**Reopen trigger.** User requests a `/plan-campaign` or design cycle specifically for this question, OR enough user reports of complex-number arithmetic friction accumulate to push the priority up.
+
+## 76. Reserved-word denylist for NUMBER-IDENT desugar — ✅ DONE (2026-05-13, cycle 1.1)
+
+**User direction at the cycle-1 close (2026-05-13)**: "e like if is a keyword not usable as unit, another one is i the imaginary number ikm is a hard parse, a unit called f is even trickier because it becomes if".
+
+**Shipped denylist**: `{if, iff, e}`. The NUMBER-IDENT desugar in `parser.h primary()` returns `Num(v)` (without advancing the IDENT) when the trailing IDENT matches one of these reserved words. Pre-cycle silent-drop behavior is restored for these cases:
+- `2if`  → `Num(2)` (was post-cycle: `MUL(2, Var("if"))` → error)
+- `2iff` → `Num(2)`
+- `2e`   → `Num(2)` (was post-cycle: `MUL(2, Var("e"))` = 2*Euler — silently surprising for users typing `2e0` etc.)
+
+`i`, `pi`, `phi` are intentionally LEFT OFF the denylist:
+- `2i`  → `MUL(2, Var("i"))` — canonical complex-literal pattern, kept.
+- `2pi` → `MUL(2, Var("pi"))` — common math shorthand, kept.
+- `3phi` → `MUL(3, Var("phi"))` — same.
+
+Tests pinned in `test_unit_suffix`: 7 new ASSERTs covering each denylisted case + non-denylisted regressions. Tests 3430 → 3437 (+7).
+
+---
+
+**Original filing context** (preserved for trace):
 
 **Surfaced 2026-05-13** during cycle 1 of the Units arc review (reviewer NIT #1 + #2).
 

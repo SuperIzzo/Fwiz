@@ -88,6 +88,23 @@ private:
             // here.
             if (is(TokenType::IDENT)) {
                 const std::string ident_name = peek().text;
+                // Reserved-word denylist for the NUMBER-IDENT desugar (Future
+                // #76): language keywords (`if`, `iff`) and the Euler constant
+                // `e` cannot serve as unit suffixes. Without this guard,
+                // `y = 2if` would desugar to `MUL(2, Var("if"))` — absorbing
+                // the keyword into arithmetic — and `2e` would silently mean
+                // `2 * Euler` even when the user typed an incomplete scientific
+                // literal (`2e0`, `2e+1`). LEAVE the IDENT in the token stream
+                // (do NOT advance) so the caller / parse_line keyword scanner
+                // or the outer expression can pick it up appropriately. Builtin
+                // `i` is intentionally NOT denylisted: `2i` is the canonical
+                // complex-literal pattern and the simplifier's `i*i = -1` rule
+                // composes through MUL correctly. `pi` and `phi` are also kept
+                // free for `2pi` / `3phi` shorthand.
+                if (ident_name == "if" || ident_name == "iff"
+                    || ident_name == "e") {
+                    return Expr::Num(v);
+                }
                 advance();
                 ExprPtr rhs;
                 if (is(TokenType::LPAREN)) {

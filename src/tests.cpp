@@ -3330,13 +3330,22 @@ void test_cli_scientific_notation() {
         ASSERT_NUM(q.bindings.at("y"), 1, "1e0 = 1");
     }
 
-    // Post-Units-cycle-1: `1e` desugars to `1 * e` (Euler's constant)
-    // via the NUMBER-IDENT primary() rewrite. Pre-cycle silently dropped the
-    // trailing `e`; the desugar gives the more principled interpretation
-    // (consistent with `1pi`, `2sqrt(...)`, etc.). See Future-#74-equivalent.
+    // Post-Units-cycle-1.1 (Future #76): the NUMBER-IDENT desugar
+    // intentionally does NOT fire when the trailing IDENT is `e` (Euler
+    // constant), `if`, or `iff` — these are reserved words that cannot
+    // serve as unit suffixes. `1e` therefore returns Num(1) (the `e` is
+    // left in the token stream and silently dropped by the outer parser,
+    // matching the pre-Units-cycle-1 behavior). `1 * e` still works
+    // explicitly. Rationale: `1e` resembles incomplete scientific
+    // notation (`1e0`, `1e+1`); silently desugaring it to `1 * Euler`
+    // would surprise users typing a scientific literal.
     {
         auto q = parse_cli_query("f(x=?, y=1e)");
-        ASSERT_NUM(q.bindings.at("y"), 2.718281828459045, "1e = 1 * e (Euler)");
+        ASSERT_NUM(q.bindings.at("y"), 1.0, "1e = 1 (e reserved; trailing IDENT dropped)");
+    }
+    {
+        auto q = parse_cli_query("f(x=?, y=1 * e)");
+        ASSERT_NUM(q.bindings.at("y"), 2.718281828459045, "1 * e = Euler (explicit)");
     }
 
     // Invalid: e5 (no leading digit)
@@ -14540,6 +14549,64 @@ void test_unit_suffix() {
                "trailing 'iff' (no space): no condition stored");
         ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6,
                    "trailing 'iff' (no space): resolves normally");
+    }
+
+    // Reserved-word denylist for the NUMBER-IDENT desugar (Future #76,
+    // shipped 2026-05-13 in cycle 1.1 post-review). `if`, `iff`, and `e`
+    // do NOT participate in the desugar: leaving the IDENT in the token
+    // stream restores pre-cycle silent-drop for these specific cases, so
+    // `2if` returns Num(2), `2e` returns Num(2), `2iff` returns Num(2).
+    // Non-reserved IDENTs (kg, m, pi, phi, i, sin, ...) still desugar
+    // normally. User direction 2026-05-13: "e like if is a keyword not
+    // usable as unit"; left `i` un-denylisted so `2i` (the complex-literal
+    // pattern) keeps working.
+    {
+        // 2if: should return Num(2), NOT MUL(2, Var("if"))
+        const ExprPtr e1 = parse("2if");
+        ASSERT(e1->type == ExprType::NUM, "2if: denylist returns Num (not MUL)");
+        ASSERT_NUM(e1->num, 2.0, "2if: Num value is 2");
+    }
+    {
+        // 2iff: should return Num(2)
+        const ExprPtr e1 = parse("2iff");
+        ASSERT(e1->type == ExprType::NUM, "2iff: denylist returns Num");
+        ASSERT_NUM(e1->num, 2.0, "2iff: Num value is 2");
+    }
+    {
+        // 2e: should return Num(2) — `e` is reserved, NOT Euler-multiplied
+        const ExprPtr e1 = parse("2e");
+        ASSERT(e1->type == ExprType::NUM, "2e: denylist returns Num (not 2*Euler)");
+        ASSERT_NUM(e1->num, 2.0, "2e: Num value is 2 (e dropped, not multiplied)");
+    }
+    {
+        // 2pi: NOT in denylist — should still desugar to MUL(2, Var("pi"))
+        const ExprPtr e1 = parse("2pi");
+        ASSERT(e1->type == ExprType::BINOP && e1->op == BinOp::MUL,
+               "2pi: still desugars (pi NOT in denylist)");
+        ASSERT(e1->right->type == ExprType::VAR && e1->right->name == "pi",
+               "2pi: right operand is Var(pi)");
+    }
+    {
+        // 2i: NOT in denylist — `i` is the complex-literal pattern
+        const ExprPtr e1 = parse("2i");
+        ASSERT(e1->type == ExprType::BINOP && e1->op == BinOp::MUL,
+               "2i: still desugars (i NOT in denylist; complex literal)");
+        ASSERT(e1->right->type == ExprType::VAR && e1->right->name == "i",
+               "2i: right operand is Var(i)");
+    }
+    {
+        // 100kg: still desugars (non-reserved)
+        const ExprPtr e1 = parse("100kg");
+        ASSERT(e1->type == ExprType::BINOP && e1->op == BinOp::MUL,
+               "100kg: still desugars (kg NOT in denylist)");
+    }
+    {
+        // Explicit `2 * e` still works (denylist only affects the desugar
+        // path, not regular expression evaluation)
+        FormulaSystem sys;
+        sys.load_string("y = 2 * e\n");
+        ASSERT_NUM(sys.resolve("y", {}), 2 * 2.718281828459045,
+                   "2 * e (explicit): still resolves to 2*Euler");
     }
 }
 
