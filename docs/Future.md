@@ -57,7 +57,7 @@ For numeric-solver equations, `numeric_memo_` accumulates per-key memoized resul
 
 This item splits along the engine/stdlib axis per the project's wrapper-tier discipline:
 
-- **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. Remaining #7 work: CLI-arg evaluation (#73), dim-analysis stdlib (#7a), dimensional rejection (#7b).
+- **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. **Cycle 2 shipped 2026-05-13**: CLI-arg evaluation (#73 DONE); stdlib expanded 16→42 lines (SI prefixes + derived units). Remaining #7 work: dim-analysis stdlib (#7a), dimensional rejection (#7b).
 - **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
 - **#7b (NEW SUB-ITEM — PARKED)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). This is the typed-binding-predicate escalation: only fires if a `.fw` predicate can't express it. Reopen trigger: user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture.
 
@@ -102,7 +102,7 @@ v = 50km/hr
 
 ### Reopen trigger for #7
 
-Cycle 1 shipped. Remaining work tracked in #73 (CLI-arg), #74 (precedence fix), and the queued stdlib/dim-analysis cycles.
+Cycle 1 shipped. Cycle 2 shipped: #73 (CLI-arg) DONE; stdlib expanded 16→42 lines. Remaining work: #74 (precedence fix), and the queued dim-analysis cycles.
 
 ## 8. Standard Library
 
@@ -835,6 +835,33 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
+## 79. Deferred-identifier error-quality (cycle-2 follow-up) — IN-SCOPE
+
+**Surfaced 2026-05-13** during Units cycle 2 review.
+
+**Behavior change introduced in cycle 2**: Future #73's fix routes any RHS expression that parses cleanly but evaluates empty to `synthetic_equations`. Before #73, common typo patterns like `y=abc` or `y=e5` produced an early diagnostic at CLI-parse time: `Error: Invalid value 'abc' for variable 'y'`. After #73, the binding becomes a synthetic equation `y = abc`, the post-load resolution fails to bind `abc`, and the user sees one of:
+- `Error: Cannot solve for 'y'` (when querying `y=?`).
+- `y = abc` (silent symbolic fallback via `synthetic_aliases` rendering path).
+
+Either is less diagnostic than the old "Invalid value" message for *clear typos* (the user wrote a typo, not a deferred reference).
+
+**Reproducer**:
+```bash
+fwiz '(y=?, y=abc)'       # Before #73: Error: Invalid value 'abc' for variable 'y'
+                          # After #73: Error: Cannot solve for 'y'
+fwiz '(y=?, y=e5)'        # Before:    Error: Invalid value 'e5' for variable 'y'
+                          # After:     y = e5  (silent symbolic fallback)
+```
+
+The problem is **discrimination**: at CLI-parse time, we cannot distinguish "user typed a typo" from "user wrote a deferred reference that the file will resolve." The cycle-2 fix correctly defers — but the user-visible error quality regresses on the typo case.
+
+**Fix candidates** (un-evaluated):
+1. **Heuristic detection at parse time**: if the parsed RHS is a single Var that's NOT a known builtin AND looks like a typo (e.g. `e<digits>` resembling incomplete scientific notation), emit a warning to stderr alongside the synthetic equation. ~10 LOC.
+2. **Post-load diagnostic**: after `sys.load_string(synthetic_equations)`, walk each synthetic_alias and check if its dependencies are now bound; if any are still free, emit a "deferred identifier 'abc' is not defined in the loaded file" warning. ~15 LOC.
+3. **Lazy error**: keep both the typo case and the deferred-reference case erroring; differentiate by checking if the unresolved Var name appears in the loaded file's equations. Most precise but most code.
+
+**Reopen trigger**: user reports being confused by the new error-quality, OR LLM-ergonomics benchmark (queued arc) flags the deferred-identifier shape as a friction point, OR a follow-up Units cycle opens parser.h for unrelated work and the heuristic-warning bundle is cheap.
+
 ## 78. Are constants units? Unify the constants/units catalog. — PARKED (needs design cycle)
 
 **Surfaced 2026-05-13** by the user immediately after the #76 denylist shipped: "if we're going to keep `i` and `pi` and `phi` as valid suffixes we have to define them as units... OR this surfaces an interesting question — can all constants be defined as units?"
@@ -1026,7 +1053,7 @@ Same shape applies to vec literals. `diff(v, t)` returns 0; `integral(v, t)` ret
 
 **Reopen trigger:** queued Linear-algebra completeness arc becomes active, OR user reports the gap with a concrete domain reproducer.
 
-## 73. CLI-value `var=100kg` cannot resolve unit identifiers (cycle-1 follow-up) — IN-SCOPE
+## 73. CLI-value `var=100kg` cannot resolve unit identifiers (cycle-1 follow-up) — DONE (2026-05-13, cycle 2)
 
 **Surfaced 2026-05-13** during cycle 1 of the Units arc (parser desugar shipped).
 

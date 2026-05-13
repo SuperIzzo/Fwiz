@@ -1,11 +1,14 @@
-# SI base units — 7 base quantities, all defined as 1 (dimensionless scalar).
-# This is the minimum catalog needed for the Units cycle 1 desugar
-# (`100kg` -> `100 * kg`) to resolve to a numeric value when the user
-# loads this file. Future cycles add prefixes, derived units, dim-analysis.
+# SI base units + prefixes + common derived units.
+# Each base unit is a dimensionless scalar 1. Prefixes and derived units are
+# parameterised in terms of the base — `km = 1000 * m`, `N = kg * m / s^2` —
+# so values cascade automatically if a downstream design changes the base.
+# Future cycles bring dim-analysis (Future #7b); for now this is the
+# minimum useful catalog for numeric unit-suffix solving.
 #
 # Load via: ./bin/fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)'
 # Result: mass = 100 (numeric).
 
+# --- 7 SI base units (dimensionless scalar 1 — placeholder until dim-analysis) ---
 m = 1     # metre — length
 kg = 1    # kilogram — mass
 s = 1     # second — time
@@ -13,3 +16,30 @@ A = 1     # ampere — electric current
 K = 1     # kelvin — thermodynamic temperature
 mol = 1   # mole — amount of substance
 cd = 1    # candela — luminous intensity
+
+# --- Length prefixes ---
+km = 1000 * m
+mm = m / 1000
+um = m / 1e6
+nm = m / 1e9
+Mm = 1e6 * m
+Gm = 1e9 * m
+
+# --- Mass prefixes (SI base is kg, not g — careful with the factor) ---
+g  = kg / 1000
+mg = kg / 1e6
+
+# --- Time prefixes and multiples ---
+ms  = s / 1000
+us  = s / 1e6
+ns  = s / 1e9
+min = 60 * s
+hr  = 3600 * s
+day = 86400 * s
+
+# --- Derived units ---
+N  = kg * m / s^2   # Newton  — force
+J  = N * m          # Joule   — energy
+W  = J / s          # Watt    — power
+Pa = N / m^2        # Pascal  — pressure
+Hz = 1 / s          # Hertz   — frequency

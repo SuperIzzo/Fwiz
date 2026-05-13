@@ -4227,10 +4227,12 @@ struct CLIQuery {
             if (pos != val.size()) {
                 // Try parsing as expression (e.g. "10*2^3", "sqrt(2)")
                 bool ok = false;
+                bool parsed_ok = false;
                 try {
                     ExprArena temp_arena;
                     const ExprArena::Scope scope(temp_arena);
                     auto expr = Parser(Lexer(val).tokenize()).parse_expr();
+                    parsed_ok = true;
                     if (auto val_opt = evaluate(*simplify(expr))) {
                         v = val_opt.value();
                         ok = true;
@@ -4238,10 +4240,28 @@ struct CLIQuery {
                 // NOLINTNEXTLINE(bugprone-empty-catch) — parser failure (malformed expression) handled by the !ok branch below
                 } catch (const std::runtime_error&) {}
                 if (!ok) {
+                    // Symbolic mode (derive / fit) opts out of post-load
+                    // deferral: a non-numeric RHS like `a=side` is meant to
+                    // STAY symbolic for the derive-rewrite path. Check this
+                    // BEFORE the #73 synthetic-equation branch.
                     if (allow_symbolic) {
                         q.symbolic[name] = val;
                         continue;
                     }
+                    // Future #73: parser succeeded but `evaluate` returned empty.
+                    // The RHS references Vars that will bind after the file
+                    // loads — typical case is unit suffixes like `100kg` where
+                    // `kg` resolves from `stdlib/units/si-minimal.fw`. Emit as
+                    // a synthetic equation so the post-load resolution handles
+                    // it like an in-file binding. Same channel #67 uses for
+                    // `integral(...)` / `diff(...)` resolve-at-load.
+                    if (parsed_ok) {
+                        q.synthetic_equations += name + " = " + val + "\n";
+                        q.synthetic_aliases.insert(name);
+                        continue;
+                    }
+                    // Reaching here means parser threw (`parsed_ok == false`):
+                    // the RHS is malformed syntax, not deferred-resolution.
                     throw std::runtime_error("Invalid value '" + val + "' for variable '" + name + "'");
                 }
             }

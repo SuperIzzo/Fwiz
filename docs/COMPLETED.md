@@ -16,7 +16,12 @@ N-cycle campaign to add unit-of-measure support. Goal: `100kg` parses and binds;
 - Future #74 filed (PARKED): `100m^2` precedence quirk real fix.
 - Future #75 filed: `parse_line` EOL keyword bug (DONE in this cycle).
 
-**Remaining cycles (queued):** CLI-arg evaluation (#73, natural cycle-2 opener); dim-analysis stdlib; `100m^2` fix (#74); dimensional analysis rejection (#7b).
+**Cycle 2** (2026-05-13): CLI-arg unit-suffix + stdlib expansion.
+- `parse_cli_query` value-side path now defers unresolved-Var expressions to post-load resolution via the `synthetic_equations` channel (Future #73 DONE). `mass=100kg` end-to-end works. `allow_symbolic` check runs before the synthetic-equation branch so `--derive`/`--fit` retain their existing contract.
+- `stdlib/units/si-minimal.fw` grown 16→42 lines: SI prefixes (km/mm/um/nm/Mm/Gm for length; g/mg for mass; ms/us/ns/min/hr/day for time) and 5 derived units (N/J/W/Pa/Hz), all defined in terms of SI base.
+- Tests: 3443 → 3493 (+50). All gates green.
+
+**Remaining cycles (queued):** `100m^2` fix (#74); dim-analysis stdlib; dimensional analysis rejection (#7b).
 
 ## Matrix-surface diagnostic-quality arc — ✅ COMPLETE (2026-05-13, ROADMAP gen-1)
 

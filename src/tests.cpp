@@ -1609,14 +1609,27 @@ void test_cli_garbage() {
             "empty name: clear error message");
     }
     {
+        // Future #73: a non-numeric RHS like `abc` parses as a Var and is
+        // deferred to post-load resolution (synthetic_equations). Without a
+        // query (`?`) in the input, the call still throws — but with the
+        // "No query variable" message rather than "Invalid value".
         bool threw = false;
         std::string msg;
         try { (void)parse_cli_query("f(x=abc)"); } catch (const std::exception& e) {
             threw = true; msg = e.what();
         }
-        ASSERT(threw, "non-numeric value throws");
-        ASSERT(msg.find("Invalid") != std::string::npos || msg.find("unresolved") != std::string::npos,
-            "non-numeric: clear error message");
+        ASSERT(threw, "non-numeric value with no query: throws (no-query path)");
+        ASSERT(msg.find("query variable") != std::string::npos
+               || msg.find("Invalid") != std::string::npos
+               || msg.find("unresolved") != std::string::npos,
+            "non-numeric without query: clear error message");
+    }
+    {
+        // Future #73: same RHS WITH a query is now valid at parse time —
+        // routes to synthetic_equations. Load-time would error on `abc`.
+        auto q = parse_cli_query("f(x=?, y=abc)");
+        ASSERT(q.synthetic_equations.find("y = abc") != std::string::npos,
+            "non-numeric with query: routes to synthetic (deferred)");
     }
     {
         bool threw = false;
@@ -3348,11 +3361,15 @@ void test_cli_scientific_notation() {
         ASSERT_NUM(q.bindings.at("y"), 2.718281828459045, "1 * e = Euler (explicit)");
     }
 
-    // Invalid: e5 (no leading digit)
+    // Future #73: `e5` is an IDENT (since `e` is in the number-IDENT desugar
+    // denylist, `2e` returns Num(2) leaving `5` as a separate token; standalone
+    // `e5` lexes as a single IDENT). At parse_cli_query time it's a Var,
+    // deferred to synthetic_equations rather than rejected. The user-facing
+    // error (if `e5` is genuinely undefined) surfaces at load/resolve time.
     {
-        bool threw = false;
-        try { (void)parse_cli_query("f(x=?, y=e5)"); } catch (...) { threw = true; }
-        ASSERT(threw, "e5 is invalid");
+        auto q = parse_cli_query("f(x=?, y=e5)");
+        ASSERT(q.synthetic_equations.find("y = e5") != std::string::npos,
+               "e5 is now deferred to synthetic_equations (post-load resolution)");
     }
 
     // End-to-end: scientific notation in actual solve
@@ -3806,11 +3823,14 @@ void test_errmsg_cli() {
             "empty value: names the variable");
     }
     {
-        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, y=abc)"); });
-        ASSERT(msg.find("'abc'") != std::string::npos,
-            "bad number: shows the bad value");
-        ASSERT(msg.find("'y'") != std::string::npos,
-            "bad number: names the variable");
+        // Future #73 (DONE 2026-05-13, cycle 2): `y=abc` is now deferred
+        // (parser succeeds, evaluate empty -> synthetic_equations). No
+        // parse-time error message. The end-to-end error message (if
+        // `abc` is genuinely undefined) is the system-level "Cannot solve"
+        // / "unknown variable". The error-quality follow-up is Future #79.
+        auto q = parse_cli_query("f(x=?, y=abc)");
+        ASSERT(q.synthetic_equations.find("y = abc") != std::string::npos,
+               "bad number 'y=abc': deferred to synthetic_equations (post-load)");
     }
     {
         auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, y=inf)"); });
@@ -6869,11 +6889,15 @@ void test_derive_cli_parsing() {
         ASSERT_NUM(q.bindings.at("b"), 3, "symbolic: b=3");
     }
 
-    // Without allow_symbolic, non-numeric throws
+    // Future #73: without allow_symbolic, a non-numeric RHS like `a=side`
+    // is now DEFERRED to synthetic_equations rather than rejected at parse
+    // time. The check shifts from "throws Invalid" to "routes to synthetic".
+    // The downstream error (if `side` is genuinely undefined at load time)
+    // is the responsibility of the system-level resolver.
     {
-        auto msg = get_error([&]() { (void)parse_cli_query("f(x=?, a=side)"); });
-        ASSERT(msg.find("Invalid") != std::string::npos || msg.find("unresolved") != std::string::npos,
-            "no symbolic: throws");
+        auto q = parse_cli_query("f(x=?, a=side)");
+        ASSERT(q.synthetic_equations.find("a = side") != std::string::npos,
+            "no symbolic: 'a=side' routes to synthetic_equations (deferred)");
     }
 }
 
@@ -14285,12 +14309,17 @@ void test_table_range_parse() {
         ASSERT(q.range_bindings.empty(), "no range_bindings for scalar input");
     }
 
-    // BLOCKING: vec literal [1,2,3] (no ..) falls through to expression path → throws
+    // Future #73: vec literal `[1,2,3]` (no `..` -> not a range) falls
+    // through to the expression-parse path. Parser succeeds (vec literal is
+    // a FUNC_CALL("vec", ...)), evaluate returns empty (vec doesn't reduce
+    // to a double), so the value routes to synthetic_equations rather than
+    // throwing at parse time. The original "throws" pin was for the older
+    // immediate-eval contract; the new contract defers all parser-ok /
+    // evaluate-empty cases to load-time resolution.
     {
-        bool threw = false;
-        try { auto q = parse_cli_query("f(x=?, a=[1,2,3])"); (void)q; }
-        catch (const std::runtime_error&) { threw = true; }
-        ASSERT(threw, "vec literal [1,2,3] without .. throws in numeric mode");
+        auto q = parse_cli_query("f(x=?, a=[1,2,3])");
+        ASSERT(q.synthetic_equations.find("a = [1,2,3]") != std::string::npos,
+               "vec literal [1,2,3]: routes to synthetic_equations (deferred, not thrown)");
     }
 
     // BLOCKING: bracket-depth fix — compound range arg not split at inner comma
@@ -14607,6 +14636,219 @@ void test_unit_suffix() {
         sys.load_string("y = 2 * e\n");
         ASSERT_NUM(sys.resolve("y", {}), 2 * 2.718281828459045,
                    "2 * e (explicit): still resolves to 2*Euler");
+    }
+}
+
+// Future #73: CLI-arg unit-suffix evaluation. `parse_cli_query` historically
+// evaluates each RHS immediately (pre-load), so a unit-suffix RHS like
+// `mass=100kg` failed because `kg` was unbound. Cycle-2 fix: parser-succeeded
+// + evaluate-empty falls through to a synthetic equation, same channel #67
+// uses for `integral(...)`/`diff(...)`.
+void test_unit_cli_resolve() {
+    SECTION("Unit suffix in CLI args (Future #73 deferred-resolution)");
+
+    // (1) Pure number unchanged: bindings populated, synthetic_equations empty.
+    {
+        auto q = parse_cli_query("file.fw(x=?, y=100)");
+        ASSERT(q.synthetic_equations.empty(),
+               "pure number 'y=100': synthetic_equations empty");
+        ASSERT(q.bindings.count("y") == 1,
+               "pure number 'y=100': bindings contains y");
+        ASSERT_NUM(q.bindings.at("y"), 100, "pure number 'y=100': bindings y=100");
+    }
+
+    // (2) Compound expression with only builtins (pi) evaluates at parse time
+    //     and stays in bindings — does NOT route to synthetic_equations.
+    {
+        auto q = parse_cli_query("file.fw(x=?, p=2*pi)");
+        ASSERT(q.synthetic_equations.empty(),
+               "'p=2*pi': synthetic_equations empty (pi is builtin)");
+        ASSERT(q.bindings.count("p") == 1, "'p=2*pi': bindings contains p");
+        ASSERT_NUM(q.bindings.at("p"), 2 * 3.141592653589793,
+                   "'p=2*pi': resolves to 2*pi at parse time");
+    }
+
+    // (3) Unit suffix with unresolved Var: parser succeeds, evaluate empty
+    //     -> synthetic equation emitted, alias recorded.
+    {
+        auto q = parse_cli_query("file.fw(mass=?, mass=100kg)");
+        ASSERT(q.synthetic_equations.find("mass = 100kg") != std::string::npos,
+               "'mass=100kg': synthetic_equations contains 'mass = 100kg'");
+        ASSERT(q.synthetic_aliases.count("mass") == 1,
+               "'mass=100kg': synthetic_aliases contains 'mass'");
+        ASSERT(q.bindings.count("mass") == 0,
+               "'mass=100kg': mass NOT in bindings (deferred)");
+    }
+
+    // (4) End-to-end: load file with kg=1, then synthetic_equations, then resolve.
+    {
+        write_fw("/tmp/tunit_cli_kg.fw", "kg = 1\n");
+        auto q = parse_cli_query("/tmp/tunit_cli_kg.fw(mass=?, mass=100kg)");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_cli_kg.fw");
+        sys.load_string(q.synthetic_equations, "<cli-resolve-at-load>");
+        const double r = sys.resolve("mass", {});
+        ASSERT_NUM(r, 100, "end-to-end: kg=1 + mass=100kg -> mass=100");
+    }
+
+    // (5) Derived-unit suffix: 2N with all SI base units = 1 -> 2.
+    //     Tests synthetic equation channels work for compound expressions.
+    {
+        write_fw("/tmp/tunit_cli_n.fw",
+            "kg = 1\nm = 1\ns = 1\nN = kg * m / s^2\n");
+        auto q = parse_cli_query("/tmp/tunit_cli_n.fw(force=?, force=2N)");
+        ASSERT(q.synthetic_equations.find("force = 2N") != std::string::npos,
+               "'force=2N': routes to synthetic_equations");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_cli_n.fw");
+        sys.load_string(q.synthetic_equations, "<cli-resolve-at-load>");
+        ASSERT_NUM(sys.resolve("force", {}), 2,
+                   "end-to-end: derived unit 'force=2N' -> 2");
+    }
+
+    // (6) Prefixed unit: 5km with km=1000*m, m=1 -> 5000.
+    {
+        write_fw("/tmp/tunit_cli_km.fw", "m = 1\nkm = 1000 * m\n");
+        auto q = parse_cli_query("/tmp/tunit_cli_km.fw(d=?, d=5km)");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_cli_km.fw");
+        sys.load_string(q.synthetic_equations, "<cli-resolve-at-load>");
+        ASSERT_NUM(sys.resolve("d", {}), 5000,
+                   "end-to-end: prefixed unit 'd=5km' -> 5000");
+    }
+
+    // (7) Malformed input still errors (parser THROWS): `x=)` -> exception.
+    //     This is the not-allow_symbolic / parser-failed branch.
+    {
+        bool threw = false;
+        std::string msg;
+        try { (void)parse_cli_query("file.fw(x=?, y=)"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "malformed 'y=': throws");
+        ASSERT(msg.find("Missing value") != std::string::npos,
+               "malformed 'y=': clear error message");
+    }
+
+    // (7b) End-to-end via popen against the actual binary and the actual
+    //      stdlib units file — guards the user-visible CLI surface.
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)' 2>&1",
+                        "r");
+        ASSERT(p != nullptr, "popen: spawn fwiz");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("mass = 100") != std::string::npos,
+               "end-to-end CLI: stdlib/units(mass=100kg) -> 'mass = 100' "
+               "(got '" + out + "')");
+    }
+
+    // (8) Symbolic-mode opt-out: `--derive` and `--fit` call parse_cli_query
+    //     with `allow_symbolic=true`. In that mode, a non-evaluable RHS like
+    //     `a=side` is meant to stay symbolic for the derive-rewrite path —
+    //     NOT to be deferred to post-load resolution. The cycle-2 gate checks
+    //     allow_symbolic BEFORE the synthetic-equation branch.
+    {
+        auto q = parse_cli_query("file.fw(mass=?, mass=100kg)",
+                                 /*allow_no_queries=*/false,
+                                 /*allow_symbolic=*/true);
+        ASSERT(q.symbolic.count("mass") == 1,
+               "allow_symbolic=true: unit RHS routes to symbolic (not synthetic)");
+        ASSERT_EQ(q.symbolic.at("mass"), "100kg",
+               "allow_symbolic=true: symbolic mass = '100kg'");
+        ASSERT(q.synthetic_equations.empty(),
+               "allow_symbolic=true: synthetic_equations stays empty");
+    }
+}
+
+// Units cycle 2 deliverable B: expanded stdlib units catalog. The file
+// `stdlib/units/si-minimal.fw` is grown in place (kept name; still
+// "minimal-but-useful") with SI prefixes (k/m/u/n; min/hr/day) and a few
+// derived units (N, J, W, Pa, Hz). This test loads the file directly via
+// FormulaSystem and pins each catalog entry's numeric value.
+void test_unit_stdlib_catalog() {
+    SECTION("Stdlib units catalog (cycle 2: prefixes + derived units)");
+
+    FormulaSystem sys;
+    sys.load_file("stdlib/units/si-minimal.fw");
+
+    // 7 SI base units (cycle 1 baseline) — pure scalar defaults set to 1.
+    // `prepare_bindings` skips the default when target == name (so `m=?`
+    // by itself fails by design), but a probe equation `probe = m, probe=?`
+    // resolves through. Pinning the defaults via probe also exercises that
+    // the base-unit block survives the catalog expansion.
+    {
+        FormulaSystem s2;
+        s2.load_file("stdlib/units/si-minimal.fw");
+        s2.load_string("probe_m = m\nprobe_kg = kg\nprobe_s = s\nprobe_A = A\n"
+                       "probe_K = K\nprobe_mol = mol\nprobe_cd = cd\n", "<probe>");
+        ASSERT_NUM(s2.resolve("probe_m", {}),   1, "base: m   = 1 (via probe)");
+        ASSERT_NUM(s2.resolve("probe_kg", {}),  1, "base: kg  = 1");
+        ASSERT_NUM(s2.resolve("probe_s", {}),   1, "base: s   = 1");
+        ASSERT_NUM(s2.resolve("probe_A", {}),   1, "base: A   = 1");
+        ASSERT_NUM(s2.resolve("probe_K", {}),   1, "base: K   = 1");
+        ASSERT_NUM(s2.resolve("probe_mol", {}), 1, "base: mol = 1");
+        ASSERT_NUM(s2.resolve("probe_cd", {}),  1, "base: cd  = 1");
+    }
+
+    // Length prefixes (these are equations -> `km=?` resolves directly).
+    ASSERT_NUM(sys.resolve("km", {}), 1000, "prefix: km = 1000");
+    ASSERT_NUM(sys.resolve("mm", {}), 1e-3, "prefix: mm = 1e-3");
+    ASSERT_NUM(sys.resolve("um", {}), 1e-6, "prefix: um = 1e-6");
+    ASSERT_NUM(sys.resolve("nm", {}), 1e-9, "prefix: nm = 1e-9");
+    ASSERT_NUM(sys.resolve("Mm", {}), 1e6, "prefix: Mm = 1e6");
+    ASSERT_NUM(sys.resolve("Gm", {}), 1e9, "prefix: Gm = 1e9");
+
+    // Mass prefixes (note: SI base is kg, not g).
+    ASSERT_NUM(sys.resolve("g", {}),  1e-3, "prefix: g  = 1e-3 (kg/1000)");
+    ASSERT_NUM(sys.resolve("mg", {}), 1e-6, "prefix: mg = 1e-6");
+
+    // Time prefixes / multiples.
+    ASSERT_NUM(sys.resolve("ms",  {}), 1e-3, "prefix: ms  = 1e-3");
+    ASSERT_NUM(sys.resolve("us",  {}), 1e-6, "prefix: us  = 1e-6");
+    ASSERT_NUM(sys.resolve("ns",  {}), 1e-9, "prefix: ns  = 1e-9");
+    ASSERT_NUM(sys.resolve("min", {}), 60,    "multiple: min = 60");
+    ASSERT_NUM(sys.resolve("hr",  {}), 3600,  "multiple: hr  = 3600");
+    ASSERT_NUM(sys.resolve("day", {}), 86400, "multiple: day = 86400");
+
+    // Derived units (all base values = 1 -> derived also = 1).
+    ASSERT_NUM(sys.resolve("N",  {}), 1, "derived: N  = kg*m/s^2 = 1");
+    ASSERT_NUM(sys.resolve("J",  {}), 1, "derived: J  = N*m = 1");
+    ASSERT_NUM(sys.resolve("W",  {}), 1, "derived: W  = J/s = 1");
+    ASSERT_NUM(sys.resolve("Pa", {}), 1, "derived: Pa = N/m^2 = 1");
+    ASSERT_NUM(sys.resolve("Hz", {}), 1, "derived: Hz = 1/s = 1");
+
+    // CLI integration: end-to-end via popen for a prefix and a derived unit.
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/units/si-minimal.fw(d=5km, d=?)' 2>&1", "r");
+        ASSERT(p != nullptr, "popen: km test");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("d = 5000") != std::string::npos,
+               "CLI: 5km -> d = 5000 (got '" + out + "')");
+    }
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/units/si-minimal.fw(t=2hr, t=?)' 2>&1", "r");
+        ASSERT(p != nullptr, "popen: hr test");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("t = 7200") != std::string::npos,
+               "CLI: 2hr -> t = 7200 (got '" + out + "')");
+    }
+    {
+        FILE* p = popen("./bin/fwiz 'stdlib/units/si-minimal.fw(force=2N, force=?)' 2>&1", "r");
+        ASSERT(p != nullptr, "popen: N test");
+        std::string out;
+        char buf[256];
+        while (p != nullptr && fgets(buf, sizeof(buf), p) != nullptr) out += buf;
+        if (p != nullptr) (void)pclose(p);
+        ASSERT(out.find("force = 2") != std::string::npos,
+               "CLI: 2N -> force = 2 (got '" + out + "')");
     }
 }
 
@@ -14951,6 +15193,8 @@ int main() {
 
     // Future #7: Units engine surface — cycle 1 (2026-05-13)
     test_unit_suffix();
+    test_unit_cli_resolve();
+    test_unit_stdlib_catalog();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

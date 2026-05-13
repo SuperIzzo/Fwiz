@@ -68,9 +68,9 @@ period = 2hr          # parsed as 2 * hr
 The identifier is an ordinary variable. Unit semantics live in stdlib `.fw` files that bind the identifier to a conversion factor:
 
 ```bash
-# with stdlib/units/si-minimal.fw loaded (kg=1, m=1, s=1, A=1, K=1, mol=1, cd=1):
-$ fwiz 'stdlib/units/si-minimal.fw(mass=?)' mass=100kg   # In-file usage
-# mass = 100
+# with stdlib/units/si-minimal.fw loaded:
+$ fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)'
+mass = 100
 ```
 
 **Function-call suffix:** `100sin(x)` desugars to `MUL(Num(100), FUNC_CALL("sin", [Var("x")]))`. No warning is emitted.
@@ -83,7 +83,14 @@ Warning: '100m^...' uses NUMBER-IDENT desugar before '^'; did you mean '100 * m^
 
 Use explicit parentheses or a space: `100 * m^2`. This is a known limitation; see Future #74.
 
-**CLI-arg limitation:** `var=100kg` on the command line does NOT yet resolve the `kg` identifier — the CLI-value parser evaluates RHS expressions before the `.fw` file loads. Use in-file bindings instead. See Future #73.
+**CLI-arg unit suffixes** work end-to-end when the unit identifier resolves after file load (since 2026-05-13, cycle 2). `parse_cli_query` defers any RHS expression whose `evaluate` returns empty (because the identifier is unbound at CLI-parse time) to post-load resolution via the `synthetic_equations` channel — the same mechanism used by `diff`/`integral` CLI queries. Example:
+
+```bash
+$ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=distance/time, speed_eqn=speed)'
+speed = 25/18
+```
+
+The result is in SI base (m/s). `--derive` and `--fit` retain their existing symbolic-RHS contract; the deferral path is skipped in those modes.
 
 ### Operators and Punctuation
 
@@ -703,21 +710,31 @@ $ fwiz my_formula(result=?, x=-5)   # where my_formula calls stdlib's abs()
 
 Note: `abs` is *also* a C++ built-in (§11) for speed; the stdlib version demonstrates how a user could define it in pure fwiz. The C++ built-in takes precedence when both are available.
 
-### 14.3 `stdlib/units/si-minimal.fw` — SI base units (since 2026-05-13)
+### 14.3 `stdlib/units/si-minimal.fw` — SI units (since 2026-05-13, expanded cycle 2)
 
-Binds the 7 SI base units to scalar 1 so that unit-suffix expressions (`100kg`, `9.8m`) resolve numerically out of the box:
+Binds SI base units, common prefixes, and 5 derived units to their SI-base scalar values so that unit-suffix expressions resolve numerically:
 
-```
-m=1, kg=1, s=1, A=1, K=1, mol=1, cd=1
-```
+**Base units** (all scalar 1): `m, kg, s, A, K, mol, cd`
+
+**Length prefixes:** `km=1000`, `mm=0.001`, `um=1e-6`, `nm=1e-9`, `Mm=1e6`, `Gm=1e9`
+
+**Mass prefixes:** `g=0.001`, `mg=1e-6` (note: `kg` is the SI base, not `g`)
+
+**Time prefixes/multiples:** `ms=0.001`, `us=1e-6`, `ns=1e-9`, `min=60`, `hr=3600`, `day=86400`
+
+**Derived units:** `N=1` (newton, kg·m/s²), `J=1` (joule), `W=1` (watt), `Pa=1` (pascal), `Hz=1` (hertz)
+
+All values are defined in terms of SI base — `km = 1000 * m` and so on — so they cascade through a single base-change point.
 
 Load it alongside your formula file:
 
 ```bash
-$ fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9m)
+$ fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)
+$ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=distance/time, speed_eqn=speed)'
+speed = 25/18
 ```
 
-Conversion factors and derived units are planned for a future stdlib cycle (Future #7a).
+Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b.
 
 ### 14.2 `stdlib/builtin.fw` — reference for C++ built-ins
 
