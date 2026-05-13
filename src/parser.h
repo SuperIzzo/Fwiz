@@ -2,6 +2,19 @@
 #include "lexer.h"
 #include "expr.h"
 
+// Thrown by the parser on a structurally-invalid vec/mat literal (e.g. a
+// ragged matrix `[[1, 2], [3]]`). Intentionally NOT derived from
+// std::runtime_error so the per-line warning catch in `load_lines`
+// doesn't swallow it — ragged-literal errors must propagate to the
+// top-level caller so the user sees the diagnostic instead of "Cannot
+// solve for X". Same precedent as SolveBudgetExceededError and
+// CrossFileResolutionCycleError in system.h.
+struct RaggedMatrixError : std::exception {
+    std::string msg;
+    explicit RaggedMatrixError(std::string m) : msg(std::move(m)) {}
+    [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
+};
+
 class Parser {
 public:
     explicit Parser(const std::vector<Token>& tokens) : tok_(tokens), pos_(0) {}
@@ -102,6 +115,24 @@ private:
             // least one element. Empty [] stays as vec().
             const bool all_vec = !elems.empty() && std::all_of(elems.begin(), elems.end(),
                 [](const Expr* el) { return el->type == ExprType::FUNC_CALL && el->name == "vec"; });
+            // Ragged-matrix parse-time check: when every element is a vec,
+            // every row must share the same column count. Report the FIRST
+            // row that diverges from row 0 so the user has a concrete pair.
+            if (all_vec) {
+                const size_t cols0 = elems[0]->args.size();
+                for (size_t r = 1; r < elems.size(); ++r) {
+                    const size_t cols_r = elems[r]->args.size();
+                    if (cols_r != cols0) {
+                        throw RaggedMatrixError(
+                            "Ragged matrix literal: row 0 has "
+                            + std::to_string(cols0)
+                            + (cols0 == 1 ? " column" : " columns")
+                            + ", row " + std::to_string(r) + " has "
+                            + std::to_string(cols_r)
+                            + (cols_r == 1 ? " column" : " columns"));
+                    }
+                }
+            }
             return Expr::Call(all_vec ? "mat" : "vec", elems);
         }
         throw std::runtime_error("Unexpected token: '" + peek().text + "'");

@@ -101,7 +101,9 @@ The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than pr
 - Complex-element matrices (e.g. `[[1+i, 0],[0, 1-i]]`) — depends on Future #13a.
 - `evaluate()` always returns empty for vec/mat expressions — no real-valued projection exists. Numeric solver and condition comparisons cannot consume matrix values.
 
-**Shape mismatch behavior** is deliberate: fwiz's domain-boundary idiom propagates `undefined` rather than throwing, consistent with `x/x = undefined iff x = 0`. Equations containing undefined operands fail to solve cleanly at the `resolve()` boundary.
+**Ragged matrix literals** (rows with differing column counts, e.g. `[[1,2],[3]]`) are caught at parse time as of 2026-05-13 with an explicit `"Ragged matrix literal: row 0 has N columns, row R has M columns"` error. Previously they parsed silently and propagated `undefined` downstream.
+
+**Shape mismatch behavior** is deliberate for runtime operations: fwiz's domain-boundary idiom propagates `undefined` rather than throwing, consistent with `x/x = undefined iff x = 0`. Equations containing undefined operands fail to solve cleanly at the `resolve()` boundary. Runtime shape-mismatch diagnostics for `matmul`/`det`/`inv`/`transpose` remain `undefined`-propagation (no message) — tracked as Future #70.
 
 ## 10. M3-6 fingerprint dedup relaxed post-M1 cascade (Future.md #12f)
 

@@ -703,7 +703,7 @@ A bracketed, comma-separated list without `..` (which would trigger range parsin
 m = [[1, 0], [0, 1]]    # 2x2 identity matrix
 ```
 
-A list of vector literals, one per row. Parses internally as `FUNC_CALL("mat", vec_row1, vec_row2, ...)`.
+A list of vector literals, one per row. Parses internally as `FUNC_CALL("mat", vec_row1, vec_row2, ...)`. Rows with differing column counts are rejected at parse time (since 2026-05-13): `[[1, 2], [3]]` raises `"Ragged matrix literal: row 0 has 2 columns, row 1 has 1 column"` rather than silently propagating `undefined`.
 
 ### 15.3 Auto-simplification
 

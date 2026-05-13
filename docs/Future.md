@@ -774,7 +774,22 @@ M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)
 
 **Reopen trigger:** LLM benchmark run or user reports trying `--integrate` and finding it absent (signals the discoverability gap is real).
 
-## 69. Cross-file resolution cycle SIGSEGV (matrix-arc diagnostic finding) — IN-SCOPE
+## 69. Cross-file resolution cycle SIGSEGV (matrix-arc diagnostic finding) — DONE (2026-05-13)
+
+Shipped in cycle 2 of the Matrix-surface diagnostic-quality arc. Fix:
+thread-local `currently_loading` set keyed on cache_key in
+`load_sub_system` (system.h); on re-entry, throws
+`CrossFileResolutionCycleError` (new, sibling of `SolveBudgetExceededError`)
+with message "Cross-file resolution cycle: <file_stem> recursively loads
+itself". The new exception is intentionally NOT a `std::runtime_error`, so
+the many in-solver `catch (const std::runtime_error&)` sites in `system.h`
+don't swallow it; the top-level `catch (const std::exception&)` in
+`main.cpp` and the test-harness `get_error` both still see it. RAII
+`LoadGuard` erases on success and exception paths. Regression test in
+`test_recursion_depth_guard` (matmul + myfn generalization cases). Pre-fix
+section archived below for the record.
+
+
 
 **Surfaced 2026-05-13** during the Matrix-surface diagnostic-quality arc, cycle 1 corpus prep. Found via smoke-testing fuzz seeds before invoking the fuzzer.
 
@@ -807,6 +822,23 @@ EOF
 **Scope alignment:** Cycle 2 of the arc is "user-facing error messages and shape-mismatch provenance." A clean "cross-file resolution cycle" error message replacing a SIGSEGV is exactly the cycle's deliverable shape.
 
 **Reopen trigger:** picked up in cycle 2 of the active ROADMAP arc.
+
+## 70. Shape-mismatch error message diagnostic track for matmul/det/inv/transpose — PARKED
+
+**Surfaced 2026-05-13** during cycle 2 of the Matrix-surface diagnostic-quality arc, in scope-trimming. Shipped in the same cycle: ragged-matrix parse-time validation (#14 follow-up) and the #69 cross-file resolution cycle fix. The third candidate — improving the runtime undefined-propagation story for shape mismatches — was deferred as the lowest-leverage of the three.
+
+**Today's behavior:** `matmul`, `det`, `inv`, `transpose` return `Var("undefined")` on shape mismatch per fwiz's domain-boundary idiom. The runtime `undefined` then silently propagates through arithmetic. User sees `R = undefined` (or `Cannot solve for 'R'`) with no hint that the mismatch was at the matmul/det/inv/transpose call site, much less which operand was wrongly shaped.
+
+**Examples of the friction:**
+- `matmul([[1, 2]], [[3], [4], [5]])` → inner dims 2 vs 3 don't match → `undefined`. User can't tell whether the bug is the left operand (should be 1x3) or the right (should be 2x1).
+- `inv([[1, 2, 3], [4, 5, 6]])` → not square → `undefined`. Same opacity.
+- `det([[1, 2], [3, 4], [5, 6]])` → not square → `undefined`. Same.
+
+**Why deferred:** Improving the story requires either (a) changing the `Var("undefined")` propagation idiom to carry context (substantial design — domain-boundary propagation is intentional, used by piecewise rewrite rules `x/x = undefined iff x = 0` for exhaustiveness checking, and changing it ripples into the ValueSet machinery), or (b) a parallel diagnostic-track that accumulates context alongside the propagating undefined (a second carrier, plumbed through every simplifier path). Both shapes are 100+ LOC and need a vision-level call on which idiom owns the diagnostic provenance.
+
+**Cycle 2 of the matrix arc deferred this** in favor of two higher-leverage deliverables: ragged-literal parse-time validation (catches the most common authoring mistake before the program reaches the runtime undefined path) and the #69 SIGSEGV fix (replaces a crash with an actionable error, which is strictly better than improving an existing-but-opaque error).
+
+**Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
 ## 68. True structs / systems-as-structs — PARKED
 

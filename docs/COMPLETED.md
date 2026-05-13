@@ -130,6 +130,14 @@ Correctness, migration, and style items from the code-quality audit. Zero user-v
 
 Reopen triggers added: Future.md #53 (typed-binding predicates), #54 (T3.5 rationale), #55 (T3.6 rationale), #56 (Issue 1 option-b escalation), #57 (recognize_constant std::map → sorted std::array). T4.1 payload updated to include T3.8 rename.
 
+## 69. Cross-file resolution cycle SIGSEGV — DONE (2026-05-13)
+
+When a `.fw` file's body recursively called a function whose name matched its filename (e.g. `matmul.fw` containing `matmul(A, B)`), `load_sub_system` created a fresh sub-system whose own empty `sub_systems` cache missed the recursion check — infinite recursion → stack overflow → SIGSEGV. Surfaced in cycle 1 of the matrix-arc via corpus smoke-testing; fixed in cycle 2.
+
+**Fix**: new `CrossFileResolutionCycleError` sibling exception (not derived from `std::runtime_error` so the many `catch (runtime_error)` sites in the solver don't swallow it). Thread-local `currently_loading` set keyed on `cache_key`, with RAII `LoadGuard` that erases on both success and exception paths. Cycle detection generalizes — not matmul-specific; same shape works for any builtin/user function name that shadows a `.fw` filename.
+
+Net production: +33/-1 LOC in `system.h` + 2 regression tests. Tests: 3346 → 3372 (+26 including the ragged-matrix tests from Item A).
+
 ## 67. CLI / `.fw` dispatch-path unification for `integral`/`diff` queries — DONE (2026-05-12)
 
 Two parallel dispatch paths for the same semantic operation collapsed into one. `parse_cli_query` now synthesises `<alias> = diff/integral(...)` equations into a new `CLIQuery::synthetic_equations` string (+ a `synthetic_aliases` set for the symbolic-fallback render path). main.cpp loads it via a single `sys.load_string` after the file/inline source; the standard query loop handles the alias as a regular query. `CLIDiffQuery` / `CLIIntegralQuery` structs deleted; Pass 1.5 / Pass 1.6 dispatcher blocks (~50 LOC each) in main.cpp deleted.

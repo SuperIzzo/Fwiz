@@ -318,7 +318,16 @@ int main(int argc, const char* argv[]) {
                             out << '?';  // no discrete result (range, periodic, or empty)
                         }
                     } catch (const std::exception&) {
-                        out << '?';  // solve error for this row
+                        // Intentionally broad: this is the per-row SOLVE-phase
+                        // handler. Load-phase fatals (sibling exceptions like
+                        // RaggedMatrixError / CrossFileResolutionCycleError —
+                        // see parser.h / system.h) have already propagated
+                        // before table iteration begins, so the only thing
+                        // reaching here is solve failure for this row's input.
+                        // If a future sibling exception ever fires at resolve
+                        // time, this catch will silently render `?` — promote
+                        // to a narrower runtime_error catch at that point.
+                        out << '?';
                     }
                 }
                 out << '\n';

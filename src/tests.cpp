@@ -5539,6 +5539,65 @@ void test_recursion_depth_guard() {
         ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"depth", 3}, {"h", 6}}), 72,
             "normal formula call: still works");
     }
+
+    // Future #69: cross-file resolution cycle.
+    // matmul.fw shadows the builtin matmul and recursively calls itself.
+    // Pre-fix: SIGSEGV (infinite recursion through load_sub_system).
+    // Post-fix: throws "Cross-file resolution cycle: matmul recursively
+    // loads itself" — replaces the segfault with a clear error message.
+    //
+    // Mechanism (system.h load_sub_system): each cross-file load creates a
+    // new FormulaSystem with its own sub_systems cache, so the cache check
+    // at the top of load_sub_system never catches the recursion. Fix: a
+    // thread-local "currently loading" set (keyed on cache_key) bails
+    // before re-entering the same file_stem.
+    {
+        // Unique tmpdir prevents prior-run artifacts from masking the test
+        // (fresh-env rule). Cleanup also unlinks at the end.
+        std::filesystem::create_directories("/tmp/fwiz_xrc_69");
+        write_fw("/tmp/fwiz_xrc_69/matmul.fw",
+                 "[matmul(A, B) -> R] = matmul(A, B)\n");
+        write_fw("/tmp/fwiz_xrc_69/caller.fw",
+                 "result = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])\n");
+
+        // The cycle fires at LOAD time, not resolve time:
+        // `resolve_positional_calls()` (run by `load_file`) walks the
+        // newly-parsed equations and recursively descends into
+        // `matmul.fw`'s body, which itself contains another `matmul(...)`
+        // call — that triggers a second `load_sub_system("matmul")` → the
+        // cycle guard fires.
+        FormulaSystem sys;
+        auto msg = get_error([&]() {
+            sys.load_file("/tmp/fwiz_xrc_69/caller.fw");
+            (void)sys.resolve("result", {});
+        });
+        ASSERT(!msg.empty(), "cross-file cycle: throws (replaces SIGSEGV)");
+        ASSERT(msg.find("Cross-file resolution cycle") != std::string::npos,
+            "cross-file cycle: msg mentions 'Cross-file resolution cycle'");
+        ASSERT(msg.find("matmul") != std::string::npos,
+            "cross-file cycle: msg names the offending file_stem 'matmul'");
+
+        // Cycle detection generalizes — not matmul-specific. Same shape
+        // with a different shadowed builtin name.
+        std::filesystem::create_directories("/tmp/fwiz_xrc_69b");
+        write_fw("/tmp/fwiz_xrc_69b/myfn.fw",
+                 "[myfn(x) -> r] = myfn(x)\n");
+        write_fw("/tmp/fwiz_xrc_69b/c2.fw",
+                 "result = myfn(3)\n");
+        FormulaSystem sys2;
+        auto msg2 = get_error([&]() {
+            sys2.load_file("/tmp/fwiz_xrc_69b/c2.fw");
+            (void)sys2.resolve("result", {});
+        });
+        ASSERT(msg2.find("Cross-file resolution cycle") != std::string::npos,
+            "cross-file cycle: generalizes beyond matmul (myfn case)");
+        ASSERT(msg2.find("myfn") != std::string::npos,
+            "cross-file cycle: msg names 'myfn' file_stem");
+
+        // Cleanup so fresh-env runs don't accumulate state.
+        std::filesystem::remove_all("/tmp/fwiz_xrc_69");
+        std::filesystem::remove_all("/tmp/fwiz_xrc_69b");
+    }
 }
 
 // ---- Verify mode tests ----
@@ -9658,6 +9717,124 @@ void test_vec_mat_type() {
             "v binding carries full 3-element vec (regression)");
         ASSERT_EQ(expr_to_string(call.bindings["w"]), "[4, 5]",
             "w binding carries full 2-element vec (regression)");
+    }
+
+    // 27. Ragged matrix literal: 2-row column-count mismatch throws at parse
+    //     time. Cycle 2 of the diagnostic-quality arc. Without the check,
+    //     `[[1, 2], [3]]` parses as `mat(vec(1, 2), vec(3))` and later
+    //     surfaces as `undefined` with no hint to the user. The parse-time
+    //     check names concrete row-column counts so the user can locate
+    //     the malformed row.
+    {
+        bool threw = false;
+        std::string msg;
+        try { parse("[[1, 2], [3]]"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "[[1,2],[3]]: ragged → throws");
+        ASSERT(msg.find("Ragged matrix literal") != std::string::npos,
+            "[[1,2],[3]]: msg mentions 'Ragged matrix literal'");
+        ASSERT(msg.find("row 0 has 2 columns") != std::string::npos,
+            "[[1,2],[3]]: msg names row 0 column count");
+        ASSERT(msg.find("row 1 has 1 column") != std::string::npos,
+            "[[1,2],[3]]: msg names row 1 column count");
+    }
+
+    // 28. Ragged matrix literal: 2-row 3-vs-2 mismatch.
+    {
+        bool threw = false;
+        std::string msg;
+        try { parse("[[1, 2, 3], [4, 5]]"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "[[1,2,3],[4,5]]: ragged → throws");
+        ASSERT(msg.find("Ragged matrix literal") != std::string::npos,
+            "[[1,2,3],[4,5]]: msg mentions 'Ragged matrix literal'");
+        ASSERT(msg.find("row 0 has 3 columns") != std::string::npos,
+            "[[1,2,3],[4,5]]: msg names row 0 column count");
+        ASSERT(msg.find("row 1 has 2 columns") != std::string::npos,
+            "[[1,2,3],[4,5]]: msg names row 1 column count");
+    }
+
+    // 29. Ragged matrix literal: 3-row mismatch reports the FIRST divergent
+    //     row vs row 0, so the user always has a concrete pair to inspect.
+    //     `[[1,2],[3,4,5],[6]]` → row 1 (with 3 columns) is the first that
+    //     disagrees with row 0.
+    {
+        bool threw = false;
+        std::string msg;
+        try { parse("[[1, 2], [3, 4, 5], [6]]"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "[[1,2],[3,4,5],[6]]: ragged → throws");
+        ASSERT(msg.find("Ragged matrix literal") != std::string::npos,
+            "[[1,2],[3,4,5],[6]]: msg mentions 'Ragged matrix literal'");
+        ASSERT(msg.find("row 0 has 2 columns") != std::string::npos,
+            "[[1,2],[3,4,5],[6]]: msg names row 0 column count");
+        ASSERT(msg.find("row 1 has 3 columns") != std::string::npos,
+            "[[1,2],[3,4,5],[6]]: msg names first divergent row (1)");
+    }
+
+    // 30. Uniform matrix literals still parse cleanly — non-regression.
+    //     2x3, 3x2, 1xN, Nx1 shapes all valid.
+    {
+        // 2x3
+        const auto* e1 = parse("[[1, 2, 3], [4, 5, 6]]");
+        ASSERT(e1->type == ExprType::FUNC_CALL && e1->name == "mat",
+            "[[1,2,3],[4,5,6]]: uniform 2x3 parses as mat");
+        ASSERT(e1->args.size() == 2, "[[1,2,3],[4,5,6]]: 2 rows");
+
+        // 3x2
+        const auto* e2 = parse("[[1, 2], [3, 4], [5, 6]]");
+        ASSERT(e2->type == ExprType::FUNC_CALL && e2->name == "mat",
+            "[[1,2],[3,4],[5,6]]: uniform 3x2 parses as mat");
+        ASSERT(e2->args.size() == 3, "[[1,2],[3,4],[5,6]]: 3 rows");
+
+        // 1xN (single row matrix)
+        const auto* e3 = parse("[[1, 2, 3]]");
+        ASSERT(e3->type == ExprType::FUNC_CALL && e3->name == "mat",
+            "[[1,2,3]]: single-row mat parses cleanly");
+        ASSERT(e3->args.size() == 1, "[[1,2,3]]: 1 row");
+
+        // Nx1 (column matrix)
+        const auto* e4 = parse("[[1], [2], [3]]");
+        ASSERT(e4->type == ExprType::FUNC_CALL && e4->name == "mat",
+            "[[1],[2],[3]]: column mat (Nx1) parses cleanly");
+        ASSERT(e4->args.size() == 3, "[[1],[2],[3]]: 3 rows");
+
+        // Plain vec (not all-vec) unchanged: [1, 2, 3]
+        const auto* e5 = parse("[1, 2, 3]");
+        ASSERT(e5->type == ExprType::FUNC_CALL && e5->name == "vec",
+            "[1,2,3]: vec literal unchanged");
+    }
+
+    // 31a. Ragged matrix literal: zero-column row (`[[], [1, 2]]`). The check
+    //      handles row arity 0 just like any other; reviewer-flagged edge case.
+    {
+        bool threw = false;
+        std::string msg;
+        try { parse("[[], [1, 2]]"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "[[],[1,2]]: zero-column row 0 vs 2-column row 1 → throws");
+        ASSERT(msg.find("row 0 has 0 columns") != std::string::npos,
+            "[[],[1,2]]: msg names zero-column row 0");
+        ASSERT(msg.find("row 1 has 2 columns") != std::string::npos,
+            "[[],[1,2]]: msg names 2-column row 1");
+    }
+
+    // 31. Ragged matrix literal: end-to-end propagation through load_file.
+    //     Cycle 2 orchestrator self-fix — without RaggedMatrixError being a
+    //     sibling-exception (not std::runtime_error), the per-line catch in
+    //     load_lines (system.h) silently swallowed parser errors and
+    //     converted them to trace-level warnings, so the user saw only
+    //     "Cannot solve for X" with no hint about the ragged literal.
+    //     This pins the load_file → user-visible-error propagation contract.
+    {
+        write_fw("/tmp/fwiz_ragged_e2e.fw", "M = [[1, 2], [3]]\n");
+        FormulaSystem sys;
+        auto msg = get_error([&]() { sys.load_file("/tmp/fwiz_ragged_e2e.fw"); });
+        ASSERT(!msg.empty(),
+            "ragged-matrix in load_file: propagates (does NOT get swallowed by load_lines warning catch)");
+        ASSERT(msg.find("Ragged matrix literal") != std::string::npos,
+            "ragged-matrix in load_file: user sees 'Ragged matrix literal'");
+        std::filesystem::remove("/tmp/fwiz_ragged_e2e.fw");
     }
 }
 

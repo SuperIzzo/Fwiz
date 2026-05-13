@@ -69,6 +69,18 @@ struct SolveBudgetExceededError : std::exception {
     [[nodiscard]] const char* what() const noexcept override { return "TIMEOUT: solve budget exceeded"; }
 };
 
+// Thrown when `load_sub_system` re-enters the same cache_key during a single
+// load — i.e. a `.fw` file recursively loads itself by name (e.g. matmul.fw
+// containing `matmul(A, B)`). Intentionally NOT derived from std::runtime_error
+// so the many `catch (const std::runtime_error&)` sites in the solver don't
+// swallow it — a cross-file cycle must propagate to the top-level caller so
+// the user sees a clear error message instead of "Cannot solve for X".
+struct CrossFileResolutionCycleError : std::exception {
+    std::string msg;
+    explicit CrossFileResolutionCycleError(std::string m) : msg(std::move(m)) {}
+    [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
+};
+
 // ============================================================================
 //  CSE (common subexpression elimination) for --derive output (Option C)
 // ============================================================================
@@ -519,7 +531,14 @@ public:
               if (line.empty()) continue;
             }
             try { parse_line(line); }
-            catch (const std::exception& e) {
+            catch (const std::runtime_error& e) {
+                // Per-line resilience: normal parse errors become trace warnings;
+                // the file continues loading subsequent lines. Sibling exceptions
+                // that are NOT std::runtime_error (SolveBudgetExceededError,
+                // CrossFileResolutionCycleError, RaggedMatrixError) deliberately
+                // propagate — they signal user-facing fatal conditions whose
+                // diagnostic is the entire point. See parser.h RaggedMatrixError
+                // for the convention.
                 trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
             }
         }
@@ -2661,6 +2680,26 @@ private:
             : (abs_path + (section.empty() ? "" : "#" + section));
         auto it = sub_systems.find(cache_key);
         if (it != sub_systems.end()) return *it->second;
+
+        // Future #69: cross-file resolution cycle detection. Each cross-file
+        // load creates a NEW FormulaSystem with its own sub_systems cache, so
+        // the cache check above never catches recursion (e.g. matmul.fw
+        // containing `matmul(A, B)`). A thread-local set keyed on cache_key
+        // closes that gap. The RAII guard erases on both success and
+        // exception paths.
+        static thread_local std::set<std::string> currently_loading;
+        if (currently_loading.count(cache_key)) {
+            throw CrossFileResolutionCycleError(
+                "Cross-file resolution cycle: " + file_part
+                + " recursively loads itself");
+        }
+        struct LoadGuard {
+            std::set<std::string>& s;
+            const std::string& k;
+            ~LoadGuard() { s.erase(k); }
+        };
+        currently_loading.insert(cache_key);
+        LoadGuard _guard{currently_loading, cache_key};
 
         auto sub = std::make_shared<FormulaSystem>();
         sub->trace = trace;
