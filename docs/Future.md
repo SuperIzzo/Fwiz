@@ -57,7 +57,7 @@ For numeric-solver equations, `numeric_memo_` accumulates per-key memoized resul
 
 This item splits along the engine/stdlib axis per the project's wrapper-tier discipline:
 
-- **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. The minimum engine hook so that `100kg` parses and binds to a number-with-attached-unit-tag, with a generic API for any unit symbol. **Requires API design** — how does the suffix attach to a number in the AST? Is it a `FUNC_CALL("with_unit", {Num(100), Var("kg")})` (analogous to vec/mat sugar)? A new field on `Expr`? A `@unit kg` annotation handled at parse time only? This is the actual core work.
+- **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. Remaining #7 work: CLI-arg evaluation (#73), dim-analysis stdlib (#7a), dimensional rejection (#7b).
 - **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
 - **#7b (NEW SUB-ITEM — PARKED)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). This is the typed-binding-predicate escalation: only fires if a `.fw` predicate can't express it. Reopen trigger: user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture.
 
@@ -79,19 +79,13 @@ m = 100kg
 v = 50km/hr
 ```
 
-### Open API design questions (#7)
+### Cycle 1 decisions (#7, shipped 2026-05-13)
 
-These are the actual design surface — what this cycle (when scheduled) decides:
-
-1. **Suffix → AST mapping**: how does `100kg` become an AST node? Three candidates:
-   - (A) `FUNC_CALL("with_unit", {Num(100), Var("kg")})` — sugar like vec/mat
-   - (B) A new annotation field on existing Num/Expr — heavier; touches `sizeof(Expr)`
-   - (C) Parser desugar at parse time: `100kg` → `100 * kg` where `kg` is a regular Var. Stdlib `.fw` files define `kg = 1 [si_mass]` or similar.
-   - Recommendation: lean (C) — least invasive, leverages existing variable-binding machinery, lets stdlib do all the semantic work.
-2. **Suffix grammar**: which characters can follow a number? `kg`, `m/s`, `m^2`, `μs`? Lexer needs to know where the number ends and the suffix begins.
-3. **Compound suffixes**: `km/hr`, `m/s^2`, `kg*m/s^2` — how complex can the suffix grammar get without a full unit-expression parser?
-4. **Disambiguation**: `100m` vs a defined variable `m`? If `m` is bound, does `100m` mean `100 * m` (binding) or `100 [meters]` (unit suffix)? Likely the same thing under (C), which is the elegance argument for (C).
-5. **Round-tripping**: `--derive` output preserves suffixes or expands? `--approximate` mode?
+1. **Suffix → AST mapping**: Option C chosen — `100kg` → `MUL(Num(100), Var("kg"))`. No new `ExprType`, no `sizeof(Expr)` change.
+2. **Suffix grammar**: `[A-Za-z_][A-Za-z0-9_]*` — any identifier immediately following a number (no space). Compound suffixes (`km/hr`) require explicit `*` and `/` operators.
+3. **Disambiguation**: `100m` always means `100 * m` under Option C; if `m` is bound in scope, it resolves to that binding. This IS the elegance argument for (C).
+4. **Round-tripping**: `--derive` expands to `100 * m` (the `MUL` form); re-parses identically.
+5. **Precedence quirk**: `100m^2` parses as `(100 * m)^2` (see #74). Mitigation: parse-time warning. Fix deferred to #74.
 
 ### Capabilities (in-scope for #7 core)
 
@@ -107,7 +101,8 @@ These are the actual design surface — what this cycle (when scheduled) decides
 - Dimensional analysis rejection — #7b (typed-predicate escalation)
 
 ### Reopen trigger for #7
-This item is **in-scope core, awaiting cycle scheduling**. Reopen trigger: user requests unit-bearing arithmetic, OR LLM ergonomics work surfaces unit-suffix-parsing as a friction point, OR a stdlib design (#8) requires it as a prerequisite.
+
+Cycle 1 shipped. Remaining work tracked in #73 (CLI-arg), #74 (precedence fix), and the queued stdlib/dim-analysis cycles.
 
 ## 8. Standard Library
 
@@ -840,6 +835,37 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
+## 76. Reserved-word denylist for NUMBER-IDENT desugar — IN-SCOPE
+
+**Surfaced 2026-05-13** during cycle 1 of the Units arc review (reviewer NIT #1 + #2).
+
+**Behavior change introduced in cycle 1**: Previously, `y = 2if`, `y = x + 1 iffy`, and similar typo-tolerant inputs were silently dropped at parse time — the trailing `IDENT("if")` or `IDENT("iffy")` was consumed by the lexer but discarded by the expression parser. After Units cycle 1's NUMBER-IDENT desugar, these inputs now produce `y = 2 * if` and `y = x + 1 * iffy` respectively. Since `if` / `iffy` are unbound variables, the solver loudly errors with "Cannot solve for 'y'".
+
+**Reproducer**:
+```bash
+fwiz '(y=?) y = 2if'                # pre-cycle: y = 2 (silent). post-cycle: error.
+fwiz '(y=?) y = x + 1 iffy; x = 5'  # pre-cycle: y = 6 (silent). post-cycle: error.
+```
+
+**Is this a bug?** Two framings:
+1. **Loud-error is correct**: silently dropping typos contradicts the "deterministic, perfectly logical reasoning tool" claim. Same shape as the matrix-arc's ragged-literal fix (silent-propagation → loud-error). This framing says: ship it, don't add a denylist.
+2. **Reserved-word denylist is correct**: `if` and `iff` are language keywords; absorbing them into a multiplication is structurally wrong (the user's intent is keyword-related, not arithmetic). A small denylist (~5 LOC) on `{"if", "iff"}` in `parser.h` `primary()`'s NUMBER-IDENT branch restores the keyword status while keeping the unit-desugar working for non-reserved IDENTs.
+
+**Recommended fix** (cycle 2 opener candidate, ~5 LOC + 4 tests):
+```cpp
+// In src/parser.h primary() NUMBER branch, before the desugar:
+if (ident_name == "if" || ident_name == "iff") {
+    return Expr::Num(v);  // restore pre-cycle behavior: drop the keyword token
+}
+```
+
+**Why this is cycle-2 work, not a cycle-1 in-cycle fix**:
+- Reviewer flagged it as APPROVE WITH NOTES, not BLOCK. Cycle 1 ships.
+- The decision is a real semantic call (silently-tolerate-typo vs loudly-fail-on-typo) and benefits from an explicit user signal that the loud-error behavior is undesirable. Pre-emptive denylist may not match user preference.
+- Cycle 2's Future #73 work (CLI-arg unit-suffix evaluation) is in the same parser.h neighborhood — bundling these is clean.
+
+**Reopen trigger**: user reports a real `.fw` file or `.fwiz` invocation where the new loud-error behavior is unwelcome, OR cycle 2 opens parser.h for the #73 CLI-arg work and bundles this for free.
+
 ## 72. `make analyze-full` (clang-tidy) hang re-occurrence — IN-SCOPE
 
 **Surfaced 2026-05-13** during ROADMAP gen-2 planning. User reported: "clang-tidy hangs that's why we don't run it anymore — we can try at the end but if it takes longer than 2 hours it's not going to complete."
@@ -932,6 +958,55 @@ Same shape applies to vec literals. `diff(v, t)` returns 0; `integral(v, t)` ret
 **Why deferred to the completeness arc:** the matrix-surface diagnostic-quality arc (cycles 1–4) is about *substrate quality* — fuzz coverage, error messages, round-trip safety. Adding vec/mat distribution to `diff` / `integral` is a *capability extension* and belongs in the queued Linear-algebra completeness arc. Cycle 3's exit criterion (b) check is satisfied — no structural escalation needed for the diagnostic arc to proceed to cycle 4 (round-trip safety). #71 is the natural cycle-1 or cycle-2 opener for the completeness arc.
 
 **Reopen trigger:** queued Linear-algebra completeness arc becomes active, OR user reports the gap with a concrete domain reproducer.
+
+## 73. CLI-value `var=100kg` cannot resolve unit identifiers (cycle-1 follow-up) — IN-SCOPE
+
+**Surfaced 2026-05-13** during cycle 1 of the Units arc (parser desugar shipped).
+
+**Reproducer:**
+
+```bash
+$ ./bin/fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)'
+Error: Invalid value '100kg' for variable 'mass'
+```
+
+The new `<number><identifier>` desugar correctly produces `MUL(Num(100), Var("kg"))` from `100kg`. But `parse_cli_query` evaluates each CLI-arg RHS expression IMMEDIATELY (line 4234: `if (auto val_opt = evaluate(*simplify(expr)))`), BEFORE the file is loaded. At that moment `kg` is an unbound variable, `evaluate` returns empty, the fallback fails, and the user sees an "Invalid value" error.
+
+**In-file usage works correctly today** — e.g. `mass = 100kg` inside a `.fw` file with `kg = 1` resolves to `mass = 100`. Verified by cycle-1 test `(5) Bound unit eval: mass = 100kg with kg = 1`. The gap is solely on the CLI-arg evaluation path.
+
+**Fix surfaces (3 candidates, picked by next cycle):**
+
+(a) **Defer CLI-arg evaluation past file load**. `parse_cli_query` stores the raw expression string for any arg whose immediate `evaluate` returns empty; the main dispatch evaluates the deferred arg after `sys.load_file`. ~30 LOC. Cleanest semantics — CLI args see exactly the same scope as in-file equations. Risk: changes the error-emission timing of malformed args (was "at CLI parse", becomes "at solve time").
+
+(b) **Synthetic-equation rewrite**. `mass=100kg` becomes a synthetic equation `mass = 100kg` injected into the system's equation list (same pattern `integral(...)`/`diff(...)` CLI args use today, at system.h:4213). ~5 LOC. Cleanest mechanism, no semantics drift, but the binding becomes an EQUATION not a binding — affects `--steps` trace shape and any code that walks `q.bindings`.
+
+(c) **Pre-bind known unit identifiers from a tiny built-in catalog**. Parse `kg`, `m`, `s` etc. directly inside `parse_cli_query` as numeric 1. ~10 LOC. Quick fix, but special-cases units in a layer that should be unit-agnostic. Reject.
+
+**Recommended on reopen:** (b). Smallest change, no semantics drift; the resolve-at-load primitive already handles this exact shape for diff/integral.
+
+**Reopen trigger:** Units cycle 2 (or user reports the gap with a `(<var>=<num><unit>, <var>=?)` reproducer).
+
+## 74. `100m^2` precedence quirk — parked behind the cycle-1 parse-time warning — PARKED
+
+**Surfaced 2026-05-13** during cycle 1 of the Units arc.
+
+**Behavior:** `parse("100m^2")` returns `(100 * m)^2`, not `100 * m^2`. Cause: the NUMBER+IDENT desugar wraps the entire pair into a `MUL` node BEFORE the `^` operator binds. So `^` applies to `MUL(100, m)`, not `m`.
+
+**Mitigation shipped in cycle 1:** parse-time warning fires on stderr whenever a NUMBER+IDENT pair is immediately followed by `^`. Distinguishes the unit-precedence case (warning) from the function-call case (`100sin(x)^2` — no warning, since it's `100 * sin(x)^2` which IS what the user wants).
+
+**Real fix (deferred):** make the desugar bind tighter than `^`. Concretely, in `parse_pow`, after parsing the base, if the base is `MUL(Num, X)` produced by the cycle-1 desugar AND a `^` follows, restructure as `MUL(Num, POW(X, exp))` before returning. ~10 LOC change in `parser.h` `parse_pow`. Risk: low — the structural pattern is unambiguous because regular `(100 * m)` would not match (we'd see an LPAREN token).
+
+**Reopen trigger:** dim-analysis cycle lands (units cycle 3+) and the warning becomes user-facing noise, OR user reports the quirk surprise with a concrete `<num><unit>^<exp>` reproducer.
+
+## 75. `parse_line` EOL `if`/`iff` detection bug — DONE 2026-05-13
+
+**Surfaced 2026-05-13** during cycle 1 of the Units arc.
+
+**Pre-fix bug:** the line-level `if`/`iff` keyword detector at `src/system.h:2522-2543` required `line[i+2] == ' '` AND `i + 2 < line.size()`. But `load_lines` runs `trim()` BEFORE `parse_line`, so a file line ending in `if` or `iff` (no trailing space) reached `parse_line` with the trailing whitespace already stripped. The keyword detector then failed to fire, the `if`/`iff` token remained in the equation portion, and the equation parser silently dropped the unconsumed trailing IDENT. Existing tests covered this happy-path drop (`test_condition_errors` `tce1.fw`).
+
+**How it surfaced:** the Units cycle-1 NUMBER+IDENT desugar removed the silent-drop behavior — the trailing IDENT now gets absorbed into `MUL(Num, Var("if"))`, then `evaluate(Var("if"))` errors with "no value for 'if'".
+
+**Fix:** accept end-of-line as a valid keyword terminator alongside space. Predicate becomes `(i + 2 == line.size() || line[i+2] == ' ')` for `if` and `(i + 3 == line.size() || line[i+3] == ' ')` for `iff`. `cond_part` defaults to empty string when at EOL. ~6 LOC. Regression-pinned in `test_unit_suffix()` (trailing `if` and trailing `iff`).
 
 ## Refactors
 

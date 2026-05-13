@@ -1,6 +1,7 @@
 #pragma once
 #include "lexer.h"
 #include "expr.h"
+#include <iostream>
 
 // Thrown by the parser on a structurally-invalid vec/mat literal (e.g. a
 // ragged matrix `[[1, 2], [3]]`). Intentionally NOT derived from
@@ -76,7 +77,49 @@ private:
     ExprPtr primary() {
         if (is(TokenType::NUMBER)) {
             const double v = peek().numval;
+            const std::string num_text = peek().text;
             advance();
+            // Units cycle 1 (Future #7): NUMBER+IDENT adjacency -> `MUL(Num, Var)`,
+            // or `MUL(Num, FUNC_CALL)` when the IDENT is immediately followed by
+            // `(`. Identifier IS a regular Var — stdlib `.fw` files supply
+            // semantics via plain bindings like `kg = 1`. Design proposal §"Final
+            // Design — Units cycle 1" Shape A. Scientific notation (`100e3`)
+            // is already consumed by `read_number` so we never see NUMBER+IDENT("e3")
+            // here.
+            if (is(TokenType::IDENT)) {
+                const std::string ident_name = peek().text;
+                advance();
+                ExprPtr rhs;
+                if (is(TokenType::LPAREN)) {
+                    advance();
+                    std::vector<ExprPtr> args;
+                    if (!is(TokenType::RPAREN)) {
+                        args.push_back(parse_expr());
+                        while (is(TokenType::COMMA)) { advance(); args.push_back(parse_expr()); }
+                    }
+                    expect(TokenType::RPAREN, "Expected ')'");
+                    rhs = Expr::Call(ident_name, args);
+                } else {
+                    // Parse-time warning: `100m^2` adjacency is the precedence
+                    // trap (Future #74) — desugar wraps the NUMBER+IDENT pair,
+                    // so POW applies to the MUL node and the user gets
+                    // `(100 * m)^2`, not `100 * m^2`. Warn so the user notices.
+                    // Discriminator: warning fires only when the IDENT is NOT
+                    // followed by `(` (function-call branch above), since
+                    // `100sin(x)^2` is mathematically `100 * sin(x)^2` which
+                    // IS what the user wants.
+                    if (is(TokenType::CARET)) {
+                        std::cerr << "warning: '" << num_text << ident_name
+                                  << "^...' parses as (" << num_text << " * "
+                                  << ident_name << ")^... — write '"
+                                  << num_text << " * " << ident_name
+                                  << "^...' for the mathematical "
+                                  << num_text << " * " << ident_name << "^N\n";
+                    }
+                    rhs = Expr::Var(ident_name);
+                }
+                return Expr::BinOpExpr(BinOp::MUL, Expr::Num(v), rhs);
+            }
             return Expr::Num(v);
         }
         if (is(TokenType::IDENT)) {

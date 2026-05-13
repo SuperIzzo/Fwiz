@@ -75,6 +75,18 @@ private:
         const size_t start = pos_;
         while (pos_ < src_.size() && (is_digit(src_[pos_]) || src_[pos_] == '.'))
             pos_++;
+        // Scientific notation `[eE][+-]?[0-9]+` — required before the units
+        // cycle 1 NUMBER-IDENT desugar so `100e3` keeps parsing as 100000
+        // instead of becoming `100 * Var("e3")` (unbound-var solver error).
+        // Three-char lookahead: 'e'/'E', optional sign, at least one digit.
+        if (pos_ < src_.size() && (src_[pos_] == 'e' || src_[pos_] == 'E')) {
+            size_t look = pos_ + 1;
+            if (look < src_.size() && (src_[look] == '+' || src_[look] == '-')) look++;
+            if (look < src_.size() && is_digit(src_[look])) {
+                pos_ = look;
+                while (pos_ < src_.size() && is_digit(src_[pos_])) pos_++;
+            }
+        }
         const std::string text = src_.substr(start, pos_ - start);
         return {TokenType::NUMBER, text, std::stod(text)};
     }

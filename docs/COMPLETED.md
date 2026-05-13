@@ -2,6 +2,22 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Units arc — IN PROGRESS (cycle 1 shipped 2026-05-13, ROADMAP gen-2)
+
+N-cycle campaign to add unit-of-measure support. Goal: `100kg` parses and binds; stdlib provides unit catalogs; eventually: dimensional analysis rejection.
+
+**Cycle 1** (2026-05-13): Parser desugar `<number><identifier>` → `MUL(Num, Var)`.
+- `src/lexer.h` `read_number` extended: scientific notation (`[eE][+-]?[0-9]+` tail) consumed — `1.5e3` now `Num(1500)`, not `Num(1.5)` + silent-drop. ~12 LOC.
+- `src/parser.h` `primary()`: NUMBER-IDENT desugar emits `MUL(Num, Var)` for `100kg`, `MUL(Num, FUNC_CALL)` for `100sin(x)`. `^`-suffix emits a parse-time warning (`100m^2` quirk). ~40 LOC.
+- `src/system.h` `parse_line`: EOL `if`/`iff` keyword detection bug fixed (Future #75 DONE). ~+6/-4 LOC.
+- `stdlib/units/si-minimal.fw`: 7 SI base units (`m, kg, s, A, K, mol, cd`) all bound to 1 (scalar dimensionless placeholder). 10 lines.
+- Tests: 3395 → 3430 (+35). All gates green (test + sanitize + analyze-fast).
+- Future #73 filed: CLI-arg `var=100kg` does not yet resolve `kg` (deferred to cycle 2).
+- Future #74 filed (PARKED): `100m^2` precedence quirk real fix.
+- Future #75 filed: `parse_line` EOL keyword bug (DONE in this cycle).
+
+**Remaining cycles (queued):** CLI-arg evaluation (#73, natural cycle-2 opener); dim-analysis stdlib; `100m^2` fix (#74); dimensional analysis rejection (#7b).
+
 ## Matrix-surface diagnostic-quality arc — ✅ COMPLETE (2026-05-13, ROADMAP gen-1)
 
 4-cycle quality-oracle arc on the #14 vec/mat surface (shipped 2026-05-10). Goal: audit and harden before extending. Each cycle shipped either concrete diagnostic improvements or trigger-tied Future.md filings for the queued completeness arc.

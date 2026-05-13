@@ -28,7 +28,7 @@ Flags: `--steps`, `--calc`, `--explore`, `--explore-full`, `--verify all`, `--ve
 
 Header-only, no external dependencies. Source in `src/`, examples in `examples/`.
 
-**Pipeline:** source → `lexer.h` → `parser.h` → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI). `fit.h` provides curve fitting (sampling, templates, composition).
+**Pipeline:** source → `lexer.h` → `parser.h` → `expr.h` (simplify/evaluate/solve) → `system.h` (multi-equation resolution) → `main.cpp` (CLI). `fit.h` provides curve fitting (sampling, templates, composition). `lexer.h` `read_number` handles scientific notation (`[eE][+-]?[0-9]+` tail, since 2026-05-13); bare `e`/`E` not followed by digits becomes a separate IDENT token.
 
 **Memory:** Arena allocator (`ExprArena`). `ExprPtr` is raw `Expr*`. No shared_ptr. 100% cache-friendly traversal.
 
@@ -135,6 +135,14 @@ Depth guard: `max_formula_depth` (default 1000).
 
 ### Built-in constants
 `pi`, `e`, `phi`, `i` available in any equation. `pi`/`e`/`phi` are symbolic in derive, numeric in solve; `i` (imaginary unit, since 2026-05-09) has a NaN binding — `evaluate()` on `i`-containing expressions returns empty, and `i^2` simplifies to `-1` via rewrite rule. File defaults override builtins.
+
+### Unit-suffix desugar (since 2026-05-13)
+```
+mass = 100kg                    # parses as MUL(Num(100), Var("kg")) via parser primary() desugar
+v = 1.5e3                       # 1500 — scientific notation in lexer (`read_number`)
+f = 100sin(x)                   # MUL(Num(100), FUNC_CALL("sin", [Var("x")])) — function-call branch
+```
+Parser-only desugar (no new `ExprType`, no new `TokenType`). The identifier is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings — `stdlib/units/si-minimal.fw` provides the 7 SI base units as scalar 1. Lexer's `read_number` consumes scientific notation (`[eE][+-]?[0-9]+`) so `100e3` stays numeric instead of becoming `MUL(100, Var("e3"))`. `100m^2` parses as `(100 * m)^2` (precedence quirk — Future #74) and emits a parse-time warning; `100sin(x)^2` does NOT warn (function-call branch is mathematically correct). CLI-arg `var=100kg` does NOT yet resolve `kg` (deferred CLI-value evaluation — Future #73); in-file `mass = 100kg` works today.
 
 ### Vector and matrix literals (since 2026-05-10)
 ```

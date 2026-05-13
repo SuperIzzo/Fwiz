@@ -2519,26 +2519,28 @@ private:
                 if (ch == ')') { pd--; continue; }
                 if (pd != 0) continue;
 
-                // "iff " keyword (must be preceded by space or comma)
-                if (ch == 'i' && i + 3 < line.size()
-                    && line[i+1] == 'f' && line[i+2] == 'f' && line[i+3] == ' '
+                // "iff" keyword: followed by space or end-of-line; preceded by space or comma
+                if (ch == 'i' && i + 2 < line.size()
+                    && line[i+1] == 'f' && line[i+2] == 'f'
+                    && (i + 3 == line.size() || line[i+3] == ' ')
                     && (i == 0 || line[i-1] == ' ' || line[i-1] == ',')) {
                     eq_part = line.substr(0, i);
                     while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
                         eq_part.pop_back();
-                    cond_part = line.substr(i + 4);
+                    cond_part = (i + 3 == line.size()) ? std::string() : line.substr(i + 4);
                     is_bidirectional = true;
                     break;
                 }
 
-                // "if " keyword (preceded by space/comma, not followed by 'f')
-                if (ch == 'i' && i + 2 < line.size()
-                    && line[i+1] == 'f' && line[i+2] == ' '
+                // "if" keyword: followed by space or end-of-line; preceded by space or comma; not "iff"
+                if (ch == 'i' && i + 1 < line.size()
+                    && line[i+1] == 'f'
+                    && (i + 2 == line.size() || line[i+2] == ' ')
                     && (i == 0 || line[i-1] == ' ' || line[i-1] == ',')) {
                     eq_part = line.substr(0, i);
                     while (!eq_part.empty() && (eq_part.back() == ' ' || eq_part.back() == ','))
                         eq_part.pop_back();
-                    cond_part = line.substr(i + 3);
+                    cond_part = (i + 2 == line.size()) ? std::string() : line.substr(i + 3);
                     break;
                 }
             }

@@ -1,0 +1,15 @@
+# SI base units — 7 base quantities, all defined as 1 (dimensionless scalar).
+# This is the minimum catalog needed for the Units cycle 1 desugar
+# (`100kg` -> `100 * kg`) to resolve to a numeric value when the user
+# loads this file. Future cycles add prefixes, derived units, dim-analysis.
+#
+# Load via: ./bin/fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)'
+# Result: mass = 100 (numeric).
+
+m = 1     # metre — length
+kg = 1    # kilogram — mass
+s = 1     # second — time
+A = 1     # ampere — electric current
+K = 1     # kelvin — thermodynamic temperature
+mol = 1   # mole — amount of substance
+cd = 1    # candela — luminous intensity

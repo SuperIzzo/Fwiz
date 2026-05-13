@@ -51,7 +51,39 @@ Variable and function names are `[A-Za-z_][A-Za-z0-9_]*`. Case-sensitive.
 
 - Integers: `42`, `-7`, `0`
 - Decimals: `3.14`, `0.5`, `-2.718`
-- Scientific: `1e9`, `6.022e23`, `1.5e-3`
+- Scientific notation: `1e9`, `6.022e23`, `1.5e-3`, `100e-3` → `0.1`, `1E5` → `100000`
+
+The lexer's `read_number` (since 2026-05-13) consumes the `[eE][+-]?[0-9]+` exponent tail as part of the number token, so `1.5e3` is the single literal `1500`, not `1.5 * e3`. A bare `e` or `E` not followed by digits (e.g. `1e`) produces `Num(1)` + `IDENT("e")`; the parser desugars this to `1 * e` (Euler's constant).
+
+### Unit Suffixes
+
+A number immediately followed by an identifier (no space) is desugared by the parser into a multiplication (since 2026-05-13):
+
+```
+mass = 100kg          # parsed as 100 * kg
+length = 9.8m         # parsed as 9.8 * m
+period = 2hr          # parsed as 2 * hr
+```
+
+The identifier is an ordinary variable. Unit semantics live in stdlib `.fw` files that bind the identifier to a conversion factor:
+
+```bash
+# with stdlib/units/si-minimal.fw loaded (kg=1, m=1, s=1, A=1, K=1, mol=1, cd=1):
+$ fwiz 'stdlib/units/si-minimal.fw(mass=?)' mass=100kg   # In-file usage
+# mass = 100
+```
+
+**Function-call suffix:** `100sin(x)` desugars to `MUL(Num(100), FUNC_CALL("sin", [Var("x")]))`. No warning is emitted.
+
+**Precedence quirk — `100m^2`:** The parser sees `(100 * m)^2` rather than `100 * (m^2)`. A parse-time warning is emitted to stderr:
+
+```
+Warning: '100m^...' uses NUMBER-IDENT desugar before '^'; did you mean '100 * m^2'?
+```
+
+Use explicit parentheses or a space: `100 * m^2`. This is a known limitation; see Future #74.
+
+**CLI-arg limitation:** `var=100kg` on the command line does NOT yet resolve the `kg` identifier — the CLI-value parser evaluates RHS expressions before the `.fw` file loads. Use in-file bindings instead. See Future #73.
 
 ### Operators and Punctuation
 
@@ -670,6 +702,22 @@ $ fwiz my_formula(result=?, x=-5)   # where my_formula calls stdlib's abs()
 ```
 
 Note: `abs` is *also* a C++ built-in (§11) for speed; the stdlib version demonstrates how a user could define it in pure fwiz. The C++ built-in takes precedence when both are available.
+
+### 14.3 `stdlib/units/si-minimal.fw` — SI base units (since 2026-05-13)
+
+Binds the 7 SI base units to scalar 1 so that unit-suffix expressions (`100kg`, `9.8m`) resolve numerically out of the box:
+
+```
+m=1, kg=1, s=1, A=1, K=1, mol=1, cd=1
+```
+
+Load it alongside your formula file:
+
+```bash
+$ fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9m)
+```
+
+Conversion factors and derived units are planned for a future stdlib cycle (Future #7a).
 
 ### 14.2 `stdlib/builtin.fw` — reference for C++ built-ins
 

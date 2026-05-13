@@ -3330,10 +3330,13 @@ void test_cli_scientific_notation() {
         ASSERT_NUM(q.bindings.at("y"), 1, "1e0 = 1");
     }
 
-    // Degenerate: 1e (stod parses as 1, ignores trailing e)
+    // Post-Units-cycle-1: `1e` desugars to `1 * e` (Euler's constant)
+    // via the NUMBER-IDENT primary() rewrite. Pre-cycle silently dropped the
+    // trailing `e`; the desugar gives the more principled interpretation
+    // (consistent with `1pi`, `2sqrt(...)`, etc.). See Future-#74-equivalent.
     {
         auto q = parse_cli_query("f(x=?, y=1e)");
-        ASSERT_NUM(q.bindings.at("y"), 1, "1e parsed as 1 by stod");
+        ASSERT_NUM(q.bindings.at("y"), 2.718281828459045, "1e = 1 * e (Euler)");
     }
 
     // Invalid: e5 (no leading digit)
@@ -14400,6 +14403,146 @@ void test_table_mode_binary_integration() {
     }
 }
 
+// Units of measurement, cycle 1 (ROADMAP gen-2): `<number><identifier>`
+// parser-time desugar to `MUL(Num, Var)`. No new AST node, no new TokenType —
+// the identifier is an ordinary Var, so unit semantics live in stdlib `.fw`
+// bindings (e.g. `kg = 1`). Scientific notation (`100e3`) is also fixed in
+// this cycle so the new desugar doesn't change `100e3` from "silently parses
+// as 100" to "MUL(100, Var('e3')) + unbound-var solver error". See the design
+// proposal §"Final Design — Units cycle 1" for rationale.
+void test_unit_suffix() {
+    SECTION("Unit suffix desugar (cycle 1: <number><ident> -> MUL(Num, Var))");
+
+    // (1) Lexer pin: tokens for "100kg" — UNCHANGED by this cycle. The lexer
+    // already produces [NUMBER(100), IDENT("kg"), END]; cycle 1 is purely
+    // a parser-side desugar. This pin guards against future lexer drift
+    // that would invisibly break the parser hook.
+    {
+        auto tokens = Lexer("100kg").tokenize();
+        ASSERT(tokens.size() == 3, "100kg: 3 tokens (NUMBER, IDENT, END)");
+        ASSERT(tokens[0].type == TokenType::NUMBER, "100kg: tok0 is NUMBER");
+        ASSERT_NUM(tokens[0].numval, 100, "100kg: tok0 value 100");
+        ASSERT(tokens[1].type == TokenType::IDENT, "100kg: tok1 is IDENT");
+        ASSERT_EQ(tokens[1].text, "kg", "100kg: tok1 text 'kg'");
+        ASSERT(tokens[2].type == TokenType::END, "100kg: tok2 is END");
+    }
+
+    // (2) Parser desugar AST shape: parse("100kg") is MUL(Num(100), Var("kg")).
+    {
+        auto e = parse("100kg");
+        ASSERT(e->type == ExprType::BINOP, "100kg parses to BINOP");
+        ASSERT(e->op == BinOp::MUL, "100kg op is MUL");
+        ASSERT(e->left->type == ExprType::NUM, "100kg: lhs is NUM");
+        ASSERT_NUM(e->left->num, 100, "100kg: lhs num 100");
+        ASSERT(e->right->type == ExprType::VAR, "100kg: rhs is VAR");
+        ASSERT_EQ(e->right->name, "kg", "100kg: rhs name 'kg'");
+    }
+
+    // (3) Round-trip via expr_to_string.
+    ASSERT_EQ(ps("100kg"), "100 * kg", "ps(100kg)");
+
+    // (4) Symmetric: ps("100 * kg") matches the desugared form.
+    ASSERT_EQ(ps("100 * kg"), "100 * kg", "ps(100 * kg) round-trip stable");
+
+    // (5) Bound unit eval: `mass = 100kg` with `kg = 1` resolves to 100.
+    {
+        write_fw("/tmp/tunit_mass.fw", "kg = 1\nmass = 100kg\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_mass.fw");
+        double r = sys.resolve("mass", {});
+        ASSERT_NUM(r, 100, "mass = 100kg, kg = 1 => mass = 100");
+    }
+
+    // (6) Addition: `100kg + 50kg` simplifies to `150 * kg` (like-term collection).
+    ASSERT_EQ(ss("100kg + 50kg"), "150 * kg", "100kg + 50kg => 150 * kg");
+
+    // (7) Scientific notation: `1.5e3`, `100e-3`, `1e0`, `1E5` all parse
+    // numerically — depends on lexer step 1.
+    ASSERT_NUM(ev("1.5e3"), 1500, "1.5e3 = 1500");
+    ASSERT_NUM(ev("100e-3"), 0.1, "100e-3 = 0.1");
+    ASSERT_NUM(ev("1e0"), 1, "1e0 = 1");
+    ASSERT_NUM(ev("1E5"), 100000, "1E5 = 100000 (uppercase E)");
+
+    // (8a) Documented quirk: `100m^2` parses as `(100 * m)^2`, not `100 * m^2`.
+    // The desugar wraps the entire NUMBER+IDENT pair, so POW applies to the
+    // MUL node. Cycle 1 ships a parse-time warning (see (8b) below) and parks
+    // the precedence fix as Future #74.
+    ASSERT_EQ(ps("100m^2"), "(100 * m)^2", "100m^2 = (100 * m)^2 (quirk; warning fires)");
+
+    // (8b) Parse-time warning capture: `100m^2` adjacency triggers a stderr
+    // warning. `100sin(x)^2` does NOT trigger (sin is a function call).
+    {
+        std::ostringstream captured;
+        auto* old_cerr = std::cerr.rdbuf(captured.rdbuf());
+        (void)parse("100m^2");
+        std::cerr.rdbuf(old_cerr);
+        const std::string out = captured.str();
+        ASSERT(out.find("warning") != std::string::npos,
+               "100m^2: warning emitted on stderr");
+        ASSERT(out.find("100m") != std::string::npos,
+               "100m^2: warning text mentions the offending NUMBER+IDENT pair");
+    }
+    {
+        std::ostringstream captured;
+        auto* old_cerr = std::cerr.rdbuf(captured.rdbuf());
+        (void)parse("100sin(x)^2");
+        std::cerr.rdbuf(old_cerr);
+        const std::string out = captured.str();
+        ASSERT(out.find("warning") == std::string::npos,
+               "100sin(x)^2: NO warning (sin is function call, not unit)");
+    }
+
+    // (DESIRABLE) `100sin(x)` parses as MUL(100, FUNC_CALL("sin", [Var("x")])).
+    {
+        auto e = parse("100sin(x)");
+        ASSERT(e->type == ExprType::BINOP && e->op == BinOp::MUL,
+               "100sin(x): top is MUL");
+        ASSERT(e->left->type == ExprType::NUM && e->left->num == 100,
+               "100sin(x): lhs is Num(100)");
+        ASSERT(e->right->type == ExprType::FUNC_CALL && e->right->name == "sin",
+               "100sin(x): rhs is FUNC_CALL('sin', ...)");
+        ASSERT(e->right->args.size() == 1
+               && e->right->args[0]->type == ExprType::VAR
+               && e->right->args[0]->name == "x",
+               "100sin(x): function arg is Var('x')");
+    }
+
+    // (DESIRABLE) `100x2` round-trips: NUMBER(100) + IDENT("x2") -> `100 * x2`.
+    ASSERT_EQ(ps("100x2"), "100 * x2", "100x2 = 100 * x2 (ident with trailing digit)");
+
+    // (Regression pin — Future-#69-equivalent for this cycle's pre-existing
+    // bug discovery.) The cycle 1 desugar surfaced a pre-existing parse_line
+    // bug: the `if`/`iff` keyword detector required a trailing space, but
+    // `load_lines` runs `trim()` BEFORE `parse_line` so the trailing space
+    // is gone. Pre-fix behavior: trailing `if`/`iff` became an unconsumed
+    // IDENT that the equation parser silently dropped. The cycle's NUMBER+IDENT
+    // desugar removed that masking (the prior IDENT path got absorbed into
+    // `MUL(..., Var("if"))`) which crashed `test_condition_errors`. Candidate A
+    // fix: accept EOL as a valid keyword terminator alongside space. These
+    // pins force the EOL-terminator path so the fix can never silently
+    // regress.
+    {
+        write_fw("/tmp/tunit_eol_if.fw", "y = x + 1 if\n");  // no trailing space
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_eol_if.fw");
+        ASSERT(sys.equations.size() == 1, "trailing 'if' (no space): parses as equation");
+        ASSERT(!sys.equations[0].condition.has_value(),
+               "trailing 'if' (no space): no condition stored");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6,
+                   "trailing 'if' (no space): resolves normally");
+    }
+    {
+        write_fw("/tmp/tunit_eol_iff.fw", "y = x + 1 iff\n");  // no trailing space
+        FormulaSystem sys;
+        sys.load_file("/tmp/tunit_eol_iff.fw");
+        ASSERT(sys.equations.size() == 1, "trailing 'iff' (no space): parses as equation");
+        ASSERT(!sys.equations[0].condition.has_value(),
+               "trailing 'iff' (no space): no condition stored");
+        ASSERT_NUM(sys.resolve("y", {{"x", 5}}), 6,
+                   "trailing 'iff' (no space): resolves normally");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -14738,6 +14881,9 @@ int main() {
     // Future #5: Batch/Table mode (2026-05-11 cycle)
     test_table_range_parse();
     test_table_mode_binary_integration();
+
+    // Future #7: Units engine surface — cycle 1 (2026-05-13)
+    test_unit_suffix();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

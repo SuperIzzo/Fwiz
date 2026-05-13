@@ -122,9 +122,10 @@ Cycle 2026-05-10 architecture-scope blind-spot ANALYZE confirmed (via two model-
 
 Converts source text into tokens: `NUMBER`, `IDENT`, `PLUS`, `MINUS`, `STAR`, `SLASH`, `CARET`, `LPAREN`, `RPAREN`, `EQUALS`, `QUESTION`, `COMMA`, `END`.
 
-- Handles: integers, floats (including leading dot `.5`), identifiers with underscores/digits
+- Handles: integers, floats (including leading dot `.5`), identifiers with underscores/digits, scientific notation (`1.5e3`, `100e-3`, `1E5` — `[eE][+-]?[0-9]+` tail consumed by `read_number` since 2026-05-13)
 - Rejects: all non-mathematical characters with `"Unexpected character: X"` errors
-- Does NOT handle: scientific notation in formula files (that's a lexer limitation), newlines (file parser splits lines first)
+- Bare `e`/`E` not followed by digits becomes a separate `IDENT` token (e.g. `1e` → `NUMBER(1)` + `IDENT("e")`, desugared to `1 * e` = Euler's constant by the parser)
+- Does NOT handle: newlines (file parser splits lines first)
 
 ### parser.h
 
@@ -136,6 +137,11 @@ Precedence (highest to lowest):
 3. Power: `x^2`
 4. Multiplicative: `x * y`, `x / y`
 5. Additive: `x + y`, `x - y`
+
+**NUMBER-IDENT desugar (since 2026-05-13):** `primary()` detects a `NUMBER` token immediately followed by an `IDENT` token and desugars the pair into a `MUL` node without emitting any new token type. Three cases:
+- `100kg` → `MUL(Num(100), Var("kg"))` — unit suffix; `kg` is an ordinary variable.
+- `100sin(x)` → `MUL(Num(100), FUNC_CALL("sin", [Var("x")]))` — function-call branch; no warning.
+- `100m^2` → `MUL(Num(100), Var("m"))^2` i.e. `(100*m)^2` — precedence quirk; emits a stderr warning pointing the user at `100 * m^2`. Fix is Future #74.
 
 Power is currently NOT right-associative — `x^2^3` parses as `x^2` with trailing tokens. This is a known limitation.
 
