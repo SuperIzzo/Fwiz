@@ -774,6 +774,48 @@ M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)
 
 **Reopen trigger:** LLM benchmark run or user reports trying `--integrate` and finding it absent (signals the discoverability gap is real).
 
+## 68. True structs / systems-as-structs — PARKED
+
+**Surfaced 2026-05-13** during completeness-arc planning. The matrix-arc work (#14 vec/mat, future quaternions) clarified that vec/quat are arrays — their identity is "ordered tuple with algebraic operations", not "aggregate of named fields". #15 (flat-naming) handles the "named scalar components" case for formulas where `position_x`, `velocity_y` etc. read naturally. So the simple "add `.x` swizzle access to vec literals" path is deliberately not taken.
+
+But true encapsulating structs are a legitimate longer-term ask:
+- Nested aggregate paths read better than flat naming in some domains.
+- Multi-equation aggregates (rigid body = mass + position + velocity + inertia tensor) want one logical home, not six naming conventions.
+- Sum types / variants long-term.
+
+**The dot operator is already half-implemented.** Fwiz's CLI already uses `.` as the path-into-aggregate operator: `geometry.triangle(...)` reads "section `triangle` inside `geometry.fw`" and the parser at `system.h:3927` splits the filename on the first dot. This is a fully-shipped convention.
+
+**Hypothesis — systems-as-structs.** `FormulaSystem` is already an aggregate of equations, bindings, and section refs. Cross-file calls already aggregate a sub-system into the parent scope. If sub-system access is promoted from CLI-level to in-equation level, "structs" fall out by generalizing an existing convention rather than introducing a new primitive:
+
+```
+# rigid_body.fw — defines a system with public state fields
+mass = ?
+position_x = ?, position_y = ?, position_z = ?
+velocity_x = ?, velocity_y = ?, velocity_z = ?
+
+# main.fw
+body = rigid_body(mass=10, position_x=0, ...)
+body.velocity_y = body.velocity_y + gravity * dt   # dot routes into sub-system
+```
+
+The dot in `body.velocity_y` is the same dot that today routes `geometry.triangle` to a section — just at expression level instead of CLI level. Implementation cost would be largely parser-level; the systems-aggregate already exists, and the dot already means this thing.
+
+**Open design questions** (need a research phase before reopening):
+
+1. **Static or dynamic shape**: is `body` a fixed-schema aggregate (fields declared via the sub-system's variables) or a dynamic bag (any `body.field` is a new binding)?
+2. **Equation routing**: when `body.velocity_y = body.velocity_y + ...` writes to a sub-system field, does the parent equation REPLACE, ADD to, or LAYER OVER the sub-system's own equation?
+3. **Instance lifetime**: do `body_a` and `body_b` from the same `rigid_body.fw` share state? Current cross-file machinery already creates one sub-system per call site — that may be the right answer.
+4. **Algebraic interop**: does `body.position` auto-aggregate into a vec literal `[body.position_x, body.position_y, body.position_z]` for use with vec builtins? Or stay separate?
+5. **Schema declaration**: is the source `.fw` file the schema (declared implicitly via its top-level variables), or does fwiz need an explicit `[struct ...]` declaration form?
+6. **Sum types / variants**: orthogonal feature, or natural fall-out of system-aggregate composition?
+7. **Disambiguation from `filename.section` CLI form**: at expression level `body.velocity_y` is unambiguous (no `.fw` suffix, no filename context) — but the parser may need explicit signaling to avoid collision with float literals (`body.5` lexing weirdness).
+
+**Prior art to survey on reopen**: Modelica (system composition), Mathematica Association, Julia struct + StaticArrays, SymPy Symbol vs Matrix.
+
+**Non-overlap with #15.** #15 (flat-naming) stays the default for the "named scalar components in a single formula" case. #68 is for true encapsulation across multi-equation aggregates.
+
+**Reopen trigger.** User picks up the design — needs research phase and a fresh design trio.
+
 ## Refactors
 
 Readability-driven refactor candidates filed by the blind-spot critic. Each carries a **From** (source cycle + grader-tier failure), a **Proposed** (concrete change), and a **Reopen trigger**. The visionary audit tier-classifies these on the next cycle.
