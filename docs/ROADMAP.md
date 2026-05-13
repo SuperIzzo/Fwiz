@@ -9,39 +9,13 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > a single Future.md item, narrower than the project vision. Arcs sit between
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
-<!-- last-updated: 2026-05-13 -->
-<!-- selected-by-cycle: 2026-05-13 /plan-campaign gen-2 (Units arc selected) -->
+<!-- last-updated: 2026-05-14 -->
+<!-- selected-by-cycle: 2026-05-14 Units arc Cycle 4 close (exit-criterion b) -->
 <!-- generation: 2 -->
 
 ## Active arc
 
-### Arc: Units of measurement — engine surface + stdlib catalog (Future #7)
-
-**Theme:** Ship the engine-level unit-suffix mechanism (option C — parser desugar `100kg → 100 * kg`) and the stdlib `units/*.fw` catalog. Capability-unlock-foundation: opens stdlib (#8), dimensional analysis (#7b), LaTeX of unit-bearing equations, and several parked items waiting on units as a prerequisite.
-**Started:** 2026-05-13
-**Estimated cycles:** 4
-**Cycles elapsed:** 0
-**Status:** in-progress
-
-**Milestones:**
-- [ ] Cycle 1: **API decision + lexer hook.** Lock option C as the chosen path (parser desugar `100kg → 100 * kg` where `kg` is a regular `Var`). Settle the 5 open API questions from Future #7 (suffix grammar, compound suffixes, disambiguation, round-trip rules). Ship the lexer hook for `<number><identifier>` boundary detection. Acceptance test: round-trip safety on `100kg → 100 * kg` — `--derive` output re-parses identically (mirrors the matrix-arc's cycle-1 fuzz baseline discipline). The cycle MUST exit (b) to a planning round if option C surfaces a structural blocker — do not silently switch to option A or B mid-cycle.
-- [ ] Cycle 2: **stdlib/units/si.fw — base catalog.** SI base + prefixes (kilo, milli, micro, nano, mega) as `.fw` constants. The simplest viable form: `kg = 1; km = 1000 * m` with the tagging questions (`[si_mass]` etc.) deferred unless cycle 1 settles them as in-scope. Conversion rules as `.fw` rewrite rules.
-- [ ] Cycle 3: **stdlib/units/derived.fw — derived units.** N, J, W, Pa, etc. as products of base units. End-to-end test: `physics/mechanics.fw` solving force = mass * acceleration with real SI inputs.
-- [ ] Cycle 4: **#7b dimensional analysis as `.fw` predicate** OR escalate. If `is_dim_compatible(a, b)` can be expressed as a typed-binding predicate (per Future #53's per-consumer schedule), ship it. If not, file the typed-FORMULA_CALL #20 escalation with a sharp reopen trigger and exit the arc cleanly. **This is the natural arc-exit gate (exit-criterion b).**
-
-**Exit criterion:** ship the 4 milestones cleanly, OR escalate to a planning round if (a) cycle 1's option-C decision surfaces a structural blocker, OR (b) cycle 4's dim-analysis exposes typed-predicate gaps that existing `.fw` predicates can't express (Future #20 typed FORMULA_CALL becomes prerequisite work).
-
-**Vision alignment:** Units make `speed = distance / time` solve `100km / 2hr = 50 km/hr` end-to-end — a canonical "math on a whiteboard" example fwiz currently can't handle. Option C keeps the engine surface minimal; semantics live in `.fw` files (tiny-core principle). Units are an LLM-ergonomics multiplier — every physics/engineering benchmark that asks "what's the force in Newtons" needs them. The split into #7/#7a/#7b (engine/stdlib/dim-analysis) was clarified in commit `e26b493` and is the textbook visionary-discipline shape.
-
-**Why this arc was chosen** (plan-critic, 2026-05-13 gen-2, confidence medium): Pendulum constraint dominates the selection. 5 of last 6 commits are internal quality/structural work; the next arc must add visible user-facing capability or the macro-pattern becomes self-reinforcing. Within the feature-extension options, the "no external user signal" constraint that pinned linear-algebra-completeness as gen-1 runner-up still binds (4 more cycles of evidence, no `#14` reopen trigger fired). Units is the one feature campaign where the consumer is the project's own stated north-star: every stdlib formula the project wants to ship is a unit-bearing formula. Option C respects tiny-core — same architectural pattern that made #14 vec/mat sugar a clean ship.
-
-**Critic adjustments to ideator's plan** (applied above):
-- Locked option C as cycle-1 design constraint with explicit escalation discipline (no silent switch to A or B).
-- Cycle-1 acceptance test: round-trip safety (mirrors matrix-arc cycle-1 fuzz-baseline discipline).
-- Dropped stretch cycles 5-6 (display formatting + `#45` aliases-audit). Both are different campaigns; treat as adjacencies that fire on their own triggers.
-- Cycle 4 (#7b dim-analysis) is the natural arc-exit gate — exit-criterion (b) escalation if typed predicates are insufficient.
-
-**Reopen / extend trigger:** Arc completes cleanly → fire `/plan-campaign` to pick the next arc. Cycle-1 or cycle-4 exit-criterion (b) fires → planning round.
+_(none — generation-2 arc completed 2026-05-14. Fire `/plan-campaign` to promote a queued arc or to generate fresh alternatives. Note: Future #78 (constants-as-units) is queued as a design-cycle prerequisite for any further dim-analysis work.)_
 
 ## Queued arcs
 
@@ -68,50 +42,43 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 
 ## Completed arcs
 
-### Arc: Matrix-surface diagnostic-quality ✓ COMPLETE 2026-05-13
+### Arc: Units of measurement (Future #7) ✓ COMPLETE 2026-05-14
 
-## Completed arcs
-
-### Arc: Matrix-surface diagnostic-quality ✓ COMPLETE 2026-05-13
-
-**Theme:** Audit and harden the vec/mat surface shipped in #14 (2026-05-10) before extending it further. Each cycle ships either a concrete fix or a sharp trigger-tied Future.md entry — no research-only cycles.
-**Started:** 2026-05-13
-**Completed:** 2026-05-13
-**Cycles:** 4 of 4 (all clean; arc-exit-criterion (b) never fired)
+**Generation:** 2
+**Cycles:** 4 of 4 (arc-exit-criterion (b) fired at cycle 4)
 
 **Milestones:**
-- [x] Cycle 1: **Matrix-flavored fuzz baseline** (`2d63b77`). 6 new corpus seeds; clean 60s fuzz baseline (12,519 execs / 0 crashes). Future #69 filed via corpus smoke-testing.
-- [x] Cycle 2: **User-facing error messages + Future #69 fix** (`65101ec`). Ragged-matrix-literal parse-time validation (`RaggedMatrixError` sibling exception). Cross-file resolution cycle SIGSEGV fixed (`CrossFileResolutionCycleError` + thread-local guard). `load_lines` catch narrowed to `runtime_error` — sibling-exception convention codified.
-- [x] Cycle 3: **`--derive` determination + Future #71 filing** (`79661aa`). Determination: matrix `--derive` works today via `solved_symbolic_`; `#10a` structural escalation NOT needed. 8 regression tests pinning working corners. Future #71 IN-SCOPE filed for diff/integral matrix-distribution gap.
-- [x] Cycle 4: **Round-trip safety + arc-exit** (cycle 4 commit). 10 round-trip + known-limitation ASSERTs. Cumulative fuzz re-run: 9028 execs / 0 crashes. `make valgrind` re-run: 0 errors / 0 leaks. Arc-exit summary in docs/COMPLETED.md.
+- [x] Cycle 1 (`14b1fc7`): NUMBER-IDENT desugar (option C) + scientific notation latent-bug fix + `parse_line` EOL keyword fix (Future #75 DONE).
+- [x] Cycle 1.1 (`bbf8c16`): Reserved-word denylist `{if, iff, e}` for the desugar (Future #76 DONE).
+- [x] Cycle 2 (`d24f0c9`): CLI-arg unit-suffix evaluation (Future #73 DONE) via the `synthetic_equations` channel + stdlib expansion (prefixes + 5 derived units).
+- [x] Cycle 3 (`a99f690`): `stdlib/physics/mechanics.fw` — first end-to-end physics demo. Newton's 2nd law, weight, KE, momentum, work, power, pressure, frequency/period reciprocity.
+- [x] Cycle 4 (this commit): Dim-analysis decision. **Arc-exit-criterion (b) fired** — #7b cannot ship as a `.fw` predicate today; the substrate (dimension tags on Var bindings) doesn't exist, and Future #78 (constants-as-units design question) is the prerequisite. Filed: #7b reopen-trigger updated; #80 PARKED (multi-file CLI / `@include` directive); docs/Language.md §14.3 corrected.
 
-**Outcome (Tests 3346 → 3395, +49)**:
-- Future #69 DONE (cross-file resolution cycle SIGSEGV).
-- Future #70 PARKED (deferred shape-mismatch diagnostic-track).
-- Future #71 IN-SCOPE (diff/integral over vec/mat distribution — routed to queued completeness arc).
-- Sibling-exception convention codified codebase-wide.
-- ~60-70 net production LOC. 0 implementer blocks. 3 self-fixes total.
+**Outcome (Tests 3395 → 3503, +108)**:
+- Future #73 DONE (CLI-arg unit-suffix evaluation).
+- Future #75 DONE (parse_line EOL keyword detection).
+- Future #76 DONE (reserved-word denylist for desugar).
+- Future #74 PARKED (`100m^2` precedence quirk fix).
+- Future #77 PARKED (`_` prefix-mul separator — needs design cycle).
+- Future #79 IN-SCOPE (deferred-identifier error-quality follow-up).
+- Future #80 PARKED (multi-file CLI load / `@include` directive).
+- Future #7b PARKED — blocked on Future #78.
+- ~70 net production LOC. 0 implementer blocks. 4 self-fixes total. 1 user-driven scope refinement (cycle 1.1 denylist).
 
 See `docs/COMPLETED.md` for the full arc-exit summary.
 
-**Exit criterion:** ship matrix-surface improvements until either (a) all 4 milestones close, OR (b) the arc surfaces a structural escalation that warrants a planning round (most likely candidate: cycle 3 reveals `#10a` matrix-valued bindings work is genuinely required to make `--derive` matrix expressions coherent — that escalation would defer to a fresh planning cycle).
+### Arc: Matrix-surface diagnostic-quality ✓ COMPLETE 2026-05-13
 
-**Vision alignment:** Honors "do it right from the start" — the matrix surface shipped scope-limited and expanding it without auditing means scope-limits compound. Quality-oracle arcs harden a substrate that every future feature arc (matrix completeness, 3D-math applications, LaTeX of matrices, batch-table of matrix sweeps) will rely on. This is capability-unlock by hardening, not capability-add by breadth.
+**Generation:** 1
+**Cycles:** 4 of 4 (all clean; arc-exit-criterion (b) never fired)
 
-**Why this arc was chosen:** Three converging signals (plan-critic, 2026-05-13, confidence medium):
-1. The just-completed Future #67 cycle established `make valgrind` as a quality oracle — the project is in quality-oracle mode and this arc extends that mode cleanly across the most under-audited new surface. #14 (vec/mat sugar) shipped 3 days ago with zero fuzz coverage and minimal end-to-end `--derive`/`--table`/`--steps` verification.
-2. Demonstrated single-cycle 1-shot velocity (11 cycles without an implementer block) matches the arc's granularity — every cycle ships a fix or a sharp trigger-tied Future.md entry.
-3. The empty `REJECTED.md` and well-parked `#14` deferred items are explicit evidence that no user has fired the reopen triggers for the linear-algebra-completeness or 3D-math campaigns. Pursuing the completeness arc now would be agent-initiated feature-creep against the visionary's wrapper-tool discipline. The diagnostic-quality arc is the only campaign in the divergent set whose value DOESN'T depend on a user signal that hasn't fired, AND whose output makes every alternative campaign cheaper later.
+**Milestones:**
+- [x] Cycle 1 (`2d63b77`): Matrix-flavored fuzz baseline. 6 new corpus seeds; clean 60s fuzz run (12,519 execs / 0 crashes). Future #69 filed via corpus smoke-testing.
+- [x] Cycle 2 (`65101ec`): User-facing error messages + Future #69 SIGSEGV fix. `RaggedMatrixError` + `CrossFileResolutionCycleError` sibling exceptions; `load_lines` catch narrowed to `runtime_error` — sibling-exception convention codified.
+- [x] Cycle 3 (`79661aa`): `--derive` determination + Future #71 filing. Matrix `--derive` works today via `solved_symbolic_`; `#10a` structural escalation NOT needed.
+- [x] Cycle 4 (`0d5878a`): Round-trip safety + arc-exit. `make valgrind` re-run on cycle-2 thread_local guard: 0 errors / 0 leaks.
 
-**Critic adjustments to ideator's plan (applied above):**
-- Reordered fuzz baseline to cycle 1 (was cycle 4). Crash-surfacing oracle runs first; subsequent cycles benefit from a known-stable substrate.
-- Dropped the "research-only" framing on the `--derive` cycle (was ideator cycle 2). Each cycle ships either a fix or a sharp reopen trigger — the project has no healthy precedent for research-only cycles and the velocity profile that justified picking this arc would be weakened by one.
-- Scoped to 4 cycles, not 6. Dropped ideator's cycle 5 (`--table` + matrix queries belongs to Future `#5a-g` and should fire on their own triggers) and cycle 6 (valgrind/perf is a continuation of today's just-established cadence, doesn't need to be inside this arc). Tighter arc = less risk of stalling = cleaner completed-arc entry for generation 2 seeding.
-- Added an explicit exit criterion (above) to protect against mid-arc structural escalation if cycle 3 surfaces deeper `#10a` work.
-
-**Reopen / extend trigger:** Two distinct triggers:
-1. **Arc completes cleanly (all 4 milestones close)** → fire `/plan-campaign` to pick the next arc. The queued Linear-algebra completeness arc becomes the natural follow-on, with the diagnostic findings as a foundation.
-2. **A user fires a `#14` reopen trigger mid-arc** (e.g. concrete need for `inv` of 3×3+ matrix, eigenvalues, quaternion algebra) → escalate to a planning round. That's a genuine user signal that may pull the queued completeness arc ahead of the current arc's remaining cycles.
+**Outcome (Tests 3346 → 3395, +49)**: Future #69 DONE; Future #70 PARKED; Future #71 IN-SCOPE. Sibling-exception convention codified. ~60-70 net production LOC. 0 implementer blocks. 3 self-fixes total. See `docs/COMPLETED.md` for full summary.
 
 ## Queued arcs
 
@@ -136,6 +103,7 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 - **Generation 1 (2026-05-13)**: Diagnostic-quality arc on existing matrix surfaces selected over Linear-algebra completeness (runner-up). User invoked `/plan-campaign` with seed "vectors, matrices, quaternions" after three consecutive clean single-cycle closes (docs-catchup, valgrind oracle, Future #67 dispatch unification). Plan-critic's verdict (confidence medium) chose the seed-as-constraint-to-challenge campaign over the literal-interpretation campaign. User accepted the critic's pick. Linear-algebra completeness queued as the natural follow-on.
 - **Generation 1 arc complete (2026-05-13)**: Matrix-surface diagnostic-quality arc shipped all 4 cycles cleanly under autonomous mode. 0 implementer blocks. Tests 3346 → 3395 (+49). Future #69 DONE, #70 PARKED, #71 NEW. Sibling-exception convention codified codebase-wide. Arc-exit-criterion (b) never fired. Queued Linear-algebra completeness arc remains queued; next `/plan-campaign` run (or user direction) promotes it or generates fresh alternatives.
 - **Generation 2 (2026-05-13)**: Units of measurement arc (Future #7) selected over Linear-algebra completeness (still queued) and over the LLM-ergonomics benchmark campaign (newly queued). User invoked `/plan-campaign` at gen-1 arc close per reflector recommendation (`new-arc` verdict, medium confidence — reflector flagged that the pendulum has swung deep into internal work: 5 of 6 commits internal/hardening). Plan-critic chose Units (medium confidence) over Linear-algebra completeness based on two converging signals: (a) the "no external user signal" weakness that pinned linear-algebra as runner-up at gen-1 accumulated 4 more cycles of evidence with no #14 reopen trigger fired; (b) Units is the one feature campaign where the consumer is the project's own stated north-star — every stdlib formula is a unit-bearing formula, so the consumer isn't an absent user but the engine's own roadmap. User confirmed: "Units should be a fairly simple feature to implement, we need to design the language features that will allow users to seamlessly add new units (I think that's already described in the future brief)". User also confirmed the LLM-benchmark idea ("we have not checked how well LLMs deal with the CLI") — held queued behind units per critic's sequencing recommendation. Two contrarian critic picks in two consecutive generations explicitly acknowledged: yesterday's purchased credibility, today's spent some of it.
+- **Generation 2 arc complete (2026-05-14)**: Units arc shipped all 4 cycles, with cycle 4 firing the planned arc-exit-criterion (b) on dim-analysis. Cycles 1-3 shipped clean (engine surface, CLI-arg eval, stdlib catalog, physics demo). Cycle 4 surfaced that Future #7b (dim-analysis) is structurally blocked by Future #78 (constants-as-units design question — the dimension-tag semantic model must be settled first). Future #78 explicitly requested by the user as a design-cycle item; the arc-exit-criterion firing matches the user's stated preference for design-cycle treatment of #77 and #78. Tests 3395 → 3503 (+108). 0 implementer blocks across the arc. User-driven scope refinement at cycle 1.1 (reserved-word denylist for `e`, `if`, `iff`). Queued arcs remain: Linear-algebra completeness (still queued — third gen running), LLM-ergonomics benchmark (queued at gen-2). Future #78 design cycle is the natural next move per gen-2's explicit user direction.
 
 ## Arc entry format
 

@@ -59,7 +59,7 @@ This item splits along the engine/stdlib axis per the project's wrapper-tier dis
 
 - **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. **Cycle 2 shipped 2026-05-13**: CLI-arg evaluation (#73 DONE); stdlib expanded 16→42 lines (SI prefixes + derived units). Remaining #7 work: dim-analysis stdlib (#7a), dimensional rejection (#7b).
 - **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
-- **#7b (NEW SUB-ITEM — PARKED)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). This is the typed-binding-predicate escalation: only fires if a `.fw` predicate can't express it. Reopen trigger: user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture.
+- **#7b (PARKED — BLOCKED on #78)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). Cycle-4 verdict (2026-05-13, arc-exit-criterion-(b) firing): #7b cannot ship as a `.fw` predicate today because the substrate (dimension tags on `Var` bindings) doesn't exist. Today `kg = 1`, `s = 1`, `pi = 3.14...` are all scalar Vars with no way to distinguish "mass dimension" from "time dimension" from "dimensionless constant." A typed-binding predicate like `has_incompatible_dims(left, right)` has nothing to inspect. Resolving Future #78 (constants-as-units — does fwiz adopt dimension tags? are constants dimensionless units? are units a structural type or just an organizational convention?) is a prerequisite. The original reopen trigger ("user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture") is REPLACED by: (a) Future #78 design cycle resolves the constants-as-units / dimension-tag question with a clear semantic model; (b) the cycle 4 verdict on whether `.fw` predicates are sufficient given that model — if yes, ship #7b as predicates; if no, escalate to engine-level dimension tagging.
 
 ### Problem (#7)
 
@@ -834,6 +834,20 @@ EOF
 **Cycle 2 of the matrix arc deferred this** in favor of two higher-leverage deliverables: ragged-literal parse-time validation (catches the most common authoring mistake before the program reaches the runtime undefined path) and the #69 SIGSEGV fix (replaces a crash with an actionable error, which is strictly better than improving an existing-but-opaque error).
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
+
+## 80. Multi-file CLI load / `@include` directive — PARKED
+
+**Surfaced 2026-05-13** during Units cycle 3 implementation. The implementer flagged: docs/Language.md previously documented `fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)` as a CLI usage pattern, but the current CLI accepts exactly ONE filename. `main.cpp:129` concatenates non-flag args into a single `query_str` and `parse_cli_query` takes a single filename. The multi-file form silently fails. Cycle 3 worked around this by inlining the SI-base bindings into `stdlib/physics/mechanics.fw`. Cycle 4 retracted the misleading example in docs/Language.md.
+
+**The real fix** — and the question the design needs to settle — is whether fwiz should support library composition at the language level. Two candidate mechanisms:
+
+1. **CLI-level multi-file load**: `fwiz file_a.fw file_b.fw(query_args)` parses multiple files, concatenates their equations, then runs the query. Lowest-impact change. ~30-50 LOC in `main.cpp` argument parsing + `parse_cli_query` extension. Risk: ambiguity when a non-file arg is intended (probably resolved by requiring all-but-last args to NOT contain `(`).
+
+2. **`.fw`-level `@include` directive**: `@include stdlib/units/si-minimal.fw` at the top of any `.fw` file recursively loads the named file. Mirrors `#include` in C. Bigger surface; requires path resolution rules (cwd? file-relative? search-path?), cycle detection (same problem solved for cross-file resolution by Future #69), and a clear semantic for shadowing (does an `@include`d binding override a parent binding?).
+
+**Today's workaround**: inline the catalog into each consuming `.fw` file (the `stdlib/physics/mechanics.fw` pattern). Cheap but it duplicates bindings, and if the units catalog changes its values the consumer must be updated in lockstep.
+
+**Reopen trigger**: a second stdlib library file needs the units catalog (e.g. `stdlib/physics/thermo.fw` or `stdlib/finance/compound.fw`), and the inline-bindings workaround becomes unworkable, OR a user reports the multi-file load not working with a concrete reproducer.
 
 ## 79. Deferred-identifier error-quality (cycle-2 follow-up) — IN-SCOPE
 

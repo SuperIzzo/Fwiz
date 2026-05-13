@@ -2,9 +2,9 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
-## Units arc — IN PROGRESS (cycle 1 shipped 2026-05-13, ROADMAP gen-2)
+## Units arc — ✅ COMPLETE (2026-05-14, ROADMAP gen-2)
 
-N-cycle campaign to add unit-of-measure support. Goal: `100kg` parses and binds; stdlib provides unit catalogs; eventually: dimensional analysis rejection.
+4-cycle campaign to add unit-of-measure support. Engine surface, stdlib catalogs, physics demo, dim-analysis decision. Goal met for cycles 1-3 (units mechanism + catalog + physics application); cycle 4 surfaced arc-exit-criterion (b) on dim-analysis (Future #7b blocked by Future #78). Tests: 3395 → 3505 (+110). Net source LOC ~70 across `src/lexer.h`, `src/parser.h`, `src/system.h`. Two new stdlib files (`units/si-minimal.fw`, `physics/mechanics.fw`).
 
 **Cycle 1** (2026-05-13): Parser desugar `<number><identifier>` → `MUL(Num, Var)`.
 - `src/lexer.h` `read_number` extended: scientific notation (`[eE][+-]?[0-9]+` tail) consumed — `1.5e3` now `Num(1500)`, not `Num(1.5)` + silent-drop. ~12 LOC.
@@ -28,7 +28,40 @@ N-cycle campaign to add unit-of-measure support. Goal: `100kg` parses and binds;
 - `docs/Language.md` §14.4: stdlib reference entry for the new catalog.
 - Tests: 3495 → 3505 (+10). All gates green.
 
-**Remaining cycles (queued):** `100m^2` fix (#74); dim-analysis stdlib; dimensional analysis rejection (#7b).
+**Cycle 4** (2026-05-14 — this cycle): Dim-analysis decision + arc-exit. **Arc-exit-criterion (b) FIRED**.
+
+The cycle examined whether Future #7b (dimensional analysis rejection at parse/simplify time — reject `mass + time`) could ship today as a typed-binding predicate. Determination: **cannot ship**. The substrate (dimension tags on `Var` bindings) doesn't exist. Today `kg = 1`, `s = 1`, `pi = 3.14...` are all scalar Vars with no way to distinguish "mass dimension" from "time dimension" from "dimensionless constant." A `.fw` predicate like `has_incompatible_dims(left, right)` has nothing to inspect. Future #78 (constants-as-units, surfaced at gen-2 close) is the prerequisite — it must clarify the dimension-tag semantic model before #7b can be designed.
+
+- Future #7b reopen-trigger updated: now blocked on Future #78 design cycle.
+- Future #80 filed (PARKED): multi-file CLI load / `@include` directive — surfaced by cycle 3's implementer when the docs example `fwiz file_a.fw file_b.fw(...)` turned out to not actually work. Today's workaround (inline catalog into consumer files) is acceptable for one file; tracked for re-evaluation when a second consumer needs the catalog.
+- docs/Language.md §14.3 corrected: removed the misleading multi-file CLI usage example; replaced with the inline-source idiom that actually works.
+
+**Arc statistics (final)**:
+
+| Cycle | Commit | Description | Tests delta |
+|-------|--------|-------------|-------------|
+| 1 | `14b1fc7` | NUMBER-IDENT desugar + scientific notation | +35 |
+| 1.1 | `bbf8c16` | Reserved-word denylist (Future #76) | +13 |
+| 2 | `d24f0c9` | CLI-arg unit-suffix (#73) + stdlib expansion | +50 |
+| 3 | `a99f690` | stdlib/physics/mechanics.fw + tests | +10 |
+| 4 | this commit | Arc-exit + #7b escalation + #80 filing | +0 |
+| **Total** | | | **+108** |
+
+Tests 3395 → 3503 (+108). 0 implementer blocks across the arc. 4 self-fixes (3 in cycle 1, 0 in 1.1, 1 in cycle 2). Cycle 1 surfaced two pre-existing bugs as principled improvements (scientific notation latent bug, parse_line EOL keyword detection — Future #75 DONE). Sibling-exception convention from matrix-arc cycle 2 carried through unchanged.
+
+**Future.md changes across the arc**:
+- DONE: #73 (CLI-arg eval), #75 (parse_line EOL), #76 (reserved-word denylist).
+- NEW IN-SCOPE: #79 (deferred-identifier error-quality).
+- NEW PARKED: #74 (100m^2 precedence), #77 (`_` separator), #80 (multi-file CLI).
+- UPDATED: #7b (now blocked on #78), #7 (cycle progress logged).
+- Strategic open: #78 (constants-as-units design question — user explicitly requested plan-critic-visionary cycle).
+
+**Findings handed off to the design-cycle queue**:
+- Future #78 needs a `/plan-campaign`-style design phase before any further units work (dim-analysis, derived-unit catalog expansion).
+- Future #77 (`_` prefix-mul separator) similarly queued for a design cycle.
+- Future #80 (multi-file CLI / `@include`) reopens when a second consumer needs the units catalog.
+
+The Units engine is shippable end-to-end as it stands. Physics formulas with SI units work today through `stdlib/units/si-minimal.fw` + `stdlib/physics/mechanics.fw`. Dimensional analysis is the remaining missing piece, and it's blocked on a design question the user has flagged for explicit attention.
 
 ## Matrix-surface diagnostic-quality arc — ✅ COMPLETE (2026-05-13, ROADMAP gen-1)
 

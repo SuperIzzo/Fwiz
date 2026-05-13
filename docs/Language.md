@@ -726,15 +726,16 @@ Binds SI base units, common prefixes, and 5 derived units to their SI-base scala
 
 All values are defined in terms of SI base — `km = 1000 * m` and so on — so they cascade through a single base-change point.
 
-Load it alongside your formula file:
+Load it as the CLI's single file argument and write your formula inline or via the inline-source idiom:
 
 ```bash
-$ fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)
 $ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=distance/time, speed_eqn=speed)'
-speed = 25/18
+speed = 25 / 18
 ```
 
-Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b.
+Note: a multi-file CLI load form (`fwiz file_a.fw file_b.fw(...)`) is **not** currently supported — the CLI accepts exactly one filename. Library files needing a units catalog must either (a) inline the necessary bindings (the `stdlib/physics/mechanics.fw` pattern, see §14.4) or (b) drive the equations via CLI synthetic bindings. Tracked as Future #80 (CLI-level multi-file include / `@include` directive).
+
+Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b (the latter blocked by Future #78 — see Future.md).
 
 ### 14.4 `stdlib/physics/mechanics.fw` — Newtonian mechanics (since 2026-05-13, cycle 3)
 
