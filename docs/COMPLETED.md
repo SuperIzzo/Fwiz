@@ -2,6 +2,40 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Matrix-surface diagnostic-quality arc — ✅ COMPLETE (2026-05-13, ROADMAP gen-1)
+
+4-cycle quality-oracle arc on the #14 vec/mat surface (shipped 2026-05-10). Goal: audit and harden before extending. Each cycle shipped either concrete diagnostic improvements or trigger-tied Future.md filings for the queued completeness arc.
+
+**Cycle 1** (2026-05-13 `2d63b77`): Matrix-flavored fuzz baseline.
+- 6 new corpus seeds; clean 60s fuzz baseline (12,519 execs / 0 crashes).
+- Future #69 filed: cross-file resolution cycle SIGSEGV (surfaced via smoke-testing).
+
+**Cycle 2** (2026-05-13 `65101ec`): User-facing error messages + #69 fix.
+- Ragged-matrix-literal parse-time validation via `RaggedMatrixError` sibling exception.
+- Future #69 cross-file SIGSEGV closed: `CrossFileResolutionCycleError` sibling exception + thread-local `currently_loading` guard.
+- `load_lines` catch narrowed to `runtime_error`; sibling-exception convention codified.
+
+**Cycle 3** (2026-05-13 `79661aa`): `--derive` determination + #71 filing.
+- Determination: matrix `--derive` works today via `solved_symbolic_`; `#10a` structural escalation NOT needed.
+- 8 regression tests pinning the working `--derive` corners.
+- Future #71 filed: `diff`/`integral` don't distribute over vec/mat (routed to queued completeness arc).
+
+**Cycle 4** (2026-05-13 — this cycle): Round-trip safety + arc-exit.
+- 4 round-trip regression tests + 1 known-limitation regression test (5 cases / 10 ASSERTs in `test_vec_mat_roundtrip`).
+- Cumulative fuzz re-run on the matrix-flavored corpus: 9028 execs / 0 crashes / no regressions.
+- `make valgrind` re-run on the post-cycle-2 thread_local cycle guard: **3385/3385 tests, 0 errors, 0 leaks**. Memcheck confirms the `static thread_local std::set<std::string>` addition in `load_sub_system` is correctly initialised once per thread and cleaned up on scope exit.
+- Round-trip corners pinned: concrete matmul → `[[19, 22], [43, 50]]`; symbolic transpose with free vars → `[[a, c], [b, d]]`; concrete fractional inverse → `[[(-2), 1], [3 / 2, (-1) / 2]]` (parens and structural-fraction format preserved); `undefined` propagation across re-parse.
+
+**Findings handed off to queued completeness arc**:
+- Future #69 DONE in cycle 2 (substrate fix).
+- Future #71 IN-SCOPE: `diff`/`integral` over vec/mat distribution.
+- Future #14 deferred items (N×N det/inv, eigenvalues, quaternions, complex-element matrices) all remain queued.
+- Known limitation: matrix-valued results require `--derive`. Solve-mode (without `--derive`) cannot bind a matrix to a variable because `evaluate()` returns empty on vec/mat by design. Pinned by RT5 of `test_vec_mat_roundtrip`. Documented in CLAUDE.md / Language.md §15.4; not a bug.
+
+**Arc-exit-criterion (b)** never triggered. All 4 cycles closed clean. Tests: 3346 → 3395 (+49 across the arc). No regressions; net build-system addition (`make valgrind` baseline established earlier this week).
+
+Net production source LOC across the arc: ~60-70 (parser.h ragged check + system.h cycle guard + `RaggedMatrixError` + `CrossFileResolutionCycleError` + the `load_lines` narrowing). Tests +~200 LOC. Documentation updates across CLAUDE.md, Developer.md, Language.md, COMPLETED.md, Future.md, Known-Issues.md.
+
 ## 0-3: Conditions, Ranges, Recursion, Numeric Solving — ✅ DONE
 
 All implemented. `if`/`iff` conditions, ValueSet ranges, recursive formula calls with depth guard, numeric solving with adaptive grid scan + Newton/bisection. See Developer.md for details.

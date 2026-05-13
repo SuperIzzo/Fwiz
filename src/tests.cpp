@@ -9974,6 +9974,141 @@ void test_vec_mat_derive() {
     }
 }
 
+void test_vec_mat_roundtrip() {
+    SECTION("Vec/Mat --derive round-trip safety (Matrix-arc cycle 4)");
+
+    // Local capture helper — captures stdout+stderr from a CLI invocation.
+    // Trailing newline preserved; tests compare via string identity on
+    // the trimmed "<lhs> = <rhs>" line after stripping the trailing '\n'.
+    auto run = [](const std::string& cmd) -> std::string {
+        FILE* p = popen(cmd.c_str(), "r");
+        std::string out;
+        if (p) {
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), p)) out += buf;
+            pclose(p);
+        }
+        return out;
+    };
+
+    // Helper: round-trip a single derive line.
+    //   1. Write src to path1, --derive query1, capture out1.
+    //   2. Write out1 verbatim to path2, --derive query2, capture out2.
+    //   3. ASSERT out1 == out2 (string identity).
+    // Each test wraps its own setup and cleanup so a failure in one
+    // case doesn't strand /tmp artifacts for the next.
+
+    // RT1. Concrete matrix matmul. Pins that the matmul product literal
+    //      [[19, 22], [43, 50]] re-loads (as a bare matrix literal binding)
+    //      and re-derives to the same literal — i.e. mat literals are a
+    //      fixed point of the derive surface.
+    {
+        write_fw("/tmp/fwiz_rt1a.fw",
+            "C = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])\n");
+        std::string out1 = run("./bin/fwiz --derive '/tmp/fwiz_rt1a.fw(C=?)' 2>&1");
+        ASSERT(out1.find("C = [[19, 22], [43, 50]]") != std::string::npos,
+               "round-trip 1 pass-1: expected 'C = [[19, 22], [43, 50]]' (got: '" + out1 + "')");
+
+        write_fw("/tmp/fwiz_rt1b.fw", out1);
+        std::string out2 = run("./bin/fwiz --derive '/tmp/fwiz_rt1b.fw(C=?)' 2>&1");
+        ASSERT(out1 == out2,
+               "round-trip 1 (concrete matmul): pass-1 != pass-2 (pass-1: '"
+               + out1 + "' pass-2: '" + out2 + "')");
+
+        std::filesystem::remove("/tmp/fwiz_rt1a.fw");
+        std::filesystem::remove("/tmp/fwiz_rt1b.fw");
+    }
+
+    // RT2. Symbolic transpose with free vars. Pins that the row/column
+    //      swap output [[a, c], [b, d]] re-loads (free-var declarations
+    //      must be re-included on the query) and re-derives to the same
+    //      literal. Round-trip query needs the same free-var list as
+    //      pass-1, matching the cycle-3 free-var convention.
+    {
+        write_fw("/tmp/fwiz_rt2a.fw", "T = transpose([[a, b], [c, d]])\n");
+        std::string out1 = run("./bin/fwiz --derive '/tmp/fwiz_rt2a.fw(T=?, a, b, c, d)' 2>&1");
+        ASSERT(out1.find("T = [[a, c], [b, d]]") != std::string::npos,
+               "round-trip 2 pass-1: expected 'T = [[a, c], [b, d]]' (got: '" + out1 + "')");
+
+        write_fw("/tmp/fwiz_rt2b.fw", out1);
+        std::string out2 = run("./bin/fwiz --derive '/tmp/fwiz_rt2b.fw(T=?, a, b, c, d)' 2>&1");
+        ASSERT(out1 == out2,
+               "round-trip 2 (symbolic transpose): pass-1 != pass-2 (pass-1: '"
+               + out1 + "' pass-2: '" + out2 + "')");
+
+        std::filesystem::remove("/tmp/fwiz_rt2a.fw");
+        std::filesystem::remove("/tmp/fwiz_rt2b.fw");
+    }
+
+    // RT3. Concrete fractional inverse. Pins that the simplifier-formatter
+    //      preserves both the parenthesized-negative form `(-2)` and the
+    //      structural-fraction forms `3 / 2`, `(-1) / 2` across re-parse +
+    //      re-derive. If a future simplifier pass folds (-1)/2 → -1/2
+    //      or rewrites (-2) → -2 at the printer layer, this test surfaces it.
+    {
+        write_fw("/tmp/fwiz_rt3a.fw", "I = inv([[1, 2], [3, 4]])\n");
+        std::string out1 = run("./bin/fwiz --derive '/tmp/fwiz_rt3a.fw(I=?)' 2>&1");
+        ASSERT(out1.find("I = [[(-2), 1], [3 / 2, (-1) / 2]]") != std::string::npos,
+               "round-trip 3 pass-1: expected 'I = [[(-2), 1], [3 / 2, (-1) / 2]]' (got: '" + out1 + "')");
+
+        write_fw("/tmp/fwiz_rt3b.fw", out1);
+        std::string out2 = run("./bin/fwiz --derive '/tmp/fwiz_rt3b.fw(I=?)' 2>&1");
+        ASSERT(out1 == out2,
+               "round-trip 3 (concrete fractional inv): pass-1 != pass-2 (pass-1: '"
+               + out1 + "' pass-2: '" + out2 + "')");
+
+        std::filesystem::remove("/tmp/fwiz_rt3a.fw");
+        std::filesystem::remove("/tmp/fwiz_rt3b.fw");
+    }
+
+    // RT4. `undefined` propagation across round-trip. Pins that a
+    //      matmul shape-mismatch produces `C = undefined` and that
+    //      re-loading `C = undefined` (now as a bare undefined binding)
+    //      re-derives to the same literal — i.e. `undefined` survives
+    //      a re-parse and is not silently re-evaluated to something else.
+    //      Shape: 2x2 × 3x3 — column count of A (2) doesn't match row
+    //      count of B (3), so the matmul primitive returns undefined.
+    {
+        write_fw("/tmp/fwiz_rt4a.fw",
+            "C = matmul([[1, 2], [3, 4]], [[5, 6, 7], [8, 9, 10], [11, 12, 13]])\n");
+        std::string out1 = run("./bin/fwiz --derive '/tmp/fwiz_rt4a.fw(C=?)' 2>&1");
+        ASSERT(out1.find("C = undefined") != std::string::npos,
+               "round-trip 4 pass-1: expected 'C = undefined' (got: '" + out1 + "')");
+
+        write_fw("/tmp/fwiz_rt4b.fw", out1);
+        std::string out2 = run("./bin/fwiz --derive '/tmp/fwiz_rt4b.fw(C=?)' 2>&1");
+        ASSERT(out1 == out2,
+               "round-trip 4 (undefined propagation): pass-1 != pass-2 (pass-1: '"
+               + out1 + "' pass-2: '" + out2 + "')");
+
+        std::filesystem::remove("/tmp/fwiz_rt4a.fw");
+        std::filesystem::remove("/tmp/fwiz_rt4b.fw");
+    }
+
+    // RT5. KNOWN LIMITATION pin: solve-mode (no --derive) cannot bind a
+    //      matrix to a variable. evaluate() returns empty on vec/mat by
+    //      design, so the solve path reports "Cannot solve for 'M'" with
+    //      a non-zero exit code. Documented in CLAUDE.md / Language.md.
+    //      This test pins the documented behavior so a future silent
+    //      flip (e.g. accidentally enabling matrix-valued solve binding)
+    //      surfaces here. Matrix-valued results require --derive.
+    {
+        write_fw("/tmp/fwiz_rt5.fw", "M = [[1, 2], [3, 4]]\n");
+        // popen merges stderr into stdout via 2>&1; exit code surfaces via
+        // pclose, but the test contract here is: error message present AND
+        // process did not silently succeed with a matrix binding.
+        std::string out = run("./bin/fwiz '/tmp/fwiz_rt5.fw(M=?)' 2>&1");
+        ASSERT(out.find("Cannot solve for 'M'") != std::string::npos,
+               "round-trip 5 (solve-mode matrix bind, known limitation): "
+               "expected 'Cannot solve for ''M''' (got: '" + out + "')");
+        // Negative pin: must NOT silently print a matrix literal.
+        ASSERT(out.find("[[1, 2], [3, 4]]") == std::string::npos,
+               "round-trip 5: solve-mode must not silently produce a matrix literal (got: '"
+               + out + "')");
+        std::filesystem::remove("/tmp/fwiz_rt5.fw");
+    }
+}
+
 void test_undefined() {
     SECTION("Undefined Keyword");
 
@@ -14504,6 +14639,7 @@ int main() {
     test_struct_dotnames();
     test_vec_mat_type();
     test_vec_mat_derive();
+    test_vec_mat_roundtrip();
     test_undefined();
     test_context_aware_simplification();
     test_positional_args();

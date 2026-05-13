@@ -10,24 +10,36 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
 <!-- last-updated: 2026-05-13 -->
-<!-- selected-by-cycle: 2026-05-13 Future #67 dispatch unification -->
+<!-- selected-by-cycle: 2026-05-13 Matrix-arc Cycle 4 close -->
 <!-- generation: 1 -->
 
 ## Active arc
 
-### Arc: Matrix-surface diagnostic-quality
+_(none — generation-1 arc completed 2026-05-13. Fire `/plan-campaign` to promote the queued Linear-algebra completeness arc or to generate fresh alternatives.)_
+
+## Completed arcs
+
+### Arc: Matrix-surface diagnostic-quality ✓ COMPLETE 2026-05-13
 
 **Theme:** Audit and harden the vec/mat surface shipped in #14 (2026-05-10) before extending it further. Each cycle ships either a concrete fix or a sharp trigger-tied Future.md entry — no research-only cycles.
 **Started:** 2026-05-13
-**Estimated cycles:** 4 (plus optional structural-escalation pivot)
-**Cycles elapsed:** 0
-**Status:** in-progress
+**Completed:** 2026-05-13
+**Cycles:** 4 of 4 (all clean; arc-exit-criterion (b) never fired)
 
 **Milestones:**
-- [ ] Cycle 1: **Matrix-flavored fuzz baseline.** Extend `fuzz_corpus/` with vec/mat literals + matmul/det/inv/transpose invocations; rerun 60s blind fuzz (`make fuzz`); triage any crashes. Establishes a known-stable substrate for subsequent diagnostic cycles. The fuzz harness fired pre-#14; #14 added ~300 LOC of vec/mat code with zero fuzz coverage. (Reordered from ideator's cycle 4 → cycle 1 per critic adjustment: surface crash bugs before triaging error-message quality.)
-- [ ] Cycle 2: **User-facing error messages and shape-mismatch provenance.** `[[1,2],[3]]` (ragged matrix literal) currently silently propagates `undefined`. Should emit a parse/load-time diagnostic with file:line. `matmul(2x3, 4x5)` shape mismatch should name BOTH operand shapes in the error. Same audit on `det`/`inv`/`transpose` out-of-scope sizes. Each diagnostic added pinned by a test.
-- [ ] Cycle 3: **`--derive` through matrix expressions.** Ship matrix-valued derive support OR file the concrete `#10a` sub-issues with reopen triggers. (Not research-only — every cycle ships either a fix or a sharp trigger per critic adjustment.) Currently `bindings` is `map<string, double>`; `solved_symbolic_` is the parallel ExprPtr map. Determine whether matrix-valued bindings need the symbolic-map promotion sketched in `#10a`, or whether matrix `--derive` works today via `solved_symbolic_` only.
-- [ ] Cycle 4: **Round-trip safety and the arc-exit gate.** Does piping `--derive` output through fwiz again preserve matrix literals? `[[1,2],[3,4]]` should re-parse identically. Test against the existing fuzz harness with vec/mat-flavored seed corpus. Cycle's bonus: emit the arc-exit summary — what we learned, what surfaces are now demonstrably stable, what should and should not be in the queued completeness arc's prerequisites.
+- [x] Cycle 1: **Matrix-flavored fuzz baseline** (`2d63b77`). 6 new corpus seeds; clean 60s fuzz baseline (12,519 execs / 0 crashes). Future #69 filed via corpus smoke-testing.
+- [x] Cycle 2: **User-facing error messages + Future #69 fix** (`65101ec`). Ragged-matrix-literal parse-time validation (`RaggedMatrixError` sibling exception). Cross-file resolution cycle SIGSEGV fixed (`CrossFileResolutionCycleError` + thread-local guard). `load_lines` catch narrowed to `runtime_error` — sibling-exception convention codified.
+- [x] Cycle 3: **`--derive` determination + Future #71 filing** (`79661aa`). Determination: matrix `--derive` works today via `solved_symbolic_`; `#10a` structural escalation NOT needed. 8 regression tests pinning working corners. Future #71 IN-SCOPE filed for diff/integral matrix-distribution gap.
+- [x] Cycle 4: **Round-trip safety + arc-exit** (cycle 4 commit). 10 round-trip + known-limitation ASSERTs. Cumulative fuzz re-run: 9028 execs / 0 crashes. `make valgrind` re-run: 0 errors / 0 leaks. Arc-exit summary in docs/COMPLETED.md.
+
+**Outcome (Tests 3346 → 3395, +49)**:
+- Future #69 DONE (cross-file resolution cycle SIGSEGV).
+- Future #70 PARKED (deferred shape-mismatch diagnostic-track).
+- Future #71 IN-SCOPE (diff/integral over vec/mat distribution — routed to queued completeness arc).
+- Sibling-exception convention codified codebase-wide.
+- ~60-70 net production LOC. 0 implementer blocks. 3 self-fixes total.
+
+See `docs/COMPLETED.md` for the full arc-exit summary.
 
 **Exit criterion:** ship matrix-surface improvements until either (a) all 4 milestones close, OR (b) the arc surfaces a structural escalation that warrants a planning round (most likely candidate: cycle 3 reveals `#10a` matrix-valued bindings work is genuinely required to make `--derive` matrix expressions coherent — that escalation would defer to a fresh planning cycle).
 
@@ -66,13 +78,10 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 
 **Vision alignment:** Linear algebra is universal mathematics. Encoding quaternions as `FUNC_CALL` sugar honors the tiny-core principle; the engine grows by composition, not by adding leaves.
 
-## Completed arcs
-
-_(none yet — generation 1 is the first active arc)_
-
 ## Generation log
 
-- **Generation 1 (2026-05-13)**: Diagnostic-quality arc on existing matrix surfaces selected over Linear-algebra completeness (runner-up). User invoked `/plan-campaign` with seed "vectors, matrices, quaternions" after three consecutive clean single-cycle closes (docs-catchup, valgrind oracle, Future #67 dispatch unification). Plan-critic's verdict (confidence medium) chose the seed-as-constraint-to-challenge campaign over the literal-interpretation campaign: no user has fired the `#14` reopen triggers for completeness items, and the matrix surface shipped scope-limited 3 days prior with zero fuzz coverage and minimal end-to-end verification. User accepted the critic's pick. Linear-algebra completeness queued as the natural follow-on once the diagnostic arc closes or a user signal fires.
+- **Generation 1 (2026-05-13)**: Diagnostic-quality arc on existing matrix surfaces selected over Linear-algebra completeness (runner-up). User invoked `/plan-campaign` with seed "vectors, matrices, quaternions" after three consecutive clean single-cycle closes (docs-catchup, valgrind oracle, Future #67 dispatch unification). Plan-critic's verdict (confidence medium) chose the seed-as-constraint-to-challenge campaign over the literal-interpretation campaign. User accepted the critic's pick. Linear-algebra completeness queued as the natural follow-on.
+- **Generation 1 arc complete (2026-05-13)**: Matrix-surface diagnostic-quality arc shipped all 4 cycles cleanly under autonomous mode. 0 implementer blocks. Tests 3346 → 3395 (+49). Future #69 DONE, #70 PARKED, #71 NEW. Sibling-exception convention codified codebase-wide. Arc-exit-criterion (b) never fired. Queued Linear-algebra completeness arc remains queued; next `/plan-campaign` run (or user direction) promotes it or generates fresh alternatives.
 
 ## Arc entry format
 
