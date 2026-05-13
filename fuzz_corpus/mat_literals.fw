@@ -1,0 +1,10 @@
+# mat_literals.fw — mat literal parsing seeds (#14)
+identity_2x2 = [[1, 0], [0, 1]]
+identity_3x3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+symbolic_2x2 = [[a, b], [c, d]]
+rotation_2x2 = [[cos(theta), -sin(theta)], [sin(theta), cos(theta)]]
+mixed = [[1, x], [y, 2]]
+single_row = [[1, 2, 3]]
+single_col = [[1], [2], [3]]
+ragged_3 = [[1, 2], [3, 4, 5], [6]]
+nested = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]

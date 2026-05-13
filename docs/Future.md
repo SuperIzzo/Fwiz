@@ -774,6 +774,40 @@ M1 ships in-file `integral(target, var)=?[alias]` and inline `f = integral(g, x)
 
 **Reopen trigger:** LLM benchmark run or user reports trying `--integrate` and finding it absent (signals the discoverability gap is real).
 
+## 69. Cross-file resolution cycle SIGSEGV (matrix-arc diagnostic finding) — IN-SCOPE
+
+**Surfaced 2026-05-13** during the Matrix-surface diagnostic-quality arc, cycle 1 corpus prep. Found via smoke-testing fuzz seeds before invoking the fuzzer.
+
+**Reproducer:**
+```bash
+mkdir -p /tmp/repro
+cat > /tmp/repro/matmul.fw << 'EOF'
+[matmul(A, B) -> R] = matmul(A, B)
+EOF
+cat > /tmp/repro/caller.fw << 'EOF'
+result = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])
+EOF
+./bin/fwiz '/tmp/repro/caller.fw(result=?)'
+# → SIGSEGV (exit 139)
+```
+
+**Mechanism:** `load_sub_system(file_stem)` at `system.h:2633` always tries `<base_dir>/<file_stem>.fw` first before falling back to embedded definitions (lines 2672-2688). When `caller.fw` is loaded as the main file, `base_dir` = `/tmp/repro`. The `matmul(A, B)` call triggers `load_sub_system("matmul")`, which loads `/tmp/repro/matmul.fw`. That file itself contains `matmul(A, B)` recursively. Each recursive cross-file load creates a NEW `FormulaSystem` instance with its own `sub_systems` cache (line 376), so the cache hit at line 2662 never fires. Infinite recursion → stack overflow → SIGSEGV.
+
+**Critically NOT caught by the fuzz harness**: the harness uses `sys.load_string(source)` directly (`src/fuzz_parser.cpp:32`); the bug surfaces only when `sub->load_file(abs_path, section)` (line 2673) is reached, which only happens via the CLI dispatch path or programmatic `load_file`. Verified: `load_string` + `resolve_all` on the same content throws "Cannot solve for 'result'" cleanly (no crash).
+
+**Pre-existing or new?** Pre-existing. `load_sub_system` predates #14 (vec/mat); the bug is in cross-file resolution generally, not in matrix-specific code. #14 (matmul/det/inv/transpose builtins) is the trigger that surfaced it — any user file that calls a builtin AND has a same-named `.fw` file in its directory shadows the builtin and recursively loads. Likely affects every other builtin name (`sin.fw`, `cos.fw`, `sqrt.fw`, `log.fw`, etc.) the same way.
+
+**Why it slipped previously:** Probably zero users had a same-named `.fw` file in their working directory until the matrix arc started exercising the new builtins with corpus seeds. The conditions for triggering it are: (a) `.fw` file at `<base_dir>/<funcname>.fw` exists, (b) the file's body recursively calls `<funcname>`, (c) invocation goes through the CLI or `load_file` (not pure `load_string`). All three conditions are easy to hit accidentally during corpus prep.
+
+**Fix surface** (deferred to cycle 2 of the diagnostic-quality arc — the error-messages cycle):
+- Add a thread-local "currently loading" set to `load_sub_system`. Bail with a clear error message ("cross-file resolution cycle: matmul → matmul → ...") when the same file_stem is re-entered.
+- Alternative: pre-populate `sub_systems[cache_key]` with a placeholder before recursing, replace after load completes. The cache check at line 2662 then catches the recursion.
+- Either fix is ~5-10 LOC + a regression test.
+
+**Scope alignment:** Cycle 2 of the arc is "user-facing error messages and shape-mismatch provenance." A clean "cross-file resolution cycle" error message replacing a SIGSEGV is exactly the cycle's deliverable shape.
+
+**Reopen trigger:** picked up in cycle 2 of the active ROADMAP arc.
+
 ## 68. True structs / systems-as-structs — PARKED
 
 **Surfaced 2026-05-13** during completeness-arc planning. The matrix-arc work (#14 vec/mat, future quaternions) clarified that vec/quat are arrays — their identity is "ordered tuple with algebraic operations", not "aggregate of named fields". #15 (flat-naming) handles the "named scalar components" case for formulas where `position_x`, `velocity_y` etc. read naturally. So the simple "add `.x` swizzle access to vec literals" path is deliberately not taken.

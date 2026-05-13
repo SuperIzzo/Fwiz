@@ -1,0 +1,13 @@
+# matmul.fw — matmul invocations (#14)
+I_2 = [[1, 0], [0, 1]]
+M = [[1, 2], [3, 4]]
+B = [[5, 6], [7, 8]]
+P1 = matmul(I_2, M)
+P2 = matmul(M, B)
+P3 = matmul(matmul(M, B), I_2)
+shape_3x2 = [[1, 2], [3, 4], [5, 6]]
+shape_2x3 = [[1, 2, 3], [4, 5, 6]]
+P4 = matmul(shape_3x2, shape_2x3)
+P5 = matmul(shape_2x3, shape_3x2)
+mismatch = matmul([[1, 2]], [[3, 4], [5, 6], [7, 8]])
+symbolic = matmul([[a, b], [c, d]], [[e, f], [g, h]])

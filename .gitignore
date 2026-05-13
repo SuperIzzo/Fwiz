@@ -1,2 +1,8 @@
 bin/
 .fwiz-workflow/
+
+# libFuzzer auto-added corpus files. Human-curated seeds (*.fw) are tracked;
+# runtime-generated coverage expansions are local-only. Ignore everything in
+# fuzz_corpus/ except *.fw seeds.
+fuzz_corpus/*
+!fuzz_corpus/*.fw
