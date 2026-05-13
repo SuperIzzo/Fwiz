@@ -840,6 +840,28 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
+## 72. `make analyze-full` (clang-tidy) hang re-occurrence — IN-SCOPE
+
+**Surfaced 2026-05-13** during ROADMAP gen-2 planning. User reported: "clang-tidy hangs that's why we don't run it anymore — we can try at the end but if it takes longer than 2 hours it's not going to complete."
+
+**Context.** The 2026-05-07 bisection (`debug-analyze-full-hang.md`) excluded `bugprone-exception-escape` and `bugprone-unchecked-optional-access` from the check set, dropping wall-clock from infinite-hang to ~10s. CLAUDE.md and `.claude/agents/fwiz-orchestrator-ops.md` both claim "~10 s post-fix." User observation contradicts that claim — in practice the tool still hangs to the point where it's been retired from the per-cycle workflow.
+
+**What changed between the 2026-05-07 fix and now (unknown).** Possibilities:
+- A newer check (e.g. `clang-analyzer-*` or `performance-*` family) introduced an analogous whole-program hang.
+- A code change introduced a pattern that triggers a different pathological check.
+- The 2026-05-07 measurement was on a different surface; cumulative diff since then exposes a new hang.
+
+**Fix surface (next time `make analyze-full` is investigated):**
+- Re-bisect against the current source. `git checkout 2026-05-07-baseline && make analyze-full` should still be ~10s; deltas since then are the bisection target.
+- Probably another bugprone-* or clang-analyzer-* check has a similar whole-call-graph dataflow explosion.
+- Either narrow the check set further or migrate to a different static-analysis tool (e.g. cppcheck with extended scope, or include-what-you-use for the dependency-direction checks).
+
+**Process implication.** Per the orchestrator-ops cross-cycle escalation rule ("3+ cycles with zero successful runs → escalate to debugger"), the threshold tripped quietly some time ago — the rule didn't fire because the orchestrator profile claims the tool works. Updating the profile to acknowledge the hang is overdue.
+
+**Reopen trigger.** Either (a) the user wants to run `make analyze-full` as a one-shot oracle (timeout 2hr) and the result informs whether re-bisection is worth a debugger cycle; OR (b) `make analyze-full` becomes important for a release / CI gating; OR (c) a parallel arc surfaces analyze-full evidence as a prerequisite.
+
+**Adjacent action**: update CLAUDE.md and `.claude/agents/fwiz-orchestrator-ops.md` to acknowledge the hang re-occurrence and retire clang-tidy as a per-cycle oracle recommendation. The cycles-since-last-clang-tidy tracking should retire too — the right counter is "cycles since debugger investigation" now.
+
 ## 68. True structs / systems-as-structs — PARKED
 
 **Surfaced 2026-05-13** during completeness-arc planning. The matrix-arc work (#14 vec/mat, future quaternions) clarified that vec/quat are arrays — their identity is "ordered tuple with algebraic operations", not "aggregate of named fields". #15 (flat-naming) handles the "named scalar components" case for formulas where `position_x`, `velocity_y` etc. read naturally. So the simple "add `.x` swizzle access to vec literals" path is deliberately not taken.

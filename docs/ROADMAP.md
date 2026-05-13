@@ -10,12 +10,65 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
 <!-- last-updated: 2026-05-13 -->
-<!-- selected-by-cycle: 2026-05-13 Matrix-arc Cycle 4 close -->
-<!-- generation: 1 -->
+<!-- selected-by-cycle: 2026-05-13 /plan-campaign gen-2 (Units arc selected) -->
+<!-- generation: 2 -->
 
 ## Active arc
 
-_(none — generation-1 arc completed 2026-05-13. Fire `/plan-campaign` to promote the queued Linear-algebra completeness arc or to generate fresh alternatives.)_
+### Arc: Units of measurement — engine surface + stdlib catalog (Future #7)
+
+**Theme:** Ship the engine-level unit-suffix mechanism (option C — parser desugar `100kg → 100 * kg`) and the stdlib `units/*.fw` catalog. Capability-unlock-foundation: opens stdlib (#8), dimensional analysis (#7b), LaTeX of unit-bearing equations, and several parked items waiting on units as a prerequisite.
+**Started:** 2026-05-13
+**Estimated cycles:** 4
+**Cycles elapsed:** 0
+**Status:** in-progress
+
+**Milestones:**
+- [ ] Cycle 1: **API decision + lexer hook.** Lock option C as the chosen path (parser desugar `100kg → 100 * kg` where `kg` is a regular `Var`). Settle the 5 open API questions from Future #7 (suffix grammar, compound suffixes, disambiguation, round-trip rules). Ship the lexer hook for `<number><identifier>` boundary detection. Acceptance test: round-trip safety on `100kg → 100 * kg` — `--derive` output re-parses identically (mirrors the matrix-arc's cycle-1 fuzz baseline discipline). The cycle MUST exit (b) to a planning round if option C surfaces a structural blocker — do not silently switch to option A or B mid-cycle.
+- [ ] Cycle 2: **stdlib/units/si.fw — base catalog.** SI base + prefixes (kilo, milli, micro, nano, mega) as `.fw` constants. The simplest viable form: `kg = 1; km = 1000 * m` with the tagging questions (`[si_mass]` etc.) deferred unless cycle 1 settles them as in-scope. Conversion rules as `.fw` rewrite rules.
+- [ ] Cycle 3: **stdlib/units/derived.fw — derived units.** N, J, W, Pa, etc. as products of base units. End-to-end test: `physics/mechanics.fw` solving force = mass * acceleration with real SI inputs.
+- [ ] Cycle 4: **#7b dimensional analysis as `.fw` predicate** OR escalate. If `is_dim_compatible(a, b)` can be expressed as a typed-binding predicate (per Future #53's per-consumer schedule), ship it. If not, file the typed-FORMULA_CALL #20 escalation with a sharp reopen trigger and exit the arc cleanly. **This is the natural arc-exit gate (exit-criterion b).**
+
+**Exit criterion:** ship the 4 milestones cleanly, OR escalate to a planning round if (a) cycle 1's option-C decision surfaces a structural blocker, OR (b) cycle 4's dim-analysis exposes typed-predicate gaps that existing `.fw` predicates can't express (Future #20 typed FORMULA_CALL becomes prerequisite work).
+
+**Vision alignment:** Units make `speed = distance / time` solve `100km / 2hr = 50 km/hr` end-to-end — a canonical "math on a whiteboard" example fwiz currently can't handle. Option C keeps the engine surface minimal; semantics live in `.fw` files (tiny-core principle). Units are an LLM-ergonomics multiplier — every physics/engineering benchmark that asks "what's the force in Newtons" needs them. The split into #7/#7a/#7b (engine/stdlib/dim-analysis) was clarified in commit `e26b493` and is the textbook visionary-discipline shape.
+
+**Why this arc was chosen** (plan-critic, 2026-05-13 gen-2, confidence medium): Pendulum constraint dominates the selection. 5 of last 6 commits are internal quality/structural work; the next arc must add visible user-facing capability or the macro-pattern becomes self-reinforcing. Within the feature-extension options, the "no external user signal" constraint that pinned linear-algebra-completeness as gen-1 runner-up still binds (4 more cycles of evidence, no `#14` reopen trigger fired). Units is the one feature campaign where the consumer is the project's own stated north-star: every stdlib formula the project wants to ship is a unit-bearing formula. Option C respects tiny-core — same architectural pattern that made #14 vec/mat sugar a clean ship.
+
+**Critic adjustments to ideator's plan** (applied above):
+- Locked option C as cycle-1 design constraint with explicit escalation discipline (no silent switch to A or B).
+- Cycle-1 acceptance test: round-trip safety (mirrors matrix-arc cycle-1 fuzz-baseline discipline).
+- Dropped stretch cycles 5-6 (display formatting + `#45` aliases-audit). Both are different campaigns; treat as adjacencies that fire on their own triggers.
+- Cycle 4 (#7b dim-analysis) is the natural arc-exit gate — exit-criterion (b) escalation if typed predicates are insufficient.
+
+**Reopen / extend trigger:** Arc completes cleanly → fire `/plan-campaign` to pick the next arc. Cycle-1 or cycle-4 exit-criterion (b) fires → planning round.
+
+## Queued arcs
+
+### Arc: Linear-algebra completeness — finish what #14 started
+
+**Theme:** Make fwiz a credible linear-algebra engine. N×N determinant + inverse + eigenvalues, quaternions as the first non-commutative algebra, complex-element matrices unblocked.
+**Estimated cycles:** 5-7
+**Queued reason:** Matrix-arc gen-1 paved the substrate; Future #71 IN-SCOPE is the natural cycle-1 opener. Held queued through gen-2 selection because no external `#14` reopen trigger has fired across 4 more cycles of evidence. The plan-critic's gen-2 verdict explicitly noted: if `/plan-campaign` fires a third time with this STILL queued and the weakness unchanged, the right move is to actively reject and replace the queued slot — agent-initiated breadth doesn't get an indefinite runner-up grace period.
+
+**Promotion triggers**: (a) user fires a `#14` reopen trigger with concrete need for N×N inversion / eigenvalues / quaternions; OR (b) units arc ships cleanly AND the pendulum-signal has visibly broken, restoring license for an agent-initiated capability arc.
+
+### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
+
+**Theme:** Build a public LLM benchmark suite that exercises fwiz end-to-end through CLI / `.fw` ergonomics on real STEM problems. Generate empirical signal for missing capabilities, ergonomic friction, and where the LLM-as-user gap actually lives. Scoped down from the ideator's original 5-cycle proposal per critic recommendation: drop the "fix friction" feature-arc-in-disguise cycle and the cross-model evaluation (network deps).
+**Estimated cycles:** 3
+**Queued reason:** User confirmed at gen-2 selection: "indeed LLM benchmark is something we need to test — we have not checked how well LLMs deal with the CLI." The visionary doc names LLMs as primary users; that claim has never been measured. Held queued behind the Units arc per critic's sequencing recommendation: benchmarking the post-units surface is more informative than benchmarking today's.
+
+**Milestone sketch** (refines when promoted to active):
+- Cycle 1: Benchmark suite scaffolding in `benchmarks/llm-stem/` with 30-50 hand-curated STEM problems. Each: natural-language statement + expected fwiz invocation + expected answer. Runner is wrapper-tier Python (outside the C++ core).
+- Cycle 2: First baseline run + failure taxonomy. Bucket failures (syntax errors, missing capabilities, ergonomic friction, ambiguous error messages, fwiz bugs). Each failure files a Future.md entry with `**LLM-benchmark trigger:** seen in <problem-id>` — the user signal the project's been hungry for.
+- Cycle 3: `make benchmark` target + trend file `.fwiz-workflow/llm-benchmark-history.md`. Continuous integration into per-arc-close audit.
+
+**Promotion triggers**: (a) Units arc ships cleanly; OR (b) user explicitly requests; OR (c) `/plan-campaign` gen-3 (or later) re-prioritizes.
+
+## Completed arcs
+
+### Arc: Matrix-surface diagnostic-quality ✓ COMPLETE 2026-05-13
 
 ## Completed arcs
 
@@ -82,6 +135,7 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 
 - **Generation 1 (2026-05-13)**: Diagnostic-quality arc on existing matrix surfaces selected over Linear-algebra completeness (runner-up). User invoked `/plan-campaign` with seed "vectors, matrices, quaternions" after three consecutive clean single-cycle closes (docs-catchup, valgrind oracle, Future #67 dispatch unification). Plan-critic's verdict (confidence medium) chose the seed-as-constraint-to-challenge campaign over the literal-interpretation campaign. User accepted the critic's pick. Linear-algebra completeness queued as the natural follow-on.
 - **Generation 1 arc complete (2026-05-13)**: Matrix-surface diagnostic-quality arc shipped all 4 cycles cleanly under autonomous mode. 0 implementer blocks. Tests 3346 → 3395 (+49). Future #69 DONE, #70 PARKED, #71 NEW. Sibling-exception convention codified codebase-wide. Arc-exit-criterion (b) never fired. Queued Linear-algebra completeness arc remains queued; next `/plan-campaign` run (or user direction) promotes it or generates fresh alternatives.
+- **Generation 2 (2026-05-13)**: Units of measurement arc (Future #7) selected over Linear-algebra completeness (still queued) and over the LLM-ergonomics benchmark campaign (newly queued). User invoked `/plan-campaign` at gen-1 arc close per reflector recommendation (`new-arc` verdict, medium confidence — reflector flagged that the pendulum has swung deep into internal work: 5 of 6 commits internal/hardening). Plan-critic chose Units (medium confidence) over Linear-algebra completeness based on two converging signals: (a) the "no external user signal" weakness that pinned linear-algebra as runner-up at gen-1 accumulated 4 more cycles of evidence with no #14 reopen trigger fired; (b) Units is the one feature campaign where the consumer is the project's own stated north-star — every stdlib formula is a unit-bearing formula, so the consumer isn't an absent user but the engine's own roadmap. User confirmed: "Units should be a fairly simple feature to implement, we need to design the language features that will allow users to seamlessly add new units (I think that's already described in the future brief)". User also confirmed the LLM-benchmark idea ("we have not checked how well LLMs deal with the CLI") — held queued behind units per critic's sequencing recommendation. Two contrarian critic picks in two consecutive generations explicitly acknowledged: yesterday's purchased credibility, today's spent some of it.
 
 ## Arc entry format
 
