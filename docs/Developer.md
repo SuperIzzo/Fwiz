@@ -419,6 +419,8 @@ All handlers preserve **symbolic args** — `det([[a,b],[c,d]])` returns the sym
 
 **`evaluate()` rejects matrices**: `evaluate(parse("[1,2,3]"))` returns empty `Checked<double>`. Vector/matrix has no real-valued projection; the existing `args.size() != 1 || !lookup_function(name)` short-circuit in `evaluate()` already covers this — no new failure modes added.
 
+**`--derive` works today** (verified 2026-05-13, matrix-arc cycle 3 regression pins): concrete and symbolic vec/mat literals, `matmul`/`det`/`inv`/`transpose` outputs, and `matmul(A, inv(A))` cancellation all round-trip cleanly through `solved_symbolic_` → `format_derived`. No `#10a` structural extension required for the current derive scope. The known gap is `diff(M, t)` and `integral(M, t)` returning scalar-treatment instead of element-wise distribution — filed as Future.md #71 for the queued Linear-algebra completeness arc.
+
 **Out of scope** (Future.md / reopen triggers in `master-plan.md`): Gaussian elimination for `inv` of N≥4 (open `.fw`-rule alternative first); eigenvalues / LU / SVD; complex-element matrices (orthogonal vector — Future.md #13a); promotion to `ExprType::MATRIX` leaf (reopen when `vec`/`mat` dispatch shows >5% of `simplify` time on matrix-heavy reproducers).
 
 ### trace.h

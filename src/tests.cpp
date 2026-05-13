@@ -9838,6 +9838,142 @@ void test_vec_mat_type() {
     }
 }
 
+// ============================================================================
+//  Matrix-surface --derive regression pins (Matrix-arc cycle 3, 2026-05-13)
+// ============================================================================
+//
+// Pins the working corners of vec/mat under `--derive`. Cycle 3 was a
+// determination cycle: --derive on vec/mat works today via solved_symbolic_
+// (no #10a structural escalation needed). These regressions guarantee silent
+// drift in the matrix derive format will trip a test rather than hide.
+//
+// The 8 corners pinned mirror the 12-corner probe from cycle 3's brief —
+// trimmed to the cases that are both (a) actually working today and (b)
+// load-bearing for the user-facing derive contract. The four genuine gaps
+// (diff/integral don't distribute over vec/mat) are filed as Future #71
+// for the queued Linear-algebra completeness arc; see docs/Future.md #71.
+//
+// All cases use popen against ./bin/fwiz to exercise the full pipeline
+// (parser → simplifier → derive_all → format_derived → CLI rendering).
+// Format-pinning is intentional: if matrix derive output ever changes,
+// these tests need to fail and signal the change to a reviewer.
+
+void test_vec_mat_derive() {
+    SECTION("Vec/Mat under --derive — regression pins (Matrix-arc cycle 3)");
+
+    // Local capture helper — captures stdout+stderr from a CLI invocation.
+    // Trailing newline preserved; tests use find() for substring matches.
+    auto run = [](const std::string& cmd) -> std::string {
+        FILE* p = popen(cmd.c_str(), "r");
+        std::string out;
+        if (p) {
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), p)) out += buf;
+            pclose(p);
+        }
+        return out;
+    };
+
+    // 1. Whole-matrix --derive (concrete 2x2). Pinning the literal echo:
+    //    file binds M to a concrete mat literal; --derive returns it
+    //    verbatim via solved_symbolic_ → format_derived.
+    {
+        write_fw("/tmp/fwiz_md_1.fw", "M = [[1, 2], [3, 4]]\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_1.fw(M=?)' 2>&1");
+        ASSERT(out.find("M = [[1, 2], [3, 4]]") != std::string::npos,
+               "matrix-derive 1 (concrete 2x2): expected 'M = [[1, 2], [3, 4]]' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_1.fw");
+    }
+
+    // 2. Whole-vec --derive (concrete row vector). Same shape as case 1
+    //    but for a vec literal (FUNC_CALL "vec") rather than mat.
+    {
+        write_fw("/tmp/fwiz_md_2.fw", "M = [1, 2, 3]\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_2.fw(M=?)' 2>&1");
+        ASSERT(out.find("M = [1, 2, 3]") != std::string::npos,
+               "matrix-derive 2 (concrete vec): expected 'M = [1, 2, 3]' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_2.fw");
+    }
+
+    // 3. matmul --derive (concrete 2x2 × 2x2). The simplifier collapses
+    //    the matmul FUNC_CALL via evaluate_symbolic's mat dispatch; the
+    //    derive surface returns the product literal.
+    //    [[1,2],[3,4]] * [[5,6],[7,8]] = [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+    //                                  = [[19, 22], [43, 50]].
+    {
+        write_fw("/tmp/fwiz_md_3.fw", "C = matmul([[1, 2], [3, 4]], [[5, 6], [7, 8]])\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_3.fw(C=?)' 2>&1");
+        ASSERT(out.find("C = [[19, 22], [43, 50]]") != std::string::npos,
+               "matrix-derive 3 (concrete matmul): expected 'C = [[19, 22], [43, 50]]' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_3.fw");
+    }
+
+    // 4. det --derive (symbolic 2x2 with free vars declared). Pins the
+    //    Leibniz-formula expansion. Free-var query convention required —
+    //    case 8 below pins the negative invariant.
+    {
+        write_fw("/tmp/fwiz_md_4.fw", "D = det([[a, b], [c, d]])\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_4.fw(D=?, a, b, c, d)' 2>&1");
+        ASSERT(out.find("D = a * d - b * c") != std::string::npos,
+               "matrix-derive 4 (symbolic det 2x2): expected 'D = a * d - b * c' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_4.fw");
+    }
+
+    // 5. inv --derive (symbolic 2x2). Pins the element-wise rational
+    //    inverse: inv([[a,b],[c,d]]) = (1/det) * [[d, -b], [-c, a]].
+    //    The current output expansion is the un-grouped form — each
+    //    element divides individually by (a*d - b*c). If a future
+    //    simplifier change factors out the determinant, this test
+    //    will need updating (which is exactly the regression signal).
+    {
+        write_fw("/tmp/fwiz_md_5.fw", "I = inv([[a, b], [c, d]])\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_5.fw(I=?, a, b, c, d)' 2>&1");
+        const std::string expected =
+            "I = [[d / (a * d - b * c), -(b / (a * d - b * c))], "
+            "[-(c / (a * d - b * c)), a / (a * d - b * c)]]";
+        ASSERT(out.find(expected) != std::string::npos,
+               "matrix-derive 5 (symbolic inv 2x2): expected '" + expected + "' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_5.fw");
+    }
+
+    // 6. transpose --derive (symbolic 2x3). Pins the row/column swap
+    //    behavior: rows of length 3 become columns, output is 3x2.
+    {
+        write_fw("/tmp/fwiz_md_6.fw", "T = transpose([[a, b, c], [d, e, f]])\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_6.fw(T=?, a, b, c, d, e, f)' 2>&1");
+        ASSERT(out.find("T = [[a, d], [b, e], [c, f]]") != std::string::npos,
+               "matrix-derive 6 (symbolic transpose 2x3): expected 'T = [[a, d], [b, e], [c, f]]' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_6.fw");
+    }
+
+    // 7. matmul(A, inv(A)) cancellation (concrete). The chain
+    //    matmul(A, inv(A)) → I_2 is end-to-end: inv simplifies first
+    //    (concrete numerator over concrete determinant), then matmul
+    //    cancellation simplifies the product to identity. Pins the
+    //    full cancellation chain — if either step regresses, the
+    //    output stops being the literal identity.
+    {
+        write_fw("/tmp/fwiz_md_7.fw", "P = matmul([[1, 2], [3, 4]], inv([[1, 2], [3, 4]]))\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_7.fw(P=?)' 2>&1");
+        ASSERT(out.find("P = [[1, 0], [0, 1]]") != std::string::npos,
+               "matrix-derive 7 (concrete matmul(A, inv(A)) = I_2): expected 'P = [[1, 0], [0, 1]]' (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_7.fw");
+    }
+
+    // 8. Free-var convention regression: omitting the free-var
+    //    declarations on a symbolic matrix derive query produces
+    //    "Cannot derive equation for 'M'" — NOT a silent miss with
+    //    empty output. This pins the negative side of the
+    //    free-vars-must-be-declared convention.
+    {
+        write_fw("/tmp/fwiz_md_8.fw", "M = [[a, b], [c, d]]\n");
+        std::string out = run("./bin/fwiz --derive '/tmp/fwiz_md_8.fw(M=?)' 2>&1");
+        ASSERT(out.find("Cannot derive equation") != std::string::npos,
+               "matrix-derive 8 (free-var convention): expected 'Cannot derive equation' when a,b,c,d not declared (got: '" + out + "')");
+        std::filesystem::remove("/tmp/fwiz_md_8.fw");
+    }
+}
+
 void test_undefined() {
     SECTION("Undefined Keyword");
 
@@ -14367,6 +14503,7 @@ int main() {
     test_oq5_collect_vars_with_i();
     test_struct_dotnames();
     test_vec_mat_type();
+    test_vec_mat_derive();
     test_undefined();
     test_context_aware_simplification();
     test_positional_args();

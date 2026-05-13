@@ -882,6 +882,35 @@ The dot in `body.velocity_y` is the same dot that today routes `geometry.triangl
 
 **Reopen trigger.** User picks up the design — needs research phase and a fresh design trio.
 
+## 71. `diff` / `integral` don't distribute over vec/mat — IN-SCOPE
+
+**Surfaced 2026-05-13** during cycle 3 of the Matrix-surface diagnostic-quality arc.
+
+**Reproducer:**
+
+```bash
+# diff of matrix-valued integrand returns 0 (wrong; should distribute element-wise)
+$ echo 'M = [[t, t^2], [1, t]]' > /tmp/repro.fw
+$ fwiz --derive '/tmp/repro.fw(diff(M, t)=?, t)'
+# → diff_t = 0
+# expected: [[1, 2*t], [0, 1]]
+
+# integral of matrix-valued integrand treats matrix as constant
+$ fwiz --derive '/tmp/repro.fw(integral(M, t)=?, t)'
+# → integral_t = [[t, t^2], [1, t]] * t
+# expected: [[t^2/2, t^3/3], [t, t^2/2]]
+```
+
+Same shape applies to vec literals. `diff(v, t)` returns 0; `integral(v, t)` returns `v * t`.
+
+**Cause:** `symbolic_diff` (`src/expr.h`) and `symbolic_integrate` (`src/expr.h`) don't recognize `vec`/`mat` FUNC_CALL nodes as containers to distribute over. The dispatch table sees `FUNC_CALL("mat", ...)` as opaque — falls to the constant-w.r.t.-x default branch (because the FUNC_CALL doesn't appear in the `BuiltinMeta` registry for differentiation/integration).
+
+**Fix surface:** add a vec/mat branch at the top of `symbolic_diff` and `symbolic_integrate` that recurses over `args[i]` element-wise and rebuilds the container. Same pattern as `try_simplify_vec_mat_binop` uses for ADD/SUB/scalar-MUL. Roughly 10–20 LOC each.
+
+**Why deferred to the completeness arc:** the matrix-surface diagnostic-quality arc (cycles 1–4) is about *substrate quality* — fuzz coverage, error messages, round-trip safety. Adding vec/mat distribution to `diff` / `integral` is a *capability extension* and belongs in the queued Linear-algebra completeness arc. Cycle 3's exit criterion (b) check is satisfied — no structural escalation needed for the diagnostic arc to proceed to cycle 4 (round-trip safety). #71 is the natural cycle-1 or cycle-2 opener for the completeness arc.
+
+**Reopen trigger:** queued Linear-algebra completeness arc becomes active, OR user reports the gap with a concrete domain reproducer.
+
 ## Refactors
 
 Readability-driven refactor candidates filed by the blind-spot critic. Each carries a **From** (source cycle + grader-tier failure), a **Proposed** (concrete change), and a **Reopen trigger**. The visionary audit tier-classifies these on the next cycle.

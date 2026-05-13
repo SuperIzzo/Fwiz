@@ -142,7 +142,7 @@ v = [1, 2, 3]                   # row vector (FUNC_CALL "vec" internally)
 m = [[1, 0], [0, 1]]            # 2×2 matrix (FUNC_CALL "mat", rows are vec calls)
 w = [a, b+1, c^2]              # symbolic elements supported
 ```
-Element-wise add/sub and scalar-mul simplify automatically. Matrix builtins: `matmul(A, B)`, `det(M)` (2×2 and 3×3), `inv(M)` (2×2), `transpose(M)` (general). Shape mismatch → `undefined`. No new `ExprType` — `sizeof(Expr)` unchanged. See Developer.md §"Vectors and matrices" and Known-Issues #12 for scope.
+Element-wise add/sub and scalar-mul simplify automatically. Matrix builtins: `matmul(A, B)`, `det(M)` (2×2 and 3×3), `inv(M)` (2×2), `transpose(M)` (general). Shape mismatch → `undefined`. No new `ExprType` — `sizeof(Expr)` unchanged. See Developer.md §"Vectors and matrices" and Known-Issues #12 for scope. **`--derive` on whole vec/mat works today** via `solved_symbolic_` — concrete and symbolic literals, `matmul`/`det`/`inv`/`transpose` outputs, and `matmul(A, inv(A))` cancellation all round-trip cleanly; no `#10a` structural extension needed for the current derive scope. `diff` / `integral` do NOT yet distribute over vec/mat containers (Future #71, deferred to the queued Linear-algebra completeness arc).
 
 ### Numeric solving
 Enabled by default. Nonlinear equations (quadratics, transcendentals, recursive inverses) solved via adaptive grid scan + Newton/bisection. Exact results use `=`, approximate use `~`.
