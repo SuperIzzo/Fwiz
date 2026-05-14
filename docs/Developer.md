@@ -62,7 +62,7 @@ Current capabilities:
 - Output formatting: `--approximate` (collapse to float) / `--exact` (default, human-readable fractions and constants); `fmt_exact_double` shared helper closes solve/derive asymmetry
 
 Planned (see Future.md):
-- **Units** — dimensional analysis and automatic conversion
+- **Units / dimensional analysis** — hybrid dim model decided (gen-3 cycle 1, 2026-05-14): bare `[name]` dim sections + `:` annotation + `is_in_dimension` predicate. Cycle 2 ships substrate; cycle 3 adds `compute_dim` propagation algebra. See Future #78 (DONE-by-design) and #7b (two-step DONE framing).
 - **Fraction representation** — exact arithmetic
 - **LaTeX export**
 - **Standard library** — curated `.fw` files

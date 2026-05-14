@@ -2,6 +2,24 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Constants-as-units design (gen-3 cycle 1) — ✅ DESIGN DECIDED (2026-05-14, ROADMAP gen-3)
+
+**Design cycle** — no code shipped. Deliverable: decision document + Future.md updates. Cycle 2 ships the substrate.
+
+**Decision**: HYBRID model + Answer C staging. Bare `[name]` sections declare dimension categories (reusing the existing `Section` infrastructure). `:` is the binding-annotation token (`m:mass = 10kg`). Intersection grammar `(t1, t2, ...)` for multi-typing. Dimension propagation through MUL/DIV/POW/NEG uses Approach A semantics (`compute_dim` walk + `BuiltinMeta.dim_propagate` callbacks — deferred to cycle 3). `is_in_dimension(expr, dim)` predicate ships as the 2nd typed-binding predicate (Future #65 schedule) in cycle 2.
+
+**Future.md outcomes**:
+- Future #78 → DONE-by-design (design question resolved).
+- Future #77 → REJECTED (see `docs/REJECTED.md`); the general `*` + `:` mechanism covers the motivating cases.
+- Future #7b → two-step DONE framing: atomic-Var rejection (cycle 2) + compound-expression rejection (cycle 3).
+- Future #65 → `is_in_dimension` named as next consumer.
+- Future #81 → NEW PARKED: named compound-dim aliases (`[speed] := length/time`).
+- Future #82 → NEW PARKED: consolidate binding-side parallel maps when a 4th appears.
+
+**Design doc**: `.fwiz-workflow/design-proposal.md` (gen-3 cycle 1, 2026-05-14).
+
+---
+
 ## Units arc — ✅ COMPLETE (2026-05-14, ROADMAP gen-2)
 
 4-cycle campaign to add unit-of-measure support. Engine surface, stdlib catalogs, physics demo, dim-analysis decision. Goal met for cycles 1-3 (units mechanism + catalog + physics application); cycle 4 surfaced arc-exit-criterion (b) on dim-analysis (Future #7b blocked by Future #78). Tests: 3395 → 3505 (+110). Net source LOC ~70 across `src/lexer.h`, `src/parser.h`, `src/system.h`. Two new stdlib files (`units/si-minimal.fw`, `physics/mechanics.fw`).

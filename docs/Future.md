@@ -59,7 +59,11 @@ This item splits along the engine/stdlib axis per the project's wrapper-tier dis
 
 - **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. **Cycle 2 shipped 2026-05-13**: CLI-arg evaluation (#73 DONE); stdlib expanded 16→42 lines (SI prefixes + derived units). Remaining #7 work: dim-analysis stdlib (#7a), dimensional rejection (#7b).
 - **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
-- **#7b (PARKED — BLOCKED on #78)**: dimensional analysis rejection at parse/simplify time (reject `mass + time`). Cycle-4 verdict (2026-05-13, arc-exit-criterion-(b) firing): #7b cannot ship as a `.fw` predicate today because the substrate (dimension tags on `Var` bindings) doesn't exist. Today `kg = 1`, `s = 1`, `pi = 3.14...` are all scalar Vars with no way to distinguish "mass dimension" from "time dimension" from "dimensionless constant." A typed-binding predicate like `has_incompatible_dims(left, right)` has nothing to inspect. Resolving Future #78 (constants-as-units — does fwiz adopt dimension tags? are constants dimensionless units? are units a structural type or just an organizational convention?) is a prerequisite. The original reopen trigger ("user demonstrates parse-time dimensional rejection requirement that `.fw` rules can't capture") is REPLACED by: (a) Future #78 design cycle resolves the constants-as-units / dimension-tag question with a clear semantic model; (b) the cycle 4 verdict on whether `.fw` predicates are sufficient given that model — if yes, ship #7b as predicates; if no, escalate to engine-level dimension tagging.
+- **#7b (UNBLOCKED 2026-05-14 — two-step DONE framing per gen-3 cycle 1)**: dimensional analysis rejection at parse/simplify time. Future #78 resolved (hybrid dim model). Two-step DONE:
+  - **#7b BASIC (atomic-Var dimensional rejection)**: shipped as part of cycle 2 of the gen-3 arc (substrate). After cycle 2 lands, `.fw` rewrite rules can express `x + y = undefined iff is_in_dimension(x, mass) && is_in_dimension(y, time)` and the engine evaluates them at simplify time. **Trigger to mark DONE**: cycle 2 ships with criterion 5 (predicate works as rule condition) passing.
+  - **#7b FULL (compound-expression dimensional rejection)**: shipped as part of cycle 3 of the gen-3 arc — `compute_dim` propagation + `BuiltinMeta.dim_propagate` callbacks. Lets `is_in_dimension(MUL(a, b), mass)` resolve through compound expressions, not just bare Vars. **Trigger to mark DONE**: cycle 3 ships with ADD/SUB mismatch warnings and compound-expression test passing.
+
+  Original blocker (Future #78 resolution) cleared. Cycle-4-of-Units-arc verdict ("`.fw` predicates can't ship today because substrate doesn't exist") superseded — the substrate is the gen-3 cycle 2 deliverable.
 
 ### Problem (#7)
 
@@ -694,11 +698,12 @@ Migrated. The C++ block at `expr.h:2471-2477` (`is_num(r) && r->num < 0` branch)
 
 ## 65. Additional `.fw` typed-binding predicates (per-consumer schedule)
 
-Three predicates have named consumers but were not shipped in #53 (which delivered `is_neg_num` only, per minimalism critique). Each predicate ships in the cycle that consumes it:
+Four predicates have named consumers but were not shipped in #53 (which delivered `is_neg_num` only, per minimalism critique). Each predicate ships in the cycle that consumes it:
 
 - `is_int(n)` — binding is `Num` with integer value (`is_integer_value(e->num)`). Consumer: T3.5/#54 migration (needs `is_int` in rule condition AND `make_rational` callable from rule RHS — both blockers must clear).
 - `is_pos_num(n)` — binding is `Num` with value > 0. Consumer: Future #31 (`abs(x) = x iff x >= 0` partial form, partial form `abs(x) = x iff is_pos_num(x)` is deliverable without full global-condition propagation).
 - `is_num(n)` — binding is any `Num`. Consumer: Future #49 BuiltinMeta migration to `.fw` rules (needs integration-variable context threading as the independent secondary blocker).
+- `is_in_dimension(expr, dim)` — binding's `dim_map_` entry equals the given dim name. Consumer: cycle 2 of gen-3 Constants-as-units arc (substrate ship). Encoded as `CondClause{lhs=FUNC_CALL("is_in_dimension", {Var("v"), Var("mass")}), rhs=nullptr, op=CondOp::EQ}` — 2-argument predicate, second arg is the dim atom name. Body: direct lookup in `dim_map_` (passed as new optional 4th parameter to `check_condition`).
 
 **Reopen trigger (each):** the named consumer cycle starts. The predicate machinery (encoding, `predicate_names()` extension, `check_condition` dispatch branch) is already in place — adding a new predicate is one dispatch line + tests.
 
@@ -835,6 +840,47 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
+## 82. Consolidate binding-side metadata (dim_map_, solved_symbolic_, aliases_) — PARKED
+
+**Surfaced 2026-05-14** during gen-3 cycle 1 design (visionary risk #6b).
+
+**Today**: `FormulaSystem` carries three parallel mutable maps for per-variable metadata: `solved_symbolic_` (post-solve ExprPtrs for `--steps`/`--calc` rendering), `aliases_` (file-defined constants for `--derive` output), and `dim_map_` (dimension tags — landing in cycle 2 of the gen-3 arc). Each new code path that creates or modifies a binding must remember to update each parallel map. `solved_symbolic_` is the precedent and it works fine; `dim_map_` joins it as a second; the system stays manageable.
+
+**Concern**: when a *fourth* parallel-map appears (e.g. for type categories, source provenance, simplification flags), the maintenance friction becomes a real cost. Each new binding-side metadata kind costs N call-site updates.
+
+**The refactor**: collapse parallel maps into a single binding-representation:
+```cpp
+struct Binding {
+    ExprPtr value;          // currently in bindings_ map
+    ExprPtr symbolic;       // currently in solved_symbolic_
+    double  alias_value;    // currently in aliases_
+    std::string dim;        // currently in dim_map_
+    // future fields slot in here
+};
+std::map<std::string, Binding> bindings_;
+```
+Single map, single update site per binding mutation.
+
+**Reopen trigger**: a fourth parallel-map proposal lands on `FormulaSystem` (after `solved_symbolic_`, `aliases_`, `dim_map_`). Triggers a refactor cycle to consolidate. Approximate scale: ~50-80 LOC refactor + careful test verification of all existing binding-mutation sites.
+
+**Vision principle**: per CLAUDE.md "Remove > Add" — consolidating the parallel-map pattern removes the implicit invariant ("update N maps in lockstep") and replaces it with a structural one (single Binding owns all per-variable state).
+
+## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
+
+**Surfaced 2026-05-14** during gen-3 cycle 1 design (Answer C staging deferral).
+
+**Today** (after gen-3 cycle 2 lands): atomic dimension annotations work — `m:mass = 10kg`, `t:time = 5s`. Intersection works — `n:(int, mass) = 5kg`. Compound dimensions are computed in value-world via propagation (after cycle 3 lands) — `v = distance / duration` automatically has dim `[length/time]`.
+
+**Missing**: there's no syntax to NAME a compound dimension. A user wanting `v:speed = 10m/s` cannot — `speed` isn't declared as a dimension. They must either (a) leave `v` unannotated (engine still tracks via propagation) or (b) use intersection with both atoms `v:(length, time)` (semantically wrong — that's a multi-typed binding, not a length-per-time quantity).
+
+**Proposed syntax**: `[speed] := length/time`. Declares `speed` as an alias for the dimension `length/time`. After declaration, `v:speed = ...` works the same as `v:(...)` would if compound dim arithmetic existed in type position.
+
+**Why deferred to demand-pull**: the Answer C staging from gen-3 cycle 1 commits to "atomic + intersection only" at cycle 2. Compound-dim naming is the natural escape valve when users find atomic + intersection insufficient — but it MIGHT not be needed in practice. Most physics calculations don't need to NAME the intermediate compound dims; propagation tracks them silently.
+
+**Reopen trigger**: first user-filed issue or doc PR referencing compound dim names (e.g. "how do I declare `v` as a velocity without naming it?"). At that point, demand is concrete and the syntax is straightforward to add (~20-30 LOC `parse_line` + `dim_map_` extension).
+
+**NOT proposed**: ad-hoc type-position arithmetic (`v:length/time` directly in annotation without prior `:=` declaration). Speculative; meta-trigger ("evaluate after #81 ships"). May surface organically post-#81 — re-propose then.
+
 ## 80. Multi-file CLI load / `@include` directive — PARKED
 
 **Surfaced 2026-05-13** during Units cycle 3 implementation. The implementer flagged: docs/Language.md previously documented `fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)` as a CLI usage pattern, but the current CLI accepts exactly ONE filename. `main.cpp:129` concatenates non-flag args into a single `query_str` and `parse_cli_query` takes a single filename. The multi-file form silently fails. Cycle 3 worked around this by inlining the SI-base bindings into `stdlib/physics/mechanics.fw`. Cycle 4 retracted the misleading example in docs/Language.md.
@@ -876,7 +922,31 @@ The problem is **discrimination**: at CLI-parse time, we cannot distinguish "use
 
 **Reopen trigger**: user reports being confused by the new error-quality, OR LLM-ergonomics benchmark (queued arc) flags the deferred-identifier shape as a friction point, OR a follow-up Units cycle opens parser.h for unrelated work and the heuristic-warning bundle is cheap.
 
-## 78. Are constants units? Unify the constants/units catalog. — PARKED (needs design cycle)
+## 78. Are constants units? Unify the constants/units catalog. — ✅ DONE-by-design (2026-05-14, gen-3 cycle 1)
+
+**Decision (gen-3 cycle 1)**: HYBRID model + Answer C staging.
+
+**Model**: bare `[name]` sections declare dimension categories; their bindings inside ARE units of that dimension. `:` is the binding-annotation operator (`m:mass = 10kg`). Intersection grammar `(t1, t2, ...)` for multi-typing. **Dimension propagates through MUL/DIV/POW/NEG in value-world** (Approach A semantics) — both `10kg` and `10 * mass.kg` carry dimension `[mass]` automatically. Constants like `pi`, `e`, `phi` remain C++ builtins with implicit `dimensionless` (no section membership). The C++/stdlib split for constants becomes a performance concern, not a semantic concern. All scalar bindings are uniformly "named bindings in some namespace, possibly dimensioned."
+
+**Cycle-2 substrate scope** (Answer C staging — defers higher grammar):
+- `:` lexer token + `parse_line` annotation extension.
+- Bare `[name]` sections register as in-file sub-systems (`@dim:` cache-key prefix in `sub_systems`).
+- `dim_map_` registry on `FormulaSystem` (cycle 2: `std::string` per variable; cycle 3 promotes to `map<DimName, int>` exponent algebra).
+- `is_in_dimension(expr, dim)` predicate (#65 schedule, 2nd consumer after `is_neg_num`).
+- Intersection grammar `(t1, t2, ...)` — atomic type names ONLY, no operators inside parens.
+
+**Deferred to demand-pull future cycles**:
+- **Cycle 3 (gen-3 arc)**: `compute_dim` propagation algorithm + `BuiltinMeta.dim_propagate` callback field + Dim algebra (`map<string,int>` exponent representation). Triggered by ADD/SUB mismatch enforcement OR compound-expression rejection rules in stdlib `.fw`.
+- **Future #81 (NEW PARKED)**: named compound-dimension aliases (`[speed] := length/time`).
+- **Implicitly rejected (NOT filed)**: ad-hoc type-position arithmetic (`v:length/time` directly in annotation) — speculative, no concrete consumer.
+
+**Resolves**: Future #77 → REJECTED (see REJECTED.md), Future #7b → two-step DONE framing (atomic-Var rejection rules unblocked after cycle 2; compound-expression rejection requires cycle 3).
+
+**Design doc**: `.fwiz-workflow/design-proposal.md` (gen-3 cycle 1, 2026-05-14). Plan-mode refinement log in `/home/izzo/.claude/plans/quiet-roaming-quiche.md`.
+
+---
+
+### Historical context (#78 original framing — superseded)
 
 **Surfaced 2026-05-13** by the user immediately after the #76 denylist shipped: "if we're going to keep `i` and `pi` and `phi` as valid suffixes we have to define them as units... OR this surfaces an interesting question — can all constants be defined as units?"
 
@@ -901,7 +971,15 @@ Three plausible framings:
 
 **Reopen trigger.** User requests `/plan-campaign`-style design cycle for this question, OR Units cycle 4 (dim-analysis) brief enters planning.
 
-## 77. `_` as multiplication separator for reserved-prefix identifiers — PARKED (needs design cycle)
+## 77. `_` as multiplication separator for reserved-prefix identifiers — ✅ REJECTED (2026-05-14, gen-3 cycle 1)
+
+**Disposition**: REJECTED. Moved to `docs/REJECTED.md`. The hybrid dim model (Future #78) covers both motivating use cases without requiring a `_` separator: `i * km` works via dim propagation (`dim(i) = {}`, `dim(km) = {length:1}`); `c:(complex, length) = i * km` works via intersection annotation. Vision violation: adds a specialization (new separator syntax) where the general mechanism (`*` and `:`) already covers it. Per "Remove > Add."
+
+**Reopen trigger**: enough user reports of complex-number arithmetic friction accumulate to push priority back up AND the hybrid surface (cycle 2 of gen-3 arc) demonstrates the friction remains in practice. The user's "I'm not saying it's correct, it just sort of makes sense" framing acknowledged this might not be worth the design cost; the gen-3 cycle 1 verdict is that it isn't.
+
+---
+
+### Historical context (#77 original framing — superseded)
 
 **Surfaced 2026-05-13** by the user immediately after Future #76 shipped: "for `i` we might have to accept `_` as a valid suffix so `i_km` or `i_f`". Follow-up clarification: "I'm not saying it's correct btw, it just sort of makes sense — we should have a proper plan-critic-visionary cycle for that."
 
