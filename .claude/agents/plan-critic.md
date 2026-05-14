@@ -43,6 +43,22 @@ Evaluate each campaign against:
 5. **Strategic positioning.** Does this campaign open downstream options or close them off? Capability-unlock plans tend to open; specialised feature plans tend to close.
 6. **Counterfactual.** What does NOT shipping this campaign cost? If the answer is "very little," it's a low-priority pick.
 
+## Objective mode (since 2026-05-14)
+
+When the brief includes a user-supplied **objective** (a hard constraint, not a soft seed), the selection shape changes:
+
+- Add a 7th axis at the TOP of the list, dominant over the others:
+
+  **0. Objective fit.** Does this approach achieve the stated objective with the smallest cost (in cycles, in risk, in dependencies-revisited-later)? An approach that doesn't fully execute the objective is a structural failure — eliminate, do not run through the other axes.
+
+- The original 6 axes (vision, current state, velocity, risk, positioning, counterfactual) become **tiebreakers**, not gating criteria. Use them only between two approaches that BOTH satisfy the objective at comparable cost.
+
+- A common objective shape is a **design question** ("resolve Future.md item X / decide semantic model Y"). For design-question objectives:
+  - The "winning" approach is typically a **1-cycle design arc** producing a decision document. Reject approaches that propose multi-cycle implementation work unless the objective explicitly asked for it — that's scope creep beyond the objective contract.
+  - Critic's confidence reflects the design's coherence, not its implementation difficulty. A clean decision with confident framing earns high confidence even if the resulting implementation is large.
+
+- Honest "the objective is under-specified" verdicts are acceptable. If the ideator's approaches all fail to achieve the objective coherently, the right output is a low-confidence pick PLUS an explicit "user notes" item asking for objective clarification (e.g. "the objective doesn't constrain X; the approaches differ on X — please clarify").
+
 ## Process
 
 For each campaign:

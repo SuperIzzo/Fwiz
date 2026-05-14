@@ -10,12 +10,40 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
 <!-- last-updated: 2026-05-14 -->
-<!-- selected-by-cycle: 2026-05-14 Units arc Cycle 4 close (exit-criterion b) -->
-<!-- generation: 2 -->
+<!-- selected-by-cycle: 2026-05-14 /plan-campaign gen-3 (objective mode — constants-as-units design arc) -->
+<!-- generation: 3 -->
 
 ## Active arc
 
-_(none — generation-2 arc completed 2026-05-14. Fire `/plan-campaign` to promote a queued arc or to generate fresh alternatives. Note: Future #78 (constants-as-units) is queued as a design-cycle prerequisite for any further dim-analysis work.)_
+### Arc: Constants-as-units design (Future #78 + #77 unified resolution)
+
+**Theme:** Resolve Future #78 (constants-as-units semantic model) and Future #77 (`_` prefix-mul separator) as ONE unified design question. **Design arc** — deliverable is a Future.md decision document, not multi-cycle implementation. Decision: adopt the **Unification model** — every named scalar binding is a unit; constants are units with the `dimensionless` tag.
+**Started:** 2026-05-14
+**Estimated cycles:** 1 (design) + 1 (substrate ship)
+**Cycles elapsed:** 0
+**Status:** in-progress
+**Mode:** objective (`/plan-campaign --objective`)
+
+**Milestones:**
+- [ ] Cycle 1: **Decision document + Future.md updates.** Write `.fwiz-workflow/design-constants-as-units.md` (or `docs/Design-units.md` — placement per existing convention). The doc commits to: (a) unification model; (b) **binding-level dimension tags only** (no subexpression tags); (c) annotation syntax decision (`kg = 1 [mass]` vs alternatives — pick one, document the disambiguation rule against vec/mat `[1,2,3]` literals); (d) decision on `2e` under the unified model (does the #76 denylist hold for parser-typo reasons, or revert?); (e) `i`-stays-in-C++ rationale (NaN-sentinel structural reason, orthogonal to the units question); (f) `c` (speed-of-light) test case worked through (`c = 299792458 [length/time]` — dimensioned constant). At cycle close: Future #78 → DONE-by-design. Future #77 → REJECTED with reopen trigger ("#79 deferred-identifier diagnostic ships and `i*km` friction is empirically still painful"). Future #7b reopen-trigger updated: replaces "blocked on #78" with concrete trigger "cycle 2 of this arc ships dimension-tag substrate." REJECTED.md gets its first entry (#77).
+- [ ] Cycle 2: **Substrate ship.** Parser accepts the chosen annotation syntax on assignment RHS. `dimension_map_` sidecar on `FormulaSystem` populated at load. `has_incompatible_dims(left, right)` typed-binding predicate added (per Future #65 schedule). Stdlib catalogs annotated (`stdlib/units/si-minimal.fw` gets `[mass]`, `[length]`, etc.; `stdlib/constants/math.fw` gets `[dimensionless]`). The `.fw` rule `_ + _ = undefined iff has_incompatible_dims(left, right)` ships. Future #7b → DONE.
+
+**Exit criterion:** Cycle 1 ships the decision doc with all 6 adjustments locked → proceed to cycle 2. If cycle 1 surfaces a substrate concern the design pass cannot resolve abstractly, fall back to Approach E (empirical migration) as the cycle-1 recovery move — migrate `pi`/`e`/`phi` first, observe what breaks, design from the breakage.
+
+**Vision alignment:** Strongest of the 5 considered approaches. Removes a specialization (the C++/stdlib divide for constants becomes a perf cache, not a conceptual layer). Generalizes — substrate enables `.fw`-extendable dim-analysis per the tiny-core principle. Removes #76's denylist asymmetry (re-evaluates `e` under the unified model). The visionary's "do it right from the start" principle endorses this kind of structural investment.
+
+**Why this arc was chosen** (plan-critic, 2026-05-14 gen-3, objective mode, confidence HIGH): Objective-fit is the dominant axis. Approach A is the only approach that directly delivers the objective's "ONE unified design question" contract — a coherent semantic model from which both #77 and #78 are trivially derivable — while honoring tiny-core discipline by *removing* a specialization (the parser denylist asymmetry) rather than adding one. The model is structurally clean: every named scalar binding is a unit; constants are units with the dimensionless tag; the C++ builtin layer becomes a performance cache; `i` stays in C++ for the orthogonal NaN-sentinel reason. #77 resolves to REJECT (`i*km` is the answer; surface friction relocates to #79 deferred-identifier diagnostics). #78 resolves to "constants ARE units, dimension tag is the structural distinguisher." Cycle 2's substrate ship then unblocks #7b dim-analysis as `.fw` predicates per the Units arc-exit-criterion (b) reopen condition.
+
+**Critic adjustments to ideator's plan** (applied above):
+1. Cycle 1 must include the annotation-syntax decision, not punt to cycle 2.
+2. Decision doc must explicitly commit to binding-level tags only (no subexpression tags). Locks the cycle 2 scope.
+3. Decision doc must address what `2e` means under the unified model (denylist holds for parser-typo reasons, OR reverts to `2 * Euler`). Pick one explicitly.
+4. `i`-stays-in-C++ rationale must be explicit (NaN-sentinel, orthogonal to units question).
+5. Cycle 1 close emits BOTH artifact deliverables: (a) decision doc; (b) Future #77 in REJECTED.md, #78 marked DONE-by-design, #7b reopen-trigger updated.
+
+**Workflow shape (per critic + reflector):** Cycle 1 is a **design-cycle** (the new work-category surfaced by the Units arc close). It runs as planner → critic → visionary against the decision question, deliverable = decision document + Future.md updates, **no IMPLEMENT phase**. Cycle 2 is a normal implementation cycle.
+
+**Reopen / extend trigger:** Arc completes when both cycles close, OR cycle-1 design pass surfaces a concrete blocker requiring fresh research (in which case fall back to Approach E empirical-migration recovery move). Cycle 2 has its own go/no-go after cycle 1 closes.
 
 ## Queued arcs
 
@@ -23,9 +51,9 @@ _(none — generation-2 arc completed 2026-05-14. Fire `/plan-campaign` to promo
 
 **Theme:** Make fwiz a credible linear-algebra engine. N×N determinant + inverse + eigenvalues, quaternions as the first non-commutative algebra, complex-element matrices unblocked.
 **Estimated cycles:** 5-7
-**Queued reason:** Matrix-arc gen-1 paved the substrate; Future #71 IN-SCOPE is the natural cycle-1 opener. Held queued through gen-2 selection because no external `#14` reopen trigger has fired across 4 more cycles of evidence. The plan-critic's gen-2 verdict explicitly noted: if `/plan-campaign` fires a third time with this STILL queued and the weakness unchanged, the right move is to actively reject and replace the queued slot — agent-initiated breadth doesn't get an indefinite runner-up grace period.
+**Queued reason:** Matrix-arc gen-1 paved the substrate; Future #71 IN-SCOPE is the natural cycle-1 opener. Held queued through gen-2 and gen-3 selection. **gen-3 NOTE**: this is the third consecutive generation without firing; the gen-2 critic's "reject and replace if queued through a third generation" trigger has now structurally fired BUT was preempted by gen-3 being an objective-mode design cycle (not an open-mode arc selection). The next open-mode `/plan-campaign` should explicitly weigh whether this arc has aged out of its queued grace period — concrete user signal would be needed to keep it queued.
 
-**Promotion triggers**: (a) user fires a `#14` reopen trigger with concrete need for N×N inversion / eigenvalues / quaternions; OR (b) units arc ships cleanly AND the pendulum-signal has visibly broken, restoring license for an agent-initiated capability arc.
+**Promotion triggers**: (a) user fires a `#14` reopen trigger with concrete need for N×N inversion / eigenvalues / quaternions; OR (b) `/plan-campaign` re-selects.
 
 ### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
 
@@ -80,30 +108,13 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 
 **Outcome (Tests 3346 → 3395, +49)**: Future #69 DONE; Future #70 PARKED; Future #71 IN-SCOPE. Sibling-exception convention codified. ~60-70 net production LOC. 0 implementer blocks. 3 self-fixes total. See `docs/COMPLETED.md` for full summary.
 
-## Queued arcs
-
-### Arc: Linear-algebra completeness — finish what #14 started
-
-**Theme:** Make fwiz a credible linear-algebra engine. N×N determinant + inverse + eigenvalues, quaternions as the first non-commutative algebra, complex-element matrices unblocked.
-**Estimated cycles:** 5-7
-**Queued reason:** Natural follow-on to the Matrix-surface diagnostic-quality arc. The diagnostic arc resolves whether the parallel `solved_symbolic_` map (`#10a`) is actually needed before the completeness arc commits to it in N×N inversion cycle. If a user fires a `#14` reopen trigger ("user needs `inv` of 3×3+ matrix") before the diagnostic arc closes, escalate to user — that's a genuine signal that may flip priority.
-
-**Milestone sketch** (will be refined when promoted to active):
-- General N×N `det(M)` via cofactor expansion / Bareiss for symbolic integer entries.
-- General N×N `inv(M)` via Gaussian elimination over the symbolic field.
-- Unblock complex-element matrices: ship `#13a` (MUL-over-ADD distribution) so `(1+i)*(1-i) → 2` collapses inside matrix elements; pick up `#13b` (`i^N` power cascade) opportunistically.
-- Quaternion algebra encoded as `quat(a, b, c, d)` `FUNC_CALL` sugar (mirroring vec/mat from #14). Hamilton product in `try_dispatch_vec_mat_builtin`; conjugate/norm/inverse builtins; `qrotate(q, v)`. No new `ExprType`.
-- Eigenvalues for 2×2 and 3×3 closed-form.
-- Stretch: matrix-valued CLI bindings, stdlib `linalg.fw`, round-trip safety on derive output.
-
-**Vision alignment:** Linear algebra is universal mathematics. Encoding quaternions as `FUNC_CALL` sugar honors the tiny-core principle; the engine grows by composition, not by adding leaves.
-
 ## Generation log
 
 - **Generation 1 (2026-05-13)**: Diagnostic-quality arc on existing matrix surfaces selected over Linear-algebra completeness (runner-up). User invoked `/plan-campaign` with seed "vectors, matrices, quaternions" after three consecutive clean single-cycle closes (docs-catchup, valgrind oracle, Future #67 dispatch unification). Plan-critic's verdict (confidence medium) chose the seed-as-constraint-to-challenge campaign over the literal-interpretation campaign. User accepted the critic's pick. Linear-algebra completeness queued as the natural follow-on.
 - **Generation 1 arc complete (2026-05-13)**: Matrix-surface diagnostic-quality arc shipped all 4 cycles cleanly under autonomous mode. 0 implementer blocks. Tests 3346 → 3395 (+49). Future #69 DONE, #70 PARKED, #71 NEW. Sibling-exception convention codified codebase-wide. Arc-exit-criterion (b) never fired. Queued Linear-algebra completeness arc remains queued; next `/plan-campaign` run (or user direction) promotes it or generates fresh alternatives.
 - **Generation 2 (2026-05-13)**: Units of measurement arc (Future #7) selected over Linear-algebra completeness (still queued) and over the LLM-ergonomics benchmark campaign (newly queued). User invoked `/plan-campaign` at gen-1 arc close per reflector recommendation (`new-arc` verdict, medium confidence — reflector flagged that the pendulum has swung deep into internal work: 5 of 6 commits internal/hardening). Plan-critic chose Units (medium confidence) over Linear-algebra completeness based on two converging signals: (a) the "no external user signal" weakness that pinned linear-algebra as runner-up at gen-1 accumulated 4 more cycles of evidence with no #14 reopen trigger fired; (b) Units is the one feature campaign where the consumer is the project's own stated north-star — every stdlib formula is a unit-bearing formula, so the consumer isn't an absent user but the engine's own roadmap. User confirmed: "Units should be a fairly simple feature to implement, we need to design the language features that will allow users to seamlessly add new units (I think that's already described in the future brief)". User also confirmed the LLM-benchmark idea ("we have not checked how well LLMs deal with the CLI") — held queued behind units per critic's sequencing recommendation. Two contrarian critic picks in two consecutive generations explicitly acknowledged: yesterday's purchased credibility, today's spent some of it.
 - **Generation 2 arc complete (2026-05-14)**: Units arc shipped all 4 cycles, with cycle 4 firing the planned arc-exit-criterion (b) on dim-analysis. Cycles 1-3 shipped clean (engine surface, CLI-arg eval, stdlib catalog, physics demo). Cycle 4 surfaced that Future #7b (dim-analysis) is structurally blocked by Future #78 (constants-as-units design question — the dimension-tag semantic model must be settled first). Future #78 explicitly requested by the user as a design-cycle item; the arc-exit-criterion firing matches the user's stated preference for design-cycle treatment of #77 and #78. Tests 3395 → 3503 (+108). 0 implementer blocks across the arc. User-driven scope refinement at cycle 1.1 (reserved-word denylist for `e`, `if`, `iff`). Queued arcs remain: Linear-algebra completeness (still queued — third gen running), LLM-ergonomics benchmark (queued at gen-2). Future #78 design cycle is the natural next move per gen-2's explicit user direction.
+- **Generation 3 (2026-05-14, objective mode)**: First objective-mode `/plan-campaign` run, against user objective "Resolve Future #77 and #78 as ONE unified design question — coherent semantic model for the constant/unit/scalar-binding distinction in fwiz." Workflow upgrade landed at session start (`/plan-campaign` now accepts `--objective` for hard-constraint campaign planning; ideator generates divergent APPROACHES to the objective; critic's dominant axis becomes objective-fit). Plan-critic picked Approach A (Unification model — "all bindings are units; constants carry the dimensionless tag") with HIGH confidence over 4 alternatives (status-quo + #77 standalone, three-tier model, defer-#78, empirical migration). Selected because A is the only approach delivering the objective's "coherent semantic model from which both items trivially derive" while honoring tiny-core discipline by removing the parser denylist asymmetry rather than adding new specializations. Five adjustments applied per the critic: lock annotation syntax in cycle 1; binding-level tags only; explicit decision on `2e` under unified model; explicit `i`-stays-in-C++ rationale; cycle 1 close emits both decision doc + Future.md updates (#78 DONE-by-design, #77 in REJECTED.md, #7b reopen-trigger updated). Cycle 1 is a **design cycle** (planner → critic → visionary, decision document deliverable, no IMPLEMENT phase) — first of its kind in the project, the new work-category the gen-2-close reflector flagged. Cycle 2 (substrate ship) is a normal implementation cycle.
 
 ## Arc entry format
 

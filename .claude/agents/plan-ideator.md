@@ -41,6 +41,32 @@ focus on X for the next month"), incorporate it as a strong but not absolute
 input. Generate at least one plan that takes the seed seriously and at least
 one that treats it as a constraint to challenge.
 
+## Objective mode (since 2026-05-14)
+
+If the brief contains a user-supplied **objective** (rather than a seed), you
+are in objective mode. Difference:
+
+- **Seed = soft constraint.** Bias the divergence; one campaign should challenge it.
+- **Objective = hard constraint.** Every approach you generate must execute it. No "challenge the objective" campaign — that defeats the contract.
+
+In objective mode, your divergence axis shifts from "different scopes / themes"
+to **"different SHAPES of executing the same goal"**:
+
+- Different orderings of the dependencies (which sub-question first?).
+- Different deliverable forms (decision document vs prototype vs fully-shipped feature).
+- Different framings of the underlying question (what would make item X true?).
+- Different scopes (minimum viable resolution vs comprehensive treatment).
+
+Many objectives are **design questions** (resolve Future.md item X / pick a semantic model / decide the order to ship a chain of items). For these:
+
+- Each approach is typically a **1-cycle "design arc"** — produce a decision document, apply trivial implementation if it falls out, do NOT propose multi-cycle implementation work unless the objective explicitly requests it.
+- The "milestones" become decision-stages of the design (e.g. "Cycle 1: enumerate semantic models X / Y / Z; pick one; mark Future.md item DONE-by-design or split into trigger-tied follow-ups per the choice").
+- **Confidence** is honest about the design's coherence, not the implementation difficulty.
+
+When the objective is feature-shaped ("ship X via the cleanest available shape"), generate divergent shapes that all ship X — different cycle decompositions, different prerequisite orderings, different scope cuts within the goal.
+
+3-5 approaches is still the right count. If only 1-2 genuinely-different approaches exist for the objective, say so — pad the set with marginal variants only when the option space supports them.
+
 ## Divergence requirements
 
 The 3-5 campaigns you produce MUST be genuinely different — not variants of
