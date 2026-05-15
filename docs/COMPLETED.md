@@ -2,6 +2,24 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Constants-as-units substrate (gen-3 cycle 2) — ✅ SHIPPED (2026-05-15, ROADMAP gen-3)
+
+**Substrate ship** — 6 milestones M1–M6 implementing the gen-3 cycle 1 design decision. 3565/3565 tests passing; sanitize and analyze-fast clean.
+
+**What shipped:**
+- `src/lexer.h`: `COLON` `TokenType` entry + `case ':'` in `single_char`; `static_assert` 15→16.
+- `src/parser.h`: `BindingAnnotationError` sibling exception (derives from `std::exception`; raised when operators appear inside `(...)` annotation parens).
+- `src/system.h`: `using DimName = std::string` typedef; `dim_map_` (`map<string, DimName>`) on `FormulaSystem` with cross-file propagation via `load_sub_system`; `is_dimension_section` predicate; `register_dim_section` (walks both `sub->equations` and `sub->defaults`); dot-dispatch shim at top of `resolve()`; annotation parse in `parse_line` (atomic `IDENT : IDENT = expr` and intersection `IDENT : ( atom-list ) = expr`); `is_int`+`is_in_dimension` added to `parse_condition` recognizer; `RewriteRulesGuard` ctor 4→5 args (5th: `dim_map` ptr, defaulted).
+- `src/expr.h`: `is_predicate_clause` extended (3 names: `is_neg_num`, `is_in_dimension`, `is_int`); `check_condition` signature extended (4th optional `const map<string,string>* dim_map = nullptr`); `is_in_dimension` 2-arg predicate dispatch; `is_int` 1-arg predicate dispatch; thread-local `simplify_dim_map_()` pointer + `RewriteRulesGuard` setter/clearer (RAII) so rule-firing site receives dim_map without threading through 14 internal call sites.
+
+**Future.md outcomes:**
+- Future #7b BASIC → ✅ DONE (atomic-Var dimensional rejection rules writable in stdlib `.fw`).
+- Future #65 → `is_in_dimension` ✅ DONE, `is_int` ✅ DONE (gen-3 cycle 2); remaining: `is_pos_num`, `is_num`.
+
+**Tests:** 3505 (baseline) → 3565 (+60 new gen-3 cycle-2 asserts). 7 BLOCKING criteria covered (criteria 1–9 per design; criterion 7+9 deferred to cycle 3 per Final Design Decision 10 SIMPLIFY).
+
+---
+
 ## Constants-as-units design (gen-3 cycle 1) — ✅ DESIGN DECIDED (2026-05-14, ROADMAP gen-3)
 
 **Design cycle** — no code shipped. Deliverable: decision document + Future.md updates. Cycle 2 ships the substrate.

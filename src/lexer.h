@@ -10,10 +10,15 @@ enum class TokenType : uint8_t {
     NUMBER, IDENT,
     PLUS, MINUS, STAR, SLASH, CARET,
     LPAREN, RPAREN, LBRACKET, RBRACKET, EQUALS, QUESTION, COMMA,
+    // COLON: reserved for binding-annotation grammar only (see Future #78 /
+    // gen-3 cycle 1 design). Lock-in: `var:atom = expr` and
+    // `var:(atom1, atom2, ...) = expr` are the ONLY shapes; map literals,
+    // ternaries, range syntax etc. require a separate design cycle.
+    COLON,
     END,
     COUNT_
 };
-static_assert(static_cast<int>(TokenType::COUNT_) == 15,
+static_assert(static_cast<int>(TokenType::COUNT_) == 16,
     "TokenType count drift — update lexer dispatch table if adding/removing tokens.");
 
 struct Token {
@@ -67,6 +72,7 @@ private:
             case ')': return TokenType::RPAREN; case '[': return TokenType::LBRACKET;
             case ']': return TokenType::RBRACKET; case '=': return TokenType::EQUALS;
             case '?': return TokenType::QUESTION; case ',': return TokenType::COMMA;
+            case ':': return TokenType::COLON;
             default:  return std::nullopt;
         }
     }

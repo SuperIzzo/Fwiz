@@ -16,6 +16,17 @@ struct RaggedMatrixError : std::exception {
     [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
 };
 
+// Grammar lock-in violation in `var:(atom1, atom2, ...) = expr` intersection
+// annotations: only IDENT/COMMA permitted inside parens (see gen-3 cycle 2
+// design D10). A sibling exception (not std::runtime_error) so it propagates
+// through `load_lines`' per-line resilience to the load_string caller — same
+// pattern as `RaggedMatrixError` (#13) and `CrossFileResolutionCycleError` (#69).
+struct BindingAnnotationError : std::exception {
+    std::string msg;
+    explicit BindingAnnotationError(std::string m) : msg(std::move(m)) {}
+    [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
+};
+
 class Parser {
 public:
     explicit Parser(const std::vector<Token>& tokens) : tok_(tokens), pos_(0) {}

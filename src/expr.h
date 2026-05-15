@@ -1706,14 +1706,15 @@ struct CondClause {
 // Typed-binding predicates for rule conditions (Future #53). A predicate clause
 // is encoded as `CondClause{lhs=FUNC_CALL("is_*", {Var("name")}), rhs=nullptr,
 // op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape structurally —
-// no extra fields on CondClause. Current set is single-entry; additional
-// predicates ship per-consumer schedule (see Future.md).
-// Predicate names recognised by the rule-condition language. Direct string
-// compare while the set has 1 entry; switch to a static set when count >= 3.
-// See Future.md #65 for per-consumer predicate schedule.
+// no extra fields on CondClause. Current set: `is_neg_num`, `is_in_dimension`,
+// `is_int`. Additional predicates ship per-consumer schedule (see Future #65).
+// Direct string compare is still cheap at 3 entries; switch to a static set
+// when count >= 5.
 [[nodiscard]] inline bool is_predicate_clause(const CondClause& c) {
     return c.lhs && c.lhs->type == ExprType::FUNC_CALL
-        && c.lhs->name == "is_neg_num";
+        && (c.lhs->name == "is_neg_num"
+            || c.lhs->name == "is_in_dimension"
+            || c.lhs->name == "is_int");
 }
 
 struct Condition {
@@ -1790,19 +1791,42 @@ struct Condition {
 // pass nullptr and predicate clauses then short-circuit to false (Future #53).
 [[nodiscard]] inline bool check_condition(const Condition& cond,
                             const std::map<std::string, double>& bindings,
-                            const std::map<std::string, ExprPtr>* expr_bindings = nullptr) {
+                            const std::map<std::string, ExprPtr>* expr_bindings = nullptr,
+                            const std::map<std::string, std::string>* dim_map = nullptr) {
     auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
-        // Predicate clauses (Future #53): typed dispatch on the bound ExprPtr.
-        // Fail-safe semantics — any unknown/missing/wrong-shape arg → false.
+        // Predicate clauses (Future #53 / gen-3 cycle 2): typed dispatch on
+        // the bound ExprPtr. Fail-safe semantics — any unknown/missing/
+        // wrong-shape arg → false.
         if (is_predicate_clause(c)) {
             const std::string& name = c.lhs->name;
+            if (!expr_bindings) return false;
+            // 2-arg predicates: `is_in_dimension(var, dim_atom)`.
+            if (name == "is_in_dimension") {
+                if (c.lhs->args.size() != 2) return false;
+                if (!is_var(c.lhs->args[0])) return false;
+                if (!is_var(c.lhs->args[1])) return false;
+                const std::string& var_name = c.lhs->args[0]->name;
+                const std::string& dim_atom = c.lhs->args[1]->name;
+                if (!dim_map) return false;
+                auto it = expr_bindings->find(var_name);
+                if (it == expr_bindings->end()) return false;
+                if (!is_var(it->second)) return false;
+                auto dim_it = dim_map->find(it->second->name);
+                if (dim_it == dim_map->end()) return false;
+                return dim_it->second == dim_atom;
+            }
+            // 1-arg predicates: `is_neg_num(n)`, `is_int(n)`.
             if (c.lhs->args.size() != 1) return false;
             if (!is_var(c.lhs->args[0])) return false;
             const std::string& var_name = c.lhs->args[0]->name;
-            if (!expr_bindings) return false;
             auto it = expr_bindings->find(var_name);
             if (it == expr_bindings->end()) return false;
             if (name == "is_neg_num") return is_neg_num(it->second);
+            if (name == "is_int") {
+                // True iff bound expression is a NUM with integer value.
+                // Fail-safe on non-NUM bindings (e.g. Var(y)).
+                return is_num(it->second) && is_integer_value(it->second->num);
+            }
             return false; // unknown predicate name — fail-safe
         }
         ExprPtr lhs = c.lhs, rhs = c.rhs;
@@ -1925,6 +1949,14 @@ inline const std::map<std::string, double>*& simplify_bindings_() {
     return b;
 }
 
+// Dim map (gen-3 cycle 2, 2026-05-14) — `is_in_dimension` predicate reads it
+// during rule-condition evaluation. nullptr in equation-context callers; set
+// to `&FormulaSystem::dim_map_` by the rule-firing RewriteRulesGuard.
+inline const std::map<std::string, std::string>*& simplify_dim_map_() {
+    static thread_local const std::map<std::string, std::string>* dm = nullptr;
+    return dm;
+}
+
 inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
                                         const std::vector<bool>* exhaustive = nullptr) {
     simplify_rewrite_rules_() = rules;
@@ -1935,20 +1967,24 @@ inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
     return simplify_rewrite_rules_();
 }
 
-// RAII guard: sets rewrite rules + exhaustiveness flags + bindings + custom functions
+// RAII guard: sets rewrite rules + exhaustiveness flags + bindings + custom
+// functions + dim_map (gen-3 cycle 2 addition).
 struct RewriteRulesGuard {
     explicit RewriteRulesGuard(const std::vector<RewriteRule>* rules,
                       const std::vector<bool>* exhaustive = nullptr,
                       const std::map<std::string, double>* bindings = nullptr,
-                      const std::map<std::string, double(*)(double)>* custom_funcs = nullptr) {
+                      const std::map<std::string, double(*)(double)>* custom_funcs = nullptr,
+                      const std::map<std::string, std::string>* dim_map = nullptr) {
         simplify_set_rewrite_rules(rules, exhaustive);
         simplify_bindings_() = bindings;
         custom_functions_ptr_() = custom_funcs;
+        simplify_dim_map_() = dim_map;
     }
     ~RewriteRulesGuard() {
         simplify_set_rewrite_rules(nullptr, nullptr);
         simplify_bindings_() = nullptr;
         custom_functions_ptr_() = nullptr;
+        simplify_dim_map_() = nullptr;
     }
     RewriteRulesGuard(const RewriteRulesGuard&) = delete;
     RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
@@ -2540,7 +2576,8 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                     if (it != global_bindings->end()) numeric[var] = it->second;
                 }
             }
-            if (!check_condition(*rule.condition, numeric, &*bindings)) continue;
+            if (!check_condition(*rule.condition, numeric, &*bindings,
+                                 simplify_dim_map_())) continue;
             const AssumptionSource source = (exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index])

@@ -26,6 +26,7 @@ For a gentle introduction, see [../README.md](../README.md).
 14. [Standard Library](#14-standard-library)
 15. [Vector and Matrix Literals](#15-vector-and-matrix-literals)
 16. [Complex Numbers](#16-complex-numbers)
+17. [Dimension Annotations](#17-dimension-annotations)
 
 ---
 
@@ -107,6 +108,7 @@ The result is in SI base (m/s). `--derive` and `--fit` retain their existing sym
 | `!` | "Exactly one solution" modifier (`x=?!`) |
 | `[ ]` | Section header brackets |
 | `->` | Section return-variable arrow |
+| `:` | Binding-annotation separator (`var:dim = expr`); since gen-3 cycle 2. |
 | `@` | Prefix for directives (currently only `@extern`) |
 | `#` | Line comment |
 
@@ -587,13 +589,25 @@ triple(x) = 3 * x
 
 ### 10.6 Typed-Binding Predicates
 
-Some rule conditions test the *type* of a wildcard binding rather than comparing values. Current predicate set: `is_neg_num(n)` — true iff `n` binds to a negative numeric literal.
+Some rule conditions test the *type* of a wildcard binding rather than comparing values. Three predicates are currently available:
+
+| Predicate | Arity | True when |
+|-----------|-------|-----------|
+| `is_neg_num(n)` | 1 | `n` binds to a negative numeric literal |
+| `is_int(n)` | 1 | `n` binds to a Num with integer value |
+| `is_in_dimension(v, dim)` | 2 | the Var that `v` binds to has dimension `dim` in the loaded dim-map |
 
 ```
-x ^ n = 1 / x ^ (-n) iff is_neg_num(n)
+x ^ n = 1 / x ^ (-n)  iff is_neg_num(n)
+# Only fires when exponent is a known negative literal; symbolic -k is unaffected.
+
+x + y = undefined  iff is_in_dimension(x, mass) && is_in_dimension(y, time)
+# Dimension-rejection rule: adding mass to time is undefined.
 ```
 
-This rewrites `x^(-2)` as `1 / x^2` only when the exponent is a known negative literal; it does not fire on a symbolic exponent like `-k`. Fail-safe semantics: if `n` is not bound or is non-numeric, the predicate returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
+Fail-safe semantics: if the wildcard is not bound, or is bound to the wrong kind of node, the predicate returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
+
+`is_in_dimension` requires dimension annotations on variables — see §17.
 
 ---
 
@@ -816,3 +830,60 @@ z = -1
 The simplifier applies the builtin rewrite rules `i * i = -1` and `i^2 = -1`. Any expression containing `i` that reaches the numeric evaluator returns empty (`evaluate()` returns empty), so the numeric solver, conditions, and verify mode all reject complex operands — they never silently produce a real approximation.
 
 **Current scope:** single-step reductions like `i^2 → -1` work. Multi-step complex arithmetic like `(1+i)*(1-i) → 2` requires distributing MUL over ADD first, which is not yet implemented. See `docs/Future.md` for the planned follow-up.
+
+---
+
+## 17. Dimension Annotations
+
+Since gen-3 cycle 2 (2026-05-15), fwiz supports optional dimension annotations on variables and named dimension sections that group unit bindings.
+
+### 17.1 Dimension Sections
+
+A section header with a bare name (no parentheses, no `->`) declares a **dimension category**:
+
+```
+[mass]
+g = 1
+kg = 1000 * g
+lb = 453.592 * g
+```
+
+Every variable bound inside the section (`g`, `kg`, `lb`) is automatically registered as having dimension `mass` in the system's `dim_map_`. The section body uses ordinary equation and default syntax; numeric-RHS lines become defaults; equation-RHS lines become equations — same rules as the top level.
+
+Access values via dot-dispatch:
+
+```bash
+$ fwiz '([mass]\ng=1\nkg=1000*g)(mass.kg=?)'
+mass.kg = 1000
+```
+
+### 17.2 Binding Annotations
+
+The `:` token annotates an individual binding with a dimension:
+
+```
+m_obj:mass = 10 * kg      # atomic: m_obj is tagged as dimension 'mass'
+n:(int, mass) = 5         # intersection: n is tagged with both 'int' and 'mass'
+```
+
+After the annotation is stripped, the line is parsed as a normal equation or default. The annotation does NOT change the variable's numeric value — only its entry in `dim_map_`.
+
+Operators inside intersection parentheses (`*`, `/`, `^`) raise a `BindingAnnotationError` parse-time error. Only bare identifiers separated by commas are accepted.
+
+### 17.3 Dimension-Checking Rewrite Rules
+
+The `is_in_dimension(v, dim)` predicate tests whether a wildcard's bound Var is registered under dimension `dim`. This enables dimension-rejection rules in stdlib `.fw` files:
+
+```
+# prevent adding mass to time (dim-mismatch rule):
+x + y = undefined  iff is_in_dimension(x, mass) && is_in_dimension(y, time)
+```
+
+The predicate is fail-safe: if the variable is not annotated, it returns false (rule does not fire). See §10.6 for the full predicate set.
+
+### 17.4 Current Scope and Limitations
+
+- Atomic annotations and intersection annotations ship in cycle 2.
+- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`) is deferred to cycle 3 (Future #7b FULL). Until then, `is_in_dimension` only works on bare annotated Vars, not compound sub-expressions.
+- Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — Future #81.
+- Stdlib `.fw` files do not yet wrap SI base units in dim sections — that is a natural cycle-3 follow-on.

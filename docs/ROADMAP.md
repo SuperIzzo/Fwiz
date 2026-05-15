@@ -9,8 +9,8 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > a single Future.md item, narrower than the project vision. Arcs sit between
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
-<!-- last-updated: 2026-05-14 -->
-<!-- selected-by-cycle: 2026-05-14 /plan-campaign gen-3 (objective mode — constants-as-units design arc); cycle 1 closed 2026-05-14 -->
+<!-- last-updated: 2026-05-15 -->
+<!-- selected-by-cycle: 2026-05-14 /plan-campaign gen-3 (objective mode — constants-as-units design arc); cycle 1 closed 2026-05-14; cycle 2 closed 2026-05-15 -->
 <!-- generation: 3 -->
 
 ## Active arc
@@ -20,20 +20,20 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 **Theme:** Resolve Future #78 (constants-as-units semantic model) and Future #77 (`_` prefix-mul separator) as ONE unified design question. **Design arc** — deliverable is a Future.md decision document. Decision (gen-3 cycle 1, 2026-05-14): adopt the **HYBRID model + Answer C staging** — user-confirmed via plan-mode refinement.
 **Started:** 2026-05-14
 **Estimated cycles:** 1 (design — ✓ closed) + 1-2 (substrate ship — cycle 2 + optional cycle 3)
-**Cycles elapsed:** 1
-**Status:** cycle 1 ✓ DONE; cycle 2 ready to start
+**Cycles elapsed:** 2
+**Status:** cycle 1 ✓ DONE; cycle 2 ✓ DONE; cycle 3 conditional (demand-pull)
 **Mode:** objective (`/plan-campaign --objective`)
 
 **Milestones:**
 - [x] **Cycle 1 (2026-05-14): Decision document + Future.md updates.** Shipped. Decision: HYBRID model (user's syntax: bare `[name]` dim sections + `:` annotation + `(t1, t2)` intersection + dot-access via existing `load_sub_system`) PLUS Approach A's semantics (dim propagation through MUL/DIV/POW/NEG + `is_in_dimension` predicate). Staging: Answer C — atomic types + intersection at cycle 2; named aliases (`[speed] := length/time`) and type-arithmetic deferred to demand-pull future cycles. Design doc: `.fwiz-workflow/design-proposal.md` (gen-3 cycle 1). Plan-mode refinement: `/home/izzo/.claude/plans/quiet-roaming-quiche.md`. Future.md: #78 → DONE-by-design; #77 → REJECTED (moved to `docs/REJECTED.md`); #7b → two-step DONE framing (atomic after cycle 2, compound after cycle 3); #65 schedule extended (`is_in_dimension`); #81 NEW PARKED (named compound-dim aliases); #82 NEW PARKED (consolidate binding-side metadata, trigger: 4th parallel-map appears).
-- [ ] **Cycle 2: Substrate ship.** ~85 production / ~68 tests / ~33 docs / ~186 total LOC. 6 milestones M1-M6:
-  - **M1**: COLON lexer token + grammar lock-in comment (~12 LOC).
-  - **M2**: `using DimName = std::string` + `dim_map_` member on `FormulaSystem` + forward comment for cycle 3 promotion (~13 LOC).
-  - **M3**: `parse_line` extension — detect `IDENT COLON IDENT EQUALS` prefix, extract annotation, update `dim_map_` (~40 LOC).
-  - **M4**: `register_dim_section` — bare `[name]` sections register as in-file sub-systems under `@dim:` cache-key prefix; reuse `sub->load_lines(s.lines)` (~38 LOC).
-  - **M5**: `is_in_dimension` predicate — 4th optional parameter on `check_condition` (NOT thread-local), extend `is_predicate_clause` recognizer, extend `parse_condition` (~43 LOC).
-  - **M6**: Intersection annotation parse — `var:(t1, t2, ...) = expr`, atom-list only, no operators inside parens (~40 LOC).
-  - Acceptance: 9 BLOCKING + 1 NICE per design doc. **#7b BASIC** marked DONE when criterion 5 (predicate works as rule condition) passes.
+- [x] **Cycle 2: Substrate ship.** ✓ DONE 2026-05-15. ~80 production LOC / ~300 test LOC / 3565/3565 tests passing; sanitize and analyze-fast clean. 6 milestones M1-M6:
+  - **M1**: COLON lexer token + `static_assert` 15→16 + `test_lexer_garbage` cleanup (~12 LOC).
+  - **M2**: `using DimName = std::string` + `dim_map_` member on `FormulaSystem` + `load_sub_system` propagation (~13 LOC).
+  - **M3**: `parse_line` extension — `IDENT COLON IDENT EQUALS` + intersection form; token-rewrite to plain LHS after annotation extraction (~52 LOC).
+  - **M4**: `register_dim_section` + `is_dimension_section` predicate + dot-dispatch shim in `resolve()` + `load_with_sections` hook; walks both `sub->equations` and `sub->defaults` (~34 LOC).
+  - **M5**: `is_in_dimension` predicate — 4th optional `dim_map` param on `check_condition`; thread-local `simplify_dim_map_()` + `RewriteRulesGuard` RAII (5-arg ctor); 3 construction sites in system.h updated (~50 LOC).
+  - **M6**: `is_int` predicate + `BindingAnnotationError` sibling exception + intersection parse-error sites updated; M-cross test (cross-file `dim_map_` propagation) (~17 LOC prod + M-cross test).
+  - **Future.md outcomes:** #7b BASIC ✅ DONE; #65 `is_in_dimension` + `is_int` ✅ DONE.
 - [ ] **Cycle 3 (conditional — demand-pull)**: Dim algebra promotion + `compute_dim` propagation + `BuiltinMeta.dim_propagate` callbacks. Triggered by ADD/SUB mismatch enforcement demand OR compound-expression rejection rules in stdlib `.fw`. Promotes `DimName` typedef to `map<DimName, int>` exponent algebra. Adds `compute_dim` recursive walk. Extends `BuiltinMeta` registry with `dim_propagate` callback field. **#7b FULL** marked DONE on cycle close.
 
 **Exit criterion:** Arc completes when cycle 2 ships cleanly (BLOCKING criteria 1-9 pass) AND either (a) cycle 3 ships, OR (b) cycle 3 is explicitly deferred to a future arc per demand-pull.

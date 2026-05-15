@@ -400,6 +400,15 @@ public:
     // alias-resolution table — used by fmt_trace's fallback path
     // (defaults / givens / @extern) where no symbolic source exists.
     mutable std::map<std::string, double> aliases_;
+    // Cycle 2 of gen-3 Constants-as-units arc (2026-05-14).
+    // Per-variable dimension as a string (atomic dim section name).
+    // Promoted to std::map<DimName, int> (exponent algebra) in cycle 3 —
+    // see Future #7b. Populated by (a) `[mass]`-style dim section scan and
+    // (b) `var:type = expr` annotation parse. Propagated to sub-systems on
+    // load_sub_system. Read by `check_condition`'s `is_in_dimension`
+    // predicate path (see expr.h).
+    using DimName = std::string;
+    std::map<std::string, DimName> dim_map_;
     // Dirty-flag for resolve_diff_in_equations: tracks how far we've already
     // walked. Equations only ever grow, so on a second load_string the pass
     // skips already-rewritten equations. Eliminates redundant double-walk on
@@ -535,9 +544,10 @@ public:
                 // Per-line resilience: normal parse errors become trace warnings;
                 // the file continues loading subsequent lines. Sibling exceptions
                 // that are NOT std::runtime_error (SolveBudgetExceededError,
-                // CrossFileResolutionCycleError, RaggedMatrixError) deliberately
-                // propagate — they signal user-facing fatal conditions whose
-                // diagnostic is the entire point. See parser.h RaggedMatrixError
+                // CrossFileResolutionCycleError, RaggedMatrixError,
+                // BindingAnnotationError) deliberately propagate — they signal
+                // user-facing fatal conditions whose diagnostic is the entire
+                // point. See parser.h RaggedMatrixError / BindingAnnotationError
                 // for the convention.
                 trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
             }
@@ -902,8 +912,60 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Dim section registration (gen-3 cycle 2, 2026-05-14).
+    //
+    // A bare `[name]` Section header (no parens, no arrow) declares `name` as
+    // a *dimension*. Its body is parsed into a sub-FormulaSystem; each LHS
+    // identifier in the body is registered in `dim_map_` with `name` as its
+    // dim string (D2 — DimName=std::string for cycle 2). The sub is also
+    // routed through the existing `@def:` cache-key path (D6, reviewer-
+    // resolved 2026-05-14) so `mass.kg=?` dot-access lookups hit the cached
+    // sub instead of attempting a file load.
+    // ------------------------------------------------------------------------
+    [[nodiscard]] static bool is_dimension_section(const Section& s) {
+        return s.return_var.empty() && s.positional_args.empty();
+    }
+
+    void register_dim_section(const Section& s) {
+        // D1 edge case: bare `[name] @extern foo` is classified as a dim
+        // section but @extern is meaningless here (no return_var to bridge).
+        // Practically unreachable today (all extern sections have -> result),
+        // but emit a warning per the design commitment.
+        if (!s.extern_func.empty()) {
+            std::cerr << "warning: @extern on bare section '[" << s.name
+                      << "]' ignored — bare sections are dimension declarations, "
+                      << "not formula stubs\n";
+        }
+        auto sub = std::make_shared<FormulaSystem>();
+        sub->load_lines(s.lines);
+        // A dim-section body uses both forms: `g = 1` parses as a *default*
+        // (RHS pure number → goes into `defaults`, not `equations`), while
+        // `kg = 1000 * g` parses as an equation. Both are dim-typed.
+        for (const auto& eq : sub->equations)
+            dim_map_[eq.lhs_var] = s.name;
+        for (const auto& [name, _value] : sub->defaults)
+            dim_map_[name] = s.name;
+        // Serialize the section body into `custom_function_defs_` so
+        // load_sub_system's dispatcher routes dotted lookups (`mass.kg`)
+        // through the @def: cache-key path (matches D6 / Issue-R2 resolution).
+        std::ostringstream oss;
+        oss << "[" << s.name << "]\n";
+        for (const auto& line : s.lines) oss << line << "\n";
+        custom_function_defs_[s.name] = oss.str();
+        // Store the in-memory sub under the matching cache key so the
+        // dispatcher short-circuits the would-be re-parse.
+        sub_systems[std::string("@def:") + s.name] = sub;
+    }
+
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
         sections_ = split_sections(all_lines);
+        // gen-3 cycle 2 (2026-05-14): walk sections BEFORE top-level/section
+        // load so dim_map_ is populated before any equation that references
+        // a dim-section variable is parsed.
+        for (const auto& s : sections_)
+            if (!s.name.empty() && is_dimension_section(s))
+                register_dim_section(s);
         if (sections_.size() <= 1 && section.empty())
             load_lines(all_lines);
         else
@@ -1472,7 +1534,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                        int cse_threshold = 0,
                        int output_cap = 0) const {
         const ExprArena::Scope scope(arena);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_);
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_, &dim_map_);
         const FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
@@ -1956,8 +2018,25 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         const BudgetGuard budget_guard; // Part C: initialize budget at top-level entry
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
         populate_aliases_(); // for fmt_trace fallback
+        // gen-3 cycle 2 (2026-05-14): dotted-target dispatch for dim-section
+        // lookups (`mass.kg`). Splits `file.section` at the first dot and
+        // routes through load_sub_system → @def: cache key (set by
+        // register_dim_section). Only kicks in when the dot-split file_part
+        // is a registered dim section AND there's no literal equation/default
+        // with the dotted name; otherwise the standard path runs.
+        if (const auto dot = target.find('.'); dot != std::string::npos
+                && !defaults.count(target)
+                && std::none_of(equations.begin(), equations.end(),
+                    [&target](const Equation& eq){ return eq.lhs_var == target; })) {
+            const std::string file_part = target.substr(0, dot);
+            const std::string sub_var   = target.substr(dot + 1);
+            if (custom_function_defs_.count(file_part)) {
+                auto& sub = load_sub_system(file_part);
+                return sub.resolve(sub_var, bindings);
+            }
+        }
         auto prepared = prepare_bindings(target, bindings);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &dim_map_);
         const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
@@ -1971,7 +2050,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
         populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_);
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &dim_map_);
         const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
@@ -2474,17 +2553,19 @@ private:
                 }
             }
 
-            // Predicate-clause form (Future #53): no comparison operator + parses
-            // as a FUNC_CALL whose head name is one of the recognised predicates
-            // (direct string compare while set is single-entry; mirror
-            // `is_predicate_clause` in expr.h). Encoded as
-            // `CondClause{lhs=FUNC_CALL(name,{arg}), rhs=nullptr, op=EQ}`.
+            // Predicate-clause form (Future #53 / gen-3 cycle 2): no comparison
+            // operator + parses as a FUNC_CALL whose head name is a recognised
+            // predicate. Mirror `is_predicate_clause` in expr.h. Encoded as
+            // `CondClause{lhs=FUNC_CALL(name,{args...}), rhs=nullptr,
+            // op=CondOp::EQ}`. Switch to a static set when count >= 3.
             if (op_pos == std::string::npos) {
                 auto tok = Lexer(clause_str).tokenize();
                 Parser pp(tok);
                 auto e = pp.parse_expr();
                 if (e && e->type == ExprType::FUNC_CALL
-                    && e->name == "is_neg_num") {
+                    && (e->name == "is_neg_num"
+                        || e->name == "is_in_dimension"
+                        || e->name == "is_int")) {
                     cond.clauses.push_back({e, nullptr, CondOp::EQ});
                     continue;
                 }
@@ -2585,6 +2666,75 @@ private:
             if (mod_tok[i].type == TokenType::EQUALS) { eq_pos = i; break; }
         }
         if (eq_pos == 0) return;  // no '=' found
+
+        // Annotation form (gen-3 cycle 2, 2026-05-14): `var:atom = expr` and
+        // `var:(atom1, atom2, ...) = expr`. The annotation registers the
+        // binding's dim in `dim_map_` and rewrites the LHS to a plain
+        // `var = expr` equation so the rest of parse_line proceeds unchanged.
+        // ATOM-only inside parens; any STAR/SLASH/CARET is a parse error per
+        // D10 grammar lock-in.
+        if (mod_tok.size() >= 4
+            && mod_tok[0].type == TokenType::IDENT
+            && mod_tok[1].type == TokenType::COLON) {
+            std::vector<std::string> atoms;
+            size_t after = 0; // token index just past the annotation
+            if (mod_tok[2].type == TokenType::IDENT
+                && mod_tok[3].type == TokenType::EQUALS) {
+                // Atomic form: var:atom = expr
+                atoms.push_back(mod_tok[2].text);
+                after = 3;
+            } else if (mod_tok[2].type == TokenType::LPAREN) {
+                // Intersection form: var:(atom1, atom2, ...) = expr.
+                // Grammar lock-in (D10): IDENT/COMMA only inside parens —
+                // operator tokens raise BindingAnnotationError (sibling
+                // exception, propagates through load_lines per-line catch).
+                size_t i = 3;
+                while (i < mod_tok.size() && mod_tok[i].type != TokenType::RPAREN) {
+                    if (mod_tok[i].type != TokenType::IDENT) {
+                        throw BindingAnnotationError(
+                            "binding annotation: only atom names allowed inside "
+                            "'(...)' — got '" + mod_tok[i].text + "'");
+                    }
+                    atoms.push_back(mod_tok[i].text);
+                    i++;
+                    if (i < mod_tok.size() && mod_tok[i].type == TokenType::COMMA) i++;
+                    else if (i < mod_tok.size() && mod_tok[i].type == TokenType::RPAREN) break;
+                    else throw BindingAnnotationError(
+                        "binding annotation: expected ',' or ')' in atom list");
+                }
+                if (i >= mod_tok.size() || mod_tok[i].type != TokenType::RPAREN)
+                    throw BindingAnnotationError("binding annotation: missing closing ')'");
+                i++;
+                if (i >= mod_tok.size() || mod_tok[i].type != TokenType::EQUALS)
+                    throw BindingAnnotationError("binding annotation: expected '=' after ')'");
+                after = i;
+            }
+            if (!atoms.empty()) {
+                const std::string& lhs_name = mod_tok[0].text;
+                // Cycle-2 dim_map_ stores a single string (DimName=std::string,
+                // D2). For an intersection of multiple dim atoms, store the
+                // *first dim-section* atom (skip `int` which is a type
+                // predicate, not a dim — see D8). Atoms without backing dim
+                // sections still register (fail-safe in `check_condition`).
+                for (const auto& a : atoms) {
+                    if (a == "int") continue; // type predicate, not dim
+                    dim_map_[lhs_name] = a;
+                    break;
+                }
+                // Rewrite mod_tok so the rest of parse_line sees a plain
+                // `var = expr` equation. Drop indices 1..after-1 (the
+                // annotation), keep [0] (the lhs ident) + mod_tok[after..]
+                // (the EQUALS and everything after).
+                std::vector<Token> rebuilt;
+                rebuilt.push_back(mod_tok[0]);
+                rebuilt.insert(rebuilt.end(),
+                    mod_tok.begin() + static_cast<std::ptrdiff_t>(after),
+                    mod_tok.end());
+                mod_tok = std::move(rebuilt);
+                // Re-find the EQUALS position post-rewrite (it should be at 1).
+                eq_pos = 1;
+            }
+        }
 
         // Simple equation: "var = expr" (IDENT followed by EQUALS)
         const bool simple_lhs = (eq_pos == 1 && mod_tok[0].type == TokenType::IDENT);
@@ -2708,6 +2858,7 @@ private:
         sub->numeric_mode = numeric_mode;
         sub->approximate_mode = approximate_mode;
         sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
+        sub->dim_map_ = dim_map_;  // gen-3 cycle 2: propagate dim_map_ to sub-systems
 
         // Try loading from file first; fall back to embedded definition
         if (!def_source) {

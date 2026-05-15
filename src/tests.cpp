@@ -1460,7 +1460,8 @@ void test_lexer_garbage() {
 
     expect_throw("x \\ y", "backslash");
     expect_throw("x; y", "semicolon");
-    expect_throw("x : y", "colon");
+    // `:` is a valid token since gen-3 cycle 2 (2026-05-14) — binding-annotation
+    // grammar (`var:type = expr`). See test_gen3_cycle2_constants_as_units.
     expect_throw("x & y", "ampersand");
     expect_throw("x | y", "pipe");
     expect_throw("x @ y", "at sign");
@@ -14952,6 +14953,358 @@ void test_physics_mechanics() {
     }
 }
 
+// Constants-as-units arc cycle 2 (2026-05-14). Substrate ship:
+// COLON token, `DimName` typedef + `dim_map_` member, `[mass]` dim section
+// registration, `var:type = expr` annotation parse, `is_in_dimension`
+// predicate, intersection annotation. 9 BLOCKING + 1 NICE acceptance
+// criteria. Design: `.fwiz-workflow/design-proposal.md` Final Design.
+void test_gen3_cycle2_constants_as_units() {
+    SECTION("gen-3 cycle 2: Constants-as-units substrate (COLON, dim_map_, [dim], `:`, is_in_dimension, intersection)");
+
+    // -------- M1: COLON lexer token ----------------------------------------
+    // BLOCKING criterion 3 — `:` tokenizes as TokenType::COLON.
+    {
+        auto tokens = Lexer("m:mass = 10").tokenize();
+        // Expected: IDENT("m") COLON IDENT("mass") EQUALS NUMBER(10) END = 6 tokens.
+        ASSERT(tokens.size() == 6, "m:mass = 10 produces 6 tokens (incl END)");
+        ASSERT(tokens[0].type == TokenType::IDENT,   "tok0: IDENT(m)");
+        ASSERT_EQ(tokens[0].text, "m",               "tok0: text 'm'");
+        ASSERT(tokens[1].type == TokenType::COLON,   "tok1: COLON");
+        ASSERT_EQ(tokens[1].text, ":",               "tok1: text ':'");
+        ASSERT(tokens[2].type == TokenType::IDENT,   "tok2: IDENT(mass)");
+        ASSERT_EQ(tokens[2].text, "mass",            "tok2: text 'mass'");
+        ASSERT(tokens[3].type == TokenType::EQUALS,  "tok3: EQUALS");
+        ASSERT(tokens[4].type == TokenType::NUMBER,  "tok4: NUMBER");
+        ASSERT_NUM(tokens[4].numval, 10,             "tok4: value 10");
+        ASSERT(tokens[5].type == TokenType::END,     "tok5: END");
+    }
+    // Single-character lex of `:` produces COLON.
+    {
+        auto tokens = Lexer(":").tokenize();
+        ASSERT(tokens.size() == 2, "':' alone: 2 tokens (COLON, END)");
+        ASSERT(tokens[0].type == TokenType::COLON, "':' alone: tok0 COLON");
+        ASSERT(tokens[1].type == TokenType::END,   "':' alone: tok1 END");
+    }
+
+    // -------- M2: DimName typedef + dim_map_ member ------------------------
+    // Member compiles, default-constructs empty.
+    {
+        FormulaSystem sys;
+        ASSERT(sys.dim_map_.empty(), "fresh sys: dim_map_ empty");
+        // DimName typedef sanity: assignable from string literal, comparable.
+        sys.dim_map_["test_var"] = "mass";
+        ASSERT(sys.dim_map_["test_var"] == "mass", "dim_map_['test_var'] == 'mass'");
+        ASSERT(sys.dim_map_.size() == 1, "dim_map_ size 1 after one insert");
+    }
+
+    // -------- M4: Dim section registration ---------------------------------
+    // BLOCKING criterion 1: `[mass]\ng=1\nkg=1000g` loaded ⇒
+    //   dim_map_["g"]=="mass" AND dim_map_["kg"]=="mass".
+    {
+        FormulaSystem sys;
+        sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m4-test1>");
+        ASSERT(sys.dim_map_.count("g") == 1,
+               "[mass]: dim_map_ contains 'g'");
+        ASSERT(sys.dim_map_["g"] == "mass",
+               "[mass]: dim_map_['g'] == 'mass'");
+        ASSERT(sys.dim_map_.count("kg") == 1,
+               "[mass]: dim_map_ contains 'kg'");
+        ASSERT(sys.dim_map_["kg"] == "mass",
+               "[mass]: dim_map_['kg'] == 'mass'");
+    }
+
+    // BLOCKING criterion 2: `mass.kg=?` resolves to 1000 (dot-access via
+    // sub_systems cache hit — register_dim_section stores under @def:mass).
+    {
+        FormulaSystem sys;
+        sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m4-test2>");
+        const double r = sys.resolve("mass.kg", {});
+        ASSERT_NUM(r, 1000, "mass.kg=? -> 1000 via @def cache key");
+    }
+
+    // BLOCKING criterion 6: Vec literal `M = [1, 2, 3]` still works in the
+    // same file as a `[mass]` section — no collision regression. The vec
+    // literal must come BEFORE the `[mass]` section header so it stays in
+    // top-level (section headers consume all subsequent lines until the next
+    // header — there is no closing-bracket form).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "M = [1, 2, 3]\n"
+            "[mass]\ng = 1\nkg = 1000 * g\n",
+            "<m4-vec-collision>");
+        // dim section side
+        ASSERT(sys.dim_map_["g"] == "mass",
+               "vec+dim: dim_map_['g'] still 'mass'");
+        // vec side: M equation's RHS is FUNC_CALL("vec", [3 args]).
+        ExprPtr m_rhs = nullptr;
+        for (const auto& eq : sys.equations)
+            if (eq.lhs_var == "M") { m_rhs = eq.rhs; break; }
+        ASSERT(m_rhs != nullptr, "vec+dim: M equation found");
+        if (m_rhs != nullptr) {
+            ASSERT(m_rhs->type == ExprType::FUNC_CALL && m_rhs->name == "vec",
+                   "vec+dim: M RHS is FUNC_CALL('vec', ...)");
+            ASSERT(m_rhs->args.size() == 3, "vec+dim: M has 3 elements");
+        }
+    }
+
+    // -------- M3: Annotation parse `var:type = expr` -----------------------
+    // BLOCKING criterion 4: `m_obj:mass = 10 * kg` parses; dim_map_["m_obj"]
+    // == "mass". The annotation MUST be at top-level (above any subsequent
+    // `[name]` section header, which would otherwise consume it). The
+    // top-level needs `kg` in scope, so we provide `kg = 1` at top-level
+    // alongside.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "kg = 1\n"
+            "m_obj:mass = 10 * kg\n",
+            "<m3-test1>");
+        ASSERT(sys.dim_map_.count("m_obj") == 1,
+               "m_obj:mass: dim_map_ contains 'm_obj'");
+        ASSERT(sys.dim_map_["m_obj"] == "mass",
+               "m_obj:mass: dim_map_['m_obj'] == 'mass'");
+        // RHS still resolves through normal equation path.
+        ASSERT_NUM(sys.resolve("m_obj", {}), 10,
+                   "m_obj:mass = 10*kg, kg=1: m_obj resolves to 10");
+    }
+
+    // Annotation with no prior dim section (`x:length = 5` registers x as
+    // length-typed even when `length` isn't a known dim atom — predicate-side
+    // semantics treat it fail-safe; this is the *binding-side* annotation
+    // surface). The numeric RHS goes through the `defaults` path (per the
+    // pre-existing `x = <num>` shortcut), so we verify via a probe equation
+    // — `prepare_bindings` skips the default when target == name.
+    {
+        FormulaSystem sys;
+        sys.load_string("x:length = 5\nprobe_x = x\n", "<m3-test2>");
+        ASSERT(sys.dim_map_["x"] == "length",
+               "x:length without [length] section: still tags dim_map_");
+        ASSERT_NUM(sys.resolve("probe_x", {}), 5,
+                   "x:length = 5: probe_x = x resolves to 5");
+    }
+
+    // -------- M5: is_in_dimension predicate --------------------------------
+    // BLOCKING criterion 5: `is_in_dimension(v, mass)` is recognised as a
+    // predicate clause; `check_condition` evaluates it against the system's
+    // `dim_map_`. Parse-time recognition + dispatch-time evaluation.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "foo + bar = undefined iff is_in_dimension(foo, mass)\n",
+            "<m5-parse>");
+        ASSERT(!sys.rewrite_rules.empty(),
+               "is_in_dimension rule: rewrite_rules non-empty");
+        const auto& rr = sys.rewrite_rules.back();
+        ASSERT(rr.condition && !rr.condition->clauses.empty(),
+               "is_in_dimension rule: condition non-empty");
+        ASSERT(is_predicate_clause(rr.condition->clauses[0]),
+               "is_in_dimension(v, mass): is_predicate_clause returns true");
+        ASSERT(rr.condition->clauses[0].lhs->name == "is_in_dimension",
+               "is_in_dimension rule: predicate name preserved");
+    }
+
+    // check_condition with dim_map: bound Var with matching dim → true.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in_dimension(x, mass)\n",
+            "<m5-dispatch>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        std::map<std::string, std::string> dim_map{{"m_a", "mass"}, {"t_a", "time"}};
+        // x bound to Var("m_a") which has dim "mass" → true
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("m_a")}};
+            ASSERT(check_condition(cond, {}, &eb, &dim_map),
+                   "is_in_dimension(Var(m_a), mass) with dim_map[m_a]=mass → true");
+        }
+        // x bound to Var("t_a") which has dim "time" → false
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("t_a")}};
+            ASSERT(!check_condition(cond, {}, &eb, &dim_map),
+                   "is_in_dimension(Var(t_a), mass) with dim_map[t_a]=time → false");
+        }
+        // x bound to Var with no dim_map entry → false (fail-safe)
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("unknown")}};
+            ASSERT(!check_condition(cond, {}, &eb, &dim_map),
+                   "is_in_dimension(Var(unknown), mass) with no dim_map entry → false");
+        }
+        // Null dim_map → false (fail-safe)
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("m_a")}};
+            ASSERT(!check_condition(cond, {}, &eb, nullptr),
+                   "is_in_dimension with null dim_map → false (fail-safe)");
+        }
+    }
+
+    // -------- M6: Intersection annotation + is_int predicate ----------------
+    // BLOCKING criterion 7: `n:(int, mass) = 5` parses (intersection);
+    //   - dim_map_["n"] == "mass" (first dim-section atom; `int` is a type
+    //     predicate, not a dim — see D8).
+    //   - `is_int(n)` recognised as a predicate clause in rule conditions.
+    //   - `is_predicate_clause` returns true for both `is_int` and
+    //     `is_in_dimension`.
+    {
+        FormulaSystem sys;
+        sys.load_string("n:(int, mass) = 5\n", "<m6-intersection-parse>");
+        ASSERT(sys.dim_map_.count("n") == 1,
+               "n:(int, mass): dim_map_ contains 'n'");
+        ASSERT(sys.dim_map_["n"] == "mass",
+               "n:(int, mass): dim_map_['n'] == 'mass' (skips 'int')");
+    }
+
+    // `is_int(n)` parses as a predicate clause in a rewrite rule condition.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_int(x)\n",
+            "<m6-is_int-parse>");
+        ASSERT(!sys.rewrite_rules.empty(),
+               "is_int rule: rewrite_rules non-empty");
+        const auto& rr = sys.rewrite_rules.back();
+        const bool cond_present = rr.condition && !rr.condition->clauses.empty();
+        ASSERT(cond_present, "is_int rule: condition non-empty");
+        if (cond_present) {
+            ASSERT(is_predicate_clause(rr.condition->clauses[0]),
+                   "is_int(x): is_predicate_clause returns true");
+            ASSERT(rr.condition->clauses[0].lhs->name == "is_int",
+                   "is_int rule: predicate name preserved");
+        }
+    }
+
+    // check_condition with is_int: bound Var → look up in expr_bindings;
+    // returns true iff the bound expression is a NUM with integer value.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_int(x)\n",
+            "<m6-is_int-dispatch>");
+        if (sys.rewrite_rules.empty() || !sys.rewrite_rules.back().condition
+            || sys.rewrite_rules.back().condition->clauses.empty()) {
+            ASSERT(false, "is_int dispatch: rewrite rule with is_int condition unavailable (M6 GREEN not shipped)");
+        } else {
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        // Integer value → true.
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3)}};
+            ASSERT(check_condition(cond, {}, &eb),
+                   "is_int(Num(3)) → true");
+        }
+        // Negative integer → true.
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(-7)}};
+            ASSERT(check_condition(cond, {}, &eb),
+                   "is_int(Num(-7)) → true");
+        }
+        // Non-integer numeric → false.
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3.5)}};
+            ASSERT(!check_condition(cond, {}, &eb),
+                   "is_int(Num(3.5)) → false");
+        }
+        // Non-numeric binding → false (fail-safe).
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("y")}};
+            ASSERT(!check_condition(cond, {}, &eb),
+                   "is_int(Var('y')) → false (fail-safe)");
+        }
+        // Missing binding → false (fail-safe).
+        {
+            std::map<std::string, ExprPtr> eb;
+            ASSERT(!check_condition(cond, {}, &eb),
+                   "is_int with no binding for 'x' → false (fail-safe)");
+        }
+        // Null expr_bindings → false (fail-safe).
+        {
+            ASSERT(!check_condition(cond, {}),
+                   "is_int with null expr_bindings → false (fail-safe)");
+        }
+        }  // else branch (cond available)
+    }
+
+    // BLOCKING criterion 9: operator inside intersection parens raises a
+    // parse error (grammar lock-in). Only IDENT/COMMA permitted inside `(...)`.
+    // `parse_line` throws std::runtime_error, but `load_lines` catches it (per-
+    // line resilience — see system.h:543-552 comment). To make the parse error
+    // a sibling exception (so it propagates uniformly with CrossFileResolution
+    // CycleError / RaggedMatrixError, see #69 + #13 precedent), `parse_line`
+    // throws `BindingAnnotationError` for grammar lock-in inside `(...)`. The
+    // test verifies the sibling-throw propagates through load_string.
+    {
+        bool threw_sibling = false;
+        try { FormulaSystem sys; sys.load_string("n:(int * mass) = 5\n", "<m6-op-in-parens>"); }
+        catch (const BindingAnnotationError&) { threw_sibling = true; }
+        catch (...) {}
+        ASSERT(threw_sibling, "n:(int * mass): BindingAnnotationError on '*' inside parens");
+    }
+    {
+        bool threw_sibling = false;
+        try { FormulaSystem sys; sys.load_string("n:(int / mass) = 5\n", "<m6-slash-in-parens>"); }
+        catch (const BindingAnnotationError&) { threw_sibling = true; }
+        catch (...) {}
+        ASSERT(threw_sibling, "n:(int / mass): BindingAnnotationError on '/' inside parens");
+    }
+    {
+        bool threw_sibling = false;
+        try { FormulaSystem sys; sys.load_string("n:(int ^ mass) = 5\n", "<m6-caret-in-parens>"); }
+        catch (const BindingAnnotationError&) { threw_sibling = true; }
+        catch (...) {}
+        ASSERT(threw_sibling, "n:(int ^ mass): BindingAnnotationError on '^' inside parens");
+    }
+
+    // -------- M-cross: cross-file dim_map_ propagation ----------------------
+    // BLOCKING criterion 8: dim_map_ propagates to sub-systems on
+    // `load_sub_system`. Parent file declares `[mass]\ng=1\nkg=1000g`; child
+    // file uses `m_obj:mass = ...`. After the parent calls into the child
+    // (forcing sub-system load), the child's `dim_map_` must include BOTH the
+    // parent's entries (propagated, line 2847 of system.h:
+    //   `sub->dim_map_ = dim_map_;`)
+    // AND the child's own `m_obj` annotation (registered by the child's own
+    // parse_line annotation block).
+    {
+        // Child uses a self-contained equation (no parent-value dependency) so
+        // dim_map_ semantics are isolated from value-propagation semantics.
+        write_fw("/tmp/m_cross_child.fw",
+                 "m_obj:mass = 10\n"
+                 "out = m_obj + in\n");
+        // Section headers (`[mass]`) consume everything until the next header
+        // (no closing-bracket form), so the formula call must precede the
+        // dim-section header to stay at top level.
+        write_fw("/tmp/m_cross_parent.fw",
+                 "m_cross_child(out=?y, in=in)\n"
+                 "[mass]\ng = 1\nkg = 1000 * g\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/m_cross_parent.fw");
+        // Force the child sub-system to load by resolving y.
+        const double r = sys.resolve("y", {{"in", 0}});
+        ASSERT_NUM(r, 10, "m-cross: y resolves through child sub-system (forces load)");
+        // Find the child sub-system in the cache.
+        std::shared_ptr<FormulaSystem> child;
+        for (const auto& [key, sub] : sys.sub_systems) {
+            if (key.find("m_cross_child") != std::string::npos) {
+                child = sub;
+                break;
+            }
+        }
+        ASSERT(child != nullptr, "m-cross: child sub-system in sys.sub_systems");
+        if (child) {
+            // Parent's dim entries propagated to child via `sub->dim_map_ = dim_map_`:
+            ASSERT(child->dim_map_.count("g") == 1,
+                   "m-cross: child->dim_map_ contains 'g' (propagated)");
+            ASSERT(child->dim_map_["g"] == "mass",
+                   "m-cross: child->dim_map_['g'] == 'mass' (propagated)");
+            ASSERT(child->dim_map_.count("kg") == 1,
+                   "m-cross: child->dim_map_ contains 'kg' (propagated)");
+            // Child's own annotation (registered by child-side parse_line):
+            ASSERT(child->dim_map_.count("m_obj") == 1,
+                   "m-cross: child->dim_map_ contains 'm_obj' (child-side)");
+            ASSERT(child->dim_map_["m_obj"] == "mass",
+                   "m-cross: child->dim_map_['m_obj'] == 'mass'");
+        }
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -15298,6 +15651,9 @@ int main() {
 
     // Units arc cycle 3 (2026-05-13): physics formula catalog
     test_physics_mechanics();
+
+    // Constants-as-units arc cycle 2 (2026-05-14): substrate ship
+    test_gen3_cycle2_constants_as_units();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
