@@ -16,7 +16,7 @@ Archive of `Future.md` entries that have shipped. Numbering matches the original
 - Future #7b BASIC → ✅ DONE (atomic-Var dimensional rejection rules writable in stdlib `.fw`).
 - Future #65 → `is_in_dimension` ✅ DONE, `is_int` ✅ DONE (gen-3 cycle 2); remaining: `is_pos_num`, `is_num`.
 
-**Tests:** 3505 (baseline) → 3565 (+60 new gen-3 cycle-2 asserts). 7 BLOCKING criteria covered (criteria 1–9 per design; criterion 7+9 deferred to cycle 3 per Final Design Decision 10 SIMPLIFY).
+**Tests:** 3505 (baseline) → 3565 (+60 new gen-3 cycle-2 asserts). 8 of 9 BLOCKING criteria covered (criteria 1-9 per Final Design D10). Criterion 7 partial: `n:(int, mass) = 5kg` parses and writes `dim_map_["n"]="mass"` (dim half) but the `int` atom is silently dropped; binding-level `is_int` enforcement at declaration time deferred to cycle 3 (requires new `int_bindings_` primitive — ~20-30 LOC). The `is_int` predicate itself works at rule-firing time on runtime values. Criterion 9 (operator inside intersection parens raises parse error) IS shipped via `BindingAnnotationError`.
 
 ---
 

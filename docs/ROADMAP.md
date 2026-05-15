@@ -10,12 +10,36 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
 <!-- last-updated: 2026-05-15 -->
-<!-- selected-by-cycle: 2026-05-14 /plan-campaign gen-3 (objective mode — constants-as-units design arc); cycle 1 closed 2026-05-14; cycle 2 closed 2026-05-15 -->
-<!-- generation: 3 -->
+<!-- selected-by-cycle: 2026-05-15 (post-gen-3-cycle-2 reflector pause-and-survey; user direction: LLM benchmark before linear algebra, park gen-3 cycle 3 pending demand-pull) -->
+<!-- generation: 4 -->
 
 ## Active arc
 
-### Arc: Constants-as-units design (Future #78 + #77 unified resolution)
+### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
+
+**Theme:** Build a public LLM benchmark suite that exercises fwiz end-to-end through CLI / `.fw` ergonomics on real STEM problems. Generate empirical signal for missing capabilities, ergonomic friction, and where the LLM-as-user gap actually lives. Scoped down from the ideator's original 5-cycle proposal per critic recommendation: drop the "fix friction" feature-arc-in-disguise cycle and the cross-model evaluation (network deps).
+**Started:** 2026-05-15
+**Estimated cycles:** 3
+**Cycles elapsed:** 0
+**Status:** in-progress
+**Mode:** user-directed promotion (held queued since gen-2; promoted gen-4 post-gen-3-cycle-2 close)
+
+**Milestones:**
+- [ ] **Cycle 1**: Benchmark suite scaffolding in `benchmarks/llm-stem/` with 30-50 hand-curated STEM problems. Each: natural-language statement + expected fwiz invocation + expected answer. Runner is wrapper-tier Python (outside the C++ core). Per visionary's wrapper-tool boundary — benchmarks are the canonical wrapper-tier consumer of the engine.
+- [ ] **Cycle 2**: First baseline run + failure taxonomy. Bucket failures (syntax errors, missing capabilities, ergonomic friction, ambiguous error messages, fwiz bugs). Each failure files a Future.md entry with `**LLM-benchmark trigger:** seen in <problem-id>` — the user signal the project's been hungry for. Cycle 2 closes with a concrete-evidence "where LLMs struggle" report.
+- [ ] **Cycle 3**: `make benchmark` target + trend file `.fwiz-workflow/llm-benchmark-history.md`. Continuous integration into per-arc-close audit. Establishes the post-arc-close ritual: every future arc-close runs the benchmark, compares to the last green baseline, files regressions immediately.
+
+**Exit criterion:** Arc completes when all 3 cycles ship cleanly. Earlier exit possible if cycle 1 surfaces that the project's fwiz surface is too immature to benchmark meaningfully — in which case file the immaturity-surface items as IN-SCOPE Future.md entries and ROADMAP-pivot.
+
+**Vision alignment** (visionary's framing, validated at gen-2 selection): the visionary doc explicitly names LLMs as primary users. That claim has never been measured. The benchmark is the measurement loop. Strong alignment — wrapper-tier work that produces engine-tier signal.
+
+**Why this arc was chosen** (user direction 2026-05-15, post-gen-3-cycle-2 reflector pause-and-survey): the gen-3 substrate just shipped (Constants-as-units `:` annotation + dim sections + `is_in_dimension` predicate). Cycle 3 of gen-3 is demand-pull, not blocked. Meanwhile the LLM-ergonomics benchmark has been queued since gen-2 with no concrete trigger to promote — user direction explicitly fires the promotion now. Linear-algebra completeness has been queued through 3 consecutive generations (the gen-2 critic's "reject and replace if queued through a third generation" trigger structurally fired); user direction "park 3 for now" moves it out of active queueing.
+
+**Workflow shape:** standard implementation cycles. No design cycle expected; the design space is well-understood (curate problems, run them, record failures). Wrapper-tier Python — no C++ engine changes expected. Each cycle may have a brief design pass for problem-selection criteria + categorization taxonomy, but the planner/critic/visionary trio is overkill for the first two cycles.
+
+## Parked arc (was queued)
+
+### Arc: Constants-as-units design (Future #78 + #77 unified resolution) — PARKED (cycle 3 demand-pull) 2026-05-15
 
 **Theme:** Resolve Future #78 (constants-as-units semantic model) and Future #77 (`_` prefix-mul separator) as ONE unified design question. **Design arc** — deliverable is a Future.md decision document. Decision (gen-3 cycle 1, 2026-05-14): adopt the **HYBRID model + Answer C staging** — user-confirmed via plan-mode refinement.
 **Started:** 2026-05-14
@@ -49,33 +73,34 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 
 **Cycle 1 cross-cycle invariants introduced** (per orchestrator-log "Strategic Side Effects"):
 - Sections-as-dimensions convention: bare `[name]` sections semantically represent dimension categories (vs formula sections with args/return).
-- `@dim:` cache-key prefix family for `sub_systems`.
+- `@def:` cache-key path extended for in-file dim sections (NOT a new `@dim:` prefix — implementer-resolved via reusing existing `custom_function_defs_` dispatcher).
 - `:` token reserved for binding-annotation grammar only — future grammar moves require design cycle.
 - Intersection grammar lock: `(t1, t2, ...)` is atom-list only; operators inside are parse errors.
 - `dim_map_` as 3rd parallel-map on `FormulaSystem` (joins `solved_symbolic_`, `aliases_`). 4th appearance triggers Future #82 consolidation refactor.
+- `simplify_dim_map_()` thread-local + `RewriteRulesGuard` 5-arg ctor: canonical pattern for transporting solver-context maps into `apply_rewrite_rules` from `FormulaSystem` (mirrors `custom_functions_ptr_()`/`simplify_bindings_()` precedents).
+- `BindingAnnotationError` joins sibling-exception family (4th member: SolveBudget / CrossFileResolution / RaggedMatrix / BindingAnnotation).
+
+**Parking reason (2026-05-15 user direction)**: cycle 2 shipped clean (3565/3565 tests). Cycle 3 is explicitly demand-pull per the gen-3 design — triggers haven't fired (no ADD/SUB enforcement demand surfaced; no stdlib `.fw` rules consuming compound-expression dim-propagation yet; no user request for type-position arithmetic). The substrate is sufficient for current consumers. C7 enforcement (the `is_int` half of `n:(int, mass)`) was identified as a small focused micro-cycle candidate at meta-review — disposition pending user confirmation.
+
+**Reopen triggers** (any one promotes back to active):
+- C7 enforcement requested explicitly (small ~30 LOC micro-cycle).
+- ADD/SUB mismatch enforcement demanded by a stdlib `.fw` rule consumer.
+- Compound-expression rejection rules surface in stdlib (`x + y = undefined iff is_in_dimension(MUL(...), mass) && ...`).
+- User direction to resume cycle 3.
 
 ## Queued arcs
 
-### Arc: Linear-algebra completeness — finish what #14 started
+_(none currently — gen-2's queued arcs both moved out: LLM-ergonomics promoted to active above; Linear-algebra-completeness parked-out-of-queue below per user direction 2026-05-15.)_
+
+## Parked arcs
+
+### Arc: Linear-algebra completeness — finish what #14 started — PARKED (user direction 2026-05-15)
 
 **Theme:** Make fwiz a credible linear-algebra engine. N×N determinant + inverse + eigenvalues, quaternions as the first non-commutative algebra, complex-element matrices unblocked.
 **Estimated cycles:** 5-7
-**Queued reason:** Matrix-arc gen-1 paved the substrate; Future #71 IN-SCOPE is the natural cycle-1 opener. Held queued through gen-2 and gen-3 selection. **gen-3 NOTE**: this is the third consecutive generation without firing; the gen-2 critic's "reject and replace if queued through a third generation" trigger has now structurally fired BUT was preempted by gen-3 being an objective-mode design cycle (not an open-mode arc selection). The next open-mode `/plan-campaign` should explicitly weigh whether this arc has aged out of its queued grace period — concrete user signal would be needed to keep it queued.
+**Parking reason** (2026-05-15 user direction "park 3 for now"): held queued through gen-2 and gen-3 selection (3 consecutive generations without firing); the gen-2 critic's "reject and replace if queued through a third generation" trigger structurally fired. Linear-algebra has consistently scored "no concrete user signal" across selections — moved out of queue rather than continuing to occupy queued slot.
 
-**Promotion triggers**: (a) user fires a `#14` reopen trigger with concrete need for N×N inversion / eigenvalues / quaternions; OR (b) `/plan-campaign` re-selects.
-
-### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
-
-**Theme:** Build a public LLM benchmark suite that exercises fwiz end-to-end through CLI / `.fw` ergonomics on real STEM problems. Generate empirical signal for missing capabilities, ergonomic friction, and where the LLM-as-user gap actually lives. Scoped down from the ideator's original 5-cycle proposal per critic recommendation: drop the "fix friction" feature-arc-in-disguise cycle and the cross-model evaluation (network deps).
-**Estimated cycles:** 3
-**Queued reason:** User confirmed at gen-2 selection: "indeed LLM benchmark is something we need to test — we have not checked how well LLMs deal with the CLI." The visionary doc names LLMs as primary users; that claim has never been measured. Held queued behind the Units arc per critic's sequencing recommendation: benchmarking the post-units surface is more informative than benchmarking today's.
-
-**Milestone sketch** (refines when promoted to active):
-- Cycle 1: Benchmark suite scaffolding in `benchmarks/llm-stem/` with 30-50 hand-curated STEM problems. Each: natural-language statement + expected fwiz invocation + expected answer. Runner is wrapper-tier Python (outside the C++ core).
-- Cycle 2: First baseline run + failure taxonomy. Bucket failures (syntax errors, missing capabilities, ergonomic friction, ambiguous error messages, fwiz bugs). Each failure files a Future.md entry with `**LLM-benchmark trigger:** seen in <problem-id>` — the user signal the project's been hungry for.
-- Cycle 3: `make benchmark` target + trend file `.fwiz-workflow/llm-benchmark-history.md`. Continuous integration into per-arc-close audit.
-
-**Promotion triggers**: (a) Units arc ships cleanly; OR (b) user explicitly requests; OR (c) `/plan-campaign` gen-3 (or later) re-prioritizes.
+**Promotion triggers**: (a) user fires a `#14` reopen trigger with concrete need for N×N inversion / eigenvalues / quaternions; OR (b) LLM-ergonomics benchmark cycle 2 surfaces linear-algebra friction as a recurring failure mode (concrete `**LLM-benchmark trigger:** seen in <problem-id>` evidence on a linear-algebra problem class).
 
 ## Completed arcs
 
@@ -125,6 +150,8 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 - **Generation 2 arc complete (2026-05-14)**: Units arc shipped all 4 cycles, with cycle 4 firing the planned arc-exit-criterion (b) on dim-analysis. Cycles 1-3 shipped clean (engine surface, CLI-arg eval, stdlib catalog, physics demo). Cycle 4 surfaced that Future #7b (dim-analysis) is structurally blocked by Future #78 (constants-as-units design question — the dimension-tag semantic model must be settled first). Future #78 explicitly requested by the user as a design-cycle item; the arc-exit-criterion firing matches the user's stated preference for design-cycle treatment of #77 and #78. Tests 3395 → 3503 (+108). 0 implementer blocks across the arc. User-driven scope refinement at cycle 1.1 (reserved-word denylist for `e`, `if`, `iff`). Queued arcs remain: Linear-algebra completeness (still queued — third gen running), LLM-ergonomics benchmark (queued at gen-2). Future #78 design cycle is the natural next move per gen-2's explicit user direction.
 - **Generation 3 (2026-05-14, objective mode)**: First objective-mode `/plan-campaign` run, against user objective "Resolve Future #77 and #78 as ONE unified design question — coherent semantic model for the constant/unit/scalar-binding distinction in fwiz." Workflow upgrade landed at session start (`/plan-campaign` now accepts `--objective` for hard-constraint campaign planning; ideator generates divergent APPROACHES to the objective; critic's dominant axis becomes objective-fit). Plan-critic picked Approach A (Unification model — "all bindings are units; constants carry the dimensionless tag") with HIGH confidence over 4 alternatives (status-quo + #77 standalone, three-tier model, defer-#78, empirical migration). Cycle 1 is a **design cycle** (planner → critic → visionary, decision document deliverable, no IMPLEMENT phase) — first of its kind in the project, the new work-category the gen-2-close reflector flagged. Cycle 2 (substrate ship) is a normal implementation cycle.
 - **Generation 3 cycle 1 closed (2026-05-14, design refinement via plan-mode)**: Multi-turn user-driven plan-mode session refined the gen-3 shape from pure Approach A (Unification with `kg = 1 [mass]` annotation tags) to a **HYBRID model + Answer C staging**. The user surfaced their "system-as-a-type" proposal (bare `[name]` dim sections + `:` annotation + intersection grammar) and asked whether prior sets/ranges syntax could be borrowed. Plan-mode exploration found: (a) bare `[name]` is ALREADY a valid Section header today (`system.h:441-471`); (b) `NumberDomain` enum and `CondClause` typed-predicate mechanism (Future #53) already exist as the natural semantic anchor; (c) the user's syntax reuses far more existing infrastructure than expected. Hybrid synthesis: user's syntax + Approach A's dim-propagation semantics. User confirmed via the implications round (`10kg ≡ 10*mass.kg` semantics, type-safety scope) and the type-composition round (Answer C — atomic + intersection at cycle 2; named aliases and type-arithmetic deferred). Design trio (planner/critic/visionary) executed cycle 1 against the locked-in shape. Critic's simplification chain dropped cycle 2 LOC from ~220 to ~85 (defer Dim algebra and `compute_dim` to cycle 3 — no consumer in cycle 2; parameter not thread-local for `check_condition`; reuse `load_lines` instead of serialize-then-reparse). Visionary verdict STRONG with 6 specific adjustments (added BLOCKING Criterion 8 for cross-file `dim_map_` propagation; locked intersection grammar to atom-list-only; forward-comment on `DimName=string` for cycle 3 promotion; sharpened #7b two-step DONE framing; reopen trigger for binding-side metadata consolidation; `:` grammar lock-in note). Future.md deliverables: #78 → DONE-by-design; #77 → REJECTED (first entry in `docs/REJECTED.md`); #7b → two-step DONE; #65 schedule extended; #81 NEW PARKED (compound-dim aliases); #82 NEW PARKED (binding-metadata consolidation). Design doc: `.fwiz-workflow/design-proposal.md`. Plan-mode log: `/home/izzo/.claude/plans/quiet-roaming-quiche.md`.
+- **Generation 3 cycle 2 closed (2026-05-15)**: Substrate ship. ~222 production LOC (2.6× over cycle-1 design budget — justified by 4 architecture-emergent items: thread-local transport, dot-dispatch shim, `sub->defaults` walk, `BindingAnnotationError` sibling). 3565/3565 tests passing; all gates green. Future #7b BASIC ✅ DONE; Future #65 `is_in_dimension` + `is_int` ✅ DONE. Meta-review A−: 3 CLEAR-WIN profile edits (implementer.md scratch-file `ls` verification; planner.md enforcement-layer disambiguation + transport-layer enumeration anchors). C7 partial-ship — intersection annotation `n:(int, mass)` writes `dim_map_["n"]="mass"` but drops `int` atom; binding-level `is_int` enforcement at declaration time deferred (small ~30 LOC micro-cycle candidate).
+- **Generation 4 (2026-05-15, user-directed promotion)**: Post-gen-3-cycle-2 reflector emitted `pause-and-survey` (high confidence) with a 4-question survey. User direction: (1) approve workflow CLEAR-WINs — add `tools/log-spawn.sh` for mechanical orchestrator-log entries (6 bundled-close recurrences across 5 cycle shapes); planner.md + critic.md gain substrate-ship estimation caveats; (2) C7 enforcement: assess simplicity then proceed; (3+4) park linear-algebra-completeness arc (3rd-generation reject-and-replace trigger structurally fired); promote LLM-ergonomics benchmark to active; mark gen-3 arc parked-pending-trigger (cycle 3 explicitly demand-pull). LLM-ergonomics: 3 cycles, scoped-down measurement loop. Linear-algebra: parked-out-of-queue (no concrete user signal across 3 generations).
 
 ## Arc entry format
 

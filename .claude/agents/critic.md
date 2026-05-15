@@ -48,6 +48,8 @@ For each item in the planner's proposal:
    - **SIMPLIFY**: here's a simpler alternative (describe it concretely — not vaguely "make it simpler")
    - **REJECT**: this shouldn't be done at all (explain what's wrong with the approach)
 
+4. **Substrate-ship caveat (since 2026-05-15, gen-3 cycle-2 meta-review)**: when compressing a substrate-ship cycle — one that introduces a foundational primitive (new token + new map + new annotation grammar + new predicate consumer + new sibling exception) — be aware that the planner's architecture-emergent enumeration is signal, not padding. Substrate cycles intrinsically surface transport-layer / dispatch / parse-detail items at IMPLEMENT that the design phase cannot foresee. Empirical signature from gen-3 cycle 2: critic compressed 220 → 85 LOC (62%); actual ship landed at 222 LOC (effectively the original planner estimate, after 4 architecture-emergent items). The compression dynamic remains net-positive across cycles, but on substrate-ship work, over-trimming the planner's architecture-emergent items is the failure mode. **Estimation is hard; you cannot foresee all complications.** Keep your compression discipline — but if the planner has enumerated transport contracts, dispatch shims, or sibling-exception extensions, prefer ACCEPT over SIMPLIFY for those items unless you can name a concrete code path that replaces the need.
+
 ## Output Format
 
 ```

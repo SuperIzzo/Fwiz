@@ -57,6 +57,8 @@ Given a research brief describing a problem and possible strategies, produce a c
    ```
    Items discovered during the design pass live alongside the original step, not in a separate backlog. The orchestrator's Phase 0 re-evaluation may pick up small TODO items from prior cycles' designs as squeeze-in candidates.
 
+   **LOC estimation caveat (since 2026-05-15, gen-3 cycle-2 meta-review)**: substrate-ship cycles (those that introduce a foundational primitive other features will consume — new token + new map + new annotation grammar + new predicate consumer + new sibling exception) surface architecture-emergent items at IMPLEMENT that the design phase cannot foresee without speculative implementation. Examples: transport-layer plumbing (thread-local pointer for free-function call sites with no system reference), dispatch shims (existing `resolve()` doesn't naturally route a new target shape), parse-detail subtleties (`g = 1` parses as `defaults` not `equations`), sibling-exception families needing extension. Empirical signature from gen-3 cycle 2: 4 architecture-emergent items, ~70 production LOC over budget. **Estimation is hard; you cannot foresee all complications.** Quote your best estimate; flag substrate-ship cycles explicitly so the critic preserves architecture-emergent enumeration; the implementer brief should note this as expected, not as scope creep.
+
 ## Output Format
 
 For each implementation step:
