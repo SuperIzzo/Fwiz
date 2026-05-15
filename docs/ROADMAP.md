@@ -10,36 +10,65 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
 <!-- last-updated: 2026-05-15 -->
-<!-- selected-by-cycle: 2026-05-15 (post-gen-3-cycle-2 reflector pause-and-survey; user direction: LLM benchmark before linear algebra, park gen-3 cycle 3 pending demand-pull) -->
-<!-- generation: 4 -->
+<!-- selected-by-cycle: 2026-05-15 (user-directed mid-arc expansion — gen-3 arc reframed from "Constants-as-units design" to "Types as Named Sets"; LLM-benchmark returned to queued) -->
+<!-- generation: 5 -->
 
 ## Active arc
 
-### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
+### Arc: Types as Named Sets (gen-3 continuation, expanded scope)
 
-**Theme:** Build a public LLM benchmark suite that exercises fwiz end-to-end through CLI / `.fw` ergonomics on real STEM problems. Generate empirical signal for missing capabilities, ergonomic friction, and where the LLM-as-user gap actually lives. Scoped down from the ideator's original 5-cycle proposal per critic recommendation: drop the "fix friction" feature-arc-in-disguise cycle and the cross-model evaluation (network deps).
-**Started:** 2026-05-15
-**Estimated cycles:** 3
-**Cycles elapsed:** 0
-**Status:** in-progress
-**Mode:** user-directed promotion (held queued since gen-2; promoted gen-4 post-gen-3-cycle-2 close)
+**Theme:** Unify fwiz's type/domain/dimension machinery under one mechanism — **named sets**. Every type is a named set with a membership predicate. Built-in sets (int, real, rational, complex) are optimized cases of what users could write themselves. Section-based dim sets (`[mass]`, `[length]`) and user-definable predicate sets (`[whole_number(n)] iff n >= 0 && is_int(n)`) and function-section sets (`[fibonacci(n) -> result]`) all share the same surface and the same predicate-testing semantics. Closes C7 (cycle-2 partial-ship), Future #82 (consolidate binding-side metadata), and Future #7b FULL (compound-expression dim-analysis) in one coherent arc.
+
+**Started:** 2026-05-14 (as "Constants-as-units design"); expanded scope 2026-05-15 (user-directed)
+**Estimated cycles:** 2 shipped (1 design + 1 substrate) + 3-5 ahead (3a/3b/3c/3d/3e)
+**Cycles elapsed:** 2 (gen-3 cycles 1+2 from prior framing — substrate sufficient to build on)
+**Status:** cycles 1+2 ✓ DONE; cycles 3a-3e ahead under expanded framing
+**Mode:** user-directed scope expansion (was objective-mode gen-3; expanded mid-arc per design discussion 2026-05-15)
 
 **Milestones:**
-- [ ] **Cycle 1**: Benchmark suite scaffolding in `benchmarks/llm-stem/` with 30-50 hand-curated STEM problems. Each: natural-language statement + expected fwiz invocation + expected answer. Runner is wrapper-tier Python (outside the C++ core). Per visionary's wrapper-tool boundary — benchmarks are the canonical wrapper-tier consumer of the engine.
-- [ ] **Cycle 2**: First baseline run + failure taxonomy. Bucket failures (syntax errors, missing capabilities, ergonomic friction, ambiguous error messages, fwiz bugs). Each failure files a Future.md entry with `**LLM-benchmark trigger:** seen in <problem-id>` — the user signal the project's been hungry for. Cycle 2 closes with a concrete-evidence "where LLMs struggle" report.
-- [ ] **Cycle 3**: `make benchmark` target + trend file `.fwiz-workflow/llm-benchmark-history.md`. Continuous integration into per-arc-close audit. Establishes the post-arc-close ritual: every future arc-close runs the benchmark, compares to the last green baseline, files regressions immediately.
+- [x] **Cycle 1 (2026-05-14): Constants-as-units decision document.** ✓ DONE. HYBRID model + Answer C staging.
+- [x] **Cycle 2 (2026-05-15): Substrate ship.** ✓ DONE. `:` annotation token, bare `[name]` dim sections, `dim_map_`, `is_in_dimension` predicate, `is_int` predicate, `BindingAnnotationError`. 3565/3565 tests passing.
+- [ ] **Cycle 3a — Type-axis unification**: Replace `dim_map_` with `type_map_` (values are `BindingType{Dim dim; set<string> sets;}`). Introduce `SetDef` registry containing built-in sets (int/real/rational/complex via `BUILTIN_PREDICATE` dispatch) and section-based sets (existing `[mass]`/`[length]` → `DIM_SECTION` kind). Unify `is_int` and `is_in_dimension` under `is_in(v, set_name)`. C7 closes (intersection annotation populates both `BindingType.dim` and `BindingType.sets`); Future #82 closes (parallel-map consolidation: type_map_ subsumes dim_map_ + any-future int_bindings_-style parallel storage). Est. ~120-160 LOC.
+- [ ] **Cycle 3b — User-defined predicate sets**: Parser recognizes `[name(param)] iff ...` (predicate section family). Populates `set_definitions_` with `USER_PREDICATE` kind. `x:name = ...` annotation works for user sets. `is_in(x, name)` evaluates the stored condition with parameter bound to x. **Design victory**: anything fwiz ships as a built-in set could be re-expressed by a user as `[builtin_eq(n)] iff is_in(n, real) && is_integer_value(n)` etc. The language is complete enough that built-ins are optimizations, not magic. Est. ~80-120 LOC.
+- [ ] **Cycle 3d — Function-section sets** (highest user-facing payoff): `[fibonacci(n) -> result]` and similar formula sections become testable as sets via existential solve. `x:fibonacci` (or `is_in(x, fibonacci)`) triggers `?n: fibonacci(n) = x`. Mostly routing to existing solver. Est. ~50-80 LOC. **Insight**: `x ∈ f(x)` reduces membership-testing to existing solve mechanics — it's syntactic sugar.
+- [ ] **Cycle 3c — Dim algebra promotion**: `BindingType::dim` from `std::string` to `std::map<std::string, int>` (exponent algebra). `compute_dim` recursive walk. `BuiltinMeta.dim_propagate` callback. Future #7b FULL closes. Est. ~100-150 LOC.
+- [ ] **Cycle 3e (deferred-pull)**: Named compound-dim aliases (`[force] := mass * length / time^2`). Future #81 closes when promoted. Est. ~30-50 LOC.
 
-**Exit criterion:** Arc completes when all 3 cycles ship cleanly. Earlier exit possible if cycle 1 surfaces that the project's fwiz surface is too immature to benchmark meaningfully — in which case file the immaturity-surface items as IN-SCOPE Future.md entries and ROADMAP-pivot.
+**Ordering rationale:** 3a → 3b → 3d → 3c → 3e. 3a is the structural foundation; 3b adds the user-facing set declaration syntax; 3d unlocks function-section-as-set (highest user-visible value, smallest cost — mostly routing); 3c addresses compound dims with algebra; 3e is sugar when there's demand.
 
-**Vision alignment** (visionary's framing, validated at gen-2 selection): the visionary doc explicitly names LLMs as primary users. That claim has never been measured. The benchmark is the measurement loop. Strong alignment — wrapper-tier work that produces engine-tier signal.
+**Exit criterion:** Arc completes when cycles 3a/3b/3c/3d ship cleanly; 3e is optional/deferred-pull. Total: 5-7 cycle arc (2 shipped + 3-5 ahead).
 
-**Why this arc was chosen** (user direction 2026-05-15, post-gen-3-cycle-2 reflector pause-and-survey): the gen-3 substrate just shipped (Constants-as-units `:` annotation + dim sections + `is_in_dimension` predicate). Cycle 3 of gen-3 is demand-pull, not blocked. Meanwhile the LLM-ergonomics benchmark has been queued since gen-2 with no concrete trigger to promote — user direction explicitly fires the promotion now. Linear-algebra completeness has been queued through 3 consecutive generations (the gen-2 critic's "reject and replace if queued through a third generation" trigger structurally fired); user direction "park 3 for now" moves it out of active queueing.
+**Vision alignment (per the design discussion 2026-05-15)**: STRONG. Three insights validate the unification:
+1. **Sets-as-functions**: `x ∈ fibonacci ⟺ ∃ n: fibonacci(n) = x` — membership reduces to existential solve, which fwiz already does. Function-section sets are mostly sugar over existing machinery.
+2. **ValueSet ≈ SetDef**: A named set IS a ValueSet (intervals + discrete + periodic + domain) with a name. For now we keep them as structurally separate types — SetDef holds the language declaration with a membership-dispatch strategy; ValueSet stays the solver's concrete representation — but they're two views of the same concept. Future cycle may unify representations.
+3. **Built-ins are optimized cases**: `int` ships as `BUILTIN_PREDICATE` (C++ fast-path `is_integer_value`). Functionally equivalent to `[int(n)] iff is_in(n, real) && is_integer_value(n)` (just slower). The DESIGN VICTORY is the language is expressive enough that users could write their own equivalent.
 
-**Workflow shape:** standard implementation cycles. No design cycle expected; the design space is well-understood (curate problems, run them, record failures). Wrapper-tier Python — no C++ engine changes expected. Each cycle may have a brief design pass for problem-selection criteria + categorization taxonomy, but the planner/critic/visionary trio is overkill for the first two cycles.
+**Refined shape (this conversation):**
+- `SetDef` registry: `BUILTIN_PREDICATE` (fast C++) / `USER_PREDICATE` (stored Condition) / `FUNCTION_SECTION` (existential solve) / `DIM_SECTION` (type_map lookup).
+- `BindingType { Dim dim; std::set<std::string> sets; }` — type record per binding.
+- `type_map_` replaces `dim_map_` (subsumes; not parallel-adds).
+- Parameter-at-header syntax for predicate sets: `[whole_number(n)] iff ...` (no new keyword).
+- Implicit AND across multi-line predicate body (matches existing `Condition` clause structure).
+- Subset-by-restriction principle: every set is its superset constrained by a predicate.
 
-## Parked arc (was queued)
+**Why this expanded scope was chosen** (user direction 2026-05-15): the original gen-3 cycle 3 was "Dim algebra + compute_dim + BuiltinMeta.dim_propagate" — narrow, demand-pull. The post-cycle-2 design discussion surfaced that **C7 + Future #82 + the dim-vs-domain inconsistency are all aspects of the same underlying question**: what's fwiz's type system? Doing this right needs the unified named-set model. User direction: "this has been in the works for a while, we added ranges/sets as conditions but we never actually added the domains properly. I think this is a good feature to land next." LLM-ergonomics benchmark returns to queued — it can wait, and benchmarking the post-types surface is more informative than benchmarking today's.
 
-### Arc: Constants-as-units design (Future #78 + #77 unified resolution) — PARKED (cycle 3 demand-pull) 2026-05-15
+**Workflow shape:** cycle 3a is a normal implementation cycle but with a full design trio first (user-requested 2026-05-15: "let's record decision we made and run the full design trio"). 3b/3c/3d/3e follow the standard pattern.
+
+## Queued arcs
+
+### Arc: LLM-ergonomics benchmark — scoped-down measurement loop
+
+**Theme:** Build a public LLM benchmark suite that exercises fwiz end-to-end through CLI / `.fw` ergonomics on real STEM problems. (See archived gen-4 entry for full details.)
+**Estimated cycles:** 3
+**Queued reason** (returned 2026-05-15): briefly promoted to active at gen-4 close; user direction "this is the new cycle" + "LLM benchmark can wait" returned it to queued in favor of the Types-as-Named-Sets arc. Will be more informative to benchmark the post-types surface than today's.
+**Promotion triggers:** (a) Types arc completes (3a-3d ship); OR (b) user explicitly requests; OR (c) any cycle in the Types arc surfaces "we need empirical LLM signal to decide X" — promote earlier.
+
+## Parked arcs
+
+### Arc: Constants-as-units (original narrow framing) — SUPERSEDED by expanded gen-5 framing
+
+The original gen-3 arc was "Constants-as-units design (Future #78 + #77 unified resolution)" with cycles 1+2 done and cycle 3 demand-pull. The cycle-3 work is now subsumed by the Types-as-Named-Sets arc (cycle 3c). Cycle 1+2 deliverables remain valid; the framing expands.
 
 **Theme:** Resolve Future #78 (constants-as-units semantic model) and Future #77 (`_` prefix-mul separator) as ONE unified design question. **Design arc** — deliverable is a Future.md decision document. Decision (gen-3 cycle 1, 2026-05-14): adopt the **HYBRID model + Answer C staging** — user-confirmed via plan-mode refinement.
 **Started:** 2026-05-14
@@ -87,12 +116,6 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 - ADD/SUB mismatch enforcement demanded by a stdlib `.fw` rule consumer.
 - Compound-expression rejection rules surface in stdlib (`x + y = undefined iff is_in_dimension(MUL(...), mass) && ...`).
 - User direction to resume cycle 3.
-
-## Queued arcs
-
-_(none currently — gen-2's queued arcs both moved out: LLM-ergonomics promoted to active above; Linear-algebra-completeness parked-out-of-queue below per user direction 2026-05-15.)_
-
-## Parked arcs
 
 ### Arc: Linear-algebra completeness — finish what #14 started — PARKED (user direction 2026-05-15)
 
@@ -152,6 +175,7 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 - **Generation 3 cycle 1 closed (2026-05-14, design refinement via plan-mode)**: Multi-turn user-driven plan-mode session refined the gen-3 shape from pure Approach A (Unification with `kg = 1 [mass]` annotation tags) to a **HYBRID model + Answer C staging**. The user surfaced their "system-as-a-type" proposal (bare `[name]` dim sections + `:` annotation + intersection grammar) and asked whether prior sets/ranges syntax could be borrowed. Plan-mode exploration found: (a) bare `[name]` is ALREADY a valid Section header today (`system.h:441-471`); (b) `NumberDomain` enum and `CondClause` typed-predicate mechanism (Future #53) already exist as the natural semantic anchor; (c) the user's syntax reuses far more existing infrastructure than expected. Hybrid synthesis: user's syntax + Approach A's dim-propagation semantics. User confirmed via the implications round (`10kg ≡ 10*mass.kg` semantics, type-safety scope) and the type-composition round (Answer C — atomic + intersection at cycle 2; named aliases and type-arithmetic deferred). Design trio (planner/critic/visionary) executed cycle 1 against the locked-in shape. Critic's simplification chain dropped cycle 2 LOC from ~220 to ~85 (defer Dim algebra and `compute_dim` to cycle 3 — no consumer in cycle 2; parameter not thread-local for `check_condition`; reuse `load_lines` instead of serialize-then-reparse). Visionary verdict STRONG with 6 specific adjustments (added BLOCKING Criterion 8 for cross-file `dim_map_` propagation; locked intersection grammar to atom-list-only; forward-comment on `DimName=string` for cycle 3 promotion; sharpened #7b two-step DONE framing; reopen trigger for binding-side metadata consolidation; `:` grammar lock-in note). Future.md deliverables: #78 → DONE-by-design; #77 → REJECTED (first entry in `docs/REJECTED.md`); #7b → two-step DONE; #65 schedule extended; #81 NEW PARKED (compound-dim aliases); #82 NEW PARKED (binding-metadata consolidation). Design doc: `.fwiz-workflow/design-proposal.md`. Plan-mode log: `/home/izzo/.claude/plans/quiet-roaming-quiche.md`.
 - **Generation 3 cycle 2 closed (2026-05-15)**: Substrate ship. ~222 production LOC (2.6× over cycle-1 design budget — justified by 4 architecture-emergent items: thread-local transport, dot-dispatch shim, `sub->defaults` walk, `BindingAnnotationError` sibling). 3565/3565 tests passing; all gates green. Future #7b BASIC ✅ DONE; Future #65 `is_in_dimension` + `is_int` ✅ DONE. Meta-review A−: 3 CLEAR-WIN profile edits (implementer.md scratch-file `ls` verification; planner.md enforcement-layer disambiguation + transport-layer enumeration anchors). C7 partial-ship — intersection annotation `n:(int, mass)` writes `dim_map_["n"]="mass"` but drops `int` atom; binding-level `is_int` enforcement at declaration time deferred (small ~30 LOC micro-cycle candidate).
 - **Generation 4 (2026-05-15, user-directed promotion)**: Post-gen-3-cycle-2 reflector emitted `pause-and-survey` (high confidence) with a 4-question survey. User direction: (1) approve workflow CLEAR-WINs — add `tools/log-spawn.sh` for mechanical orchestrator-log entries (6 bundled-close recurrences across 5 cycle shapes); planner.md + critic.md gain substrate-ship estimation caveats; (2) C7 enforcement: assess simplicity then proceed; (3+4) park linear-algebra-completeness arc (3rd-generation reject-and-replace trigger structurally fired); promote LLM-ergonomics benchmark to active; mark gen-3 arc parked-pending-trigger (cycle 3 explicitly demand-pull). LLM-ergonomics: 3 cycles, scoped-down measurement loop. Linear-algebra: parked-out-of-queue (no concrete user signal across 3 generations).
+- **Generation 5 (2026-05-15, user-directed mid-arc scope expansion)**: Discussion-driven re-prioritization. C7 enforcement (cycle-2 partial-ship — `is_int` half of intersection annotation dropped) prompted a step-back design conversation. User observation: "we added ranges/sets as conditions but we never actually added the domains properly." The unification surfaced naturally — types/domains/dimensions are all aspects of "named sets with membership predicates." Three insights validated: (1) sets-as-functions (`x ∈ f(x)` is existential solve — uses existing mechanics); (2) ValueSet ≈ SetDef (named sets are ValueSets with names); (3) built-in sets are optimized cases of user-writable sets — "if users can derive their own int from a superset that's a design victory." gen-3 arc reframed from "Constants-as-units design" to "Types as Named Sets" (cycle 3 → 3a/3b/3c/3d/3e — 3-5 cycle expansion). LLM-ergonomics benchmark returns to queued ("LLM benchmark can wait"). Full design trio (planner + critic + visionary) requested for cycle 3a; design captured via conversation rather than research phase.
 
 ## Arc entry format
 
