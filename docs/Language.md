@@ -589,25 +589,31 @@ triple(x) = 3 * x
 
 ### 10.6 Typed-Binding Predicates
 
-Some rule conditions test the *type* of a wildcard binding rather than comparing values. Three predicates are currently available:
+Some rule conditions test the *type* of a wildcard binding rather than comparing values. Two canonical predicates are available (since gen-5 cycle 3a, 2026-05-15):
 
 | Predicate | Arity | True when |
 |-----------|-------|-----------|
 | `is_neg_num(n)` | 1 | `n` binds to a negative numeric literal |
-| `is_int(n)` | 1 | `n` binds to a Num with integer value |
-| `is_in_dimension(v, dim)` | 2 | the Var that `v` binds to has dimension `dim` in the loaded dim-map |
+| `is_in(v, set_name)` | 2 | binding of `v` is a member of the named set (see §17.3) |
+
+**Legacy aliases** (accepted at rule-load time, rewritten to `is_in` internally):
+- `is_int(n)` → `is_in(n, int)`
+- `is_in_dimension(v, dim)` → `is_in(v, dim)`
 
 ```
 x ^ n = 1 / x ^ (-n)  iff is_neg_num(n)
 # Only fires when exponent is a known negative literal; symbolic -k is unaffected.
 
-x + y = undefined  iff is_in_dimension(x, mass) && is_in_dimension(y, time)
+x + y = undefined  iff is_in(x, mass) && is_in(y, time)
 # Dimension-rejection rule: adding mass to time is undefined.
+
+floor(n) = n  iff is_in(n, int)
+# Rule using built-in named set.
 ```
 
-Fail-safe semantics: if the wildcard is not bound, or is bound to the wrong kind of node, the predicate returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
+Fail-safe semantics: if the wildcard is not bound, or the binding does not satisfy the predicate, it returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
 
-`is_in_dimension` requires dimension annotations on variables — see §17.
+`is_in(v, dim_name)` where `dim_name` is a dimension section requires dimension annotations on variables — see §17.
 
 ---
 
@@ -835,7 +841,7 @@ The simplifier applies the builtin rewrite rules `i * i = -1` and `i^2 = -1`. An
 
 ## 17. Dimension Annotations
 
-Since gen-3 cycle 2 (2026-05-15), fwiz supports optional dimension annotations on variables and named dimension sections that group unit bindings.
+Since gen-3 cycle 2 (2026-05-15), fwiz supports optional dimension annotations on variables and named dimension sections that group unit bindings. Gen-5 cycle 3a (2026-05-15) extended the annotation system with a unified named-set registry and canonical `is_in` predicate.
 
 ### 17.1 Dimension Sections
 
@@ -848,7 +854,7 @@ kg = 1000 * g
 lb = 453.592 * g
 ```
 
-Every variable bound inside the section (`g`, `kg`, `lb`) is automatically registered as having dimension `mass` in the system's `dim_map_`. The section body uses ordinary equation and default syntax; numeric-RHS lines become defaults; equation-RHS lines become equations — same rules as the top level.
+Every variable bound inside the section (`g`, `kg`, `lb`) is automatically registered as having dimension `mass` in the system's `type_map_`. The section body uses ordinary equation and default syntax; numeric-RHS lines become defaults; equation-RHS lines become equations — same rules as the top level.
 
 Access values via dot-dispatch:
 
@@ -859,31 +865,54 @@ mass.kg = 1000
 
 ### 17.2 Binding Annotations
 
-The `:` token annotates an individual binding with a dimension:
+The `:` token annotates an individual binding with a type:
 
 ```
-m_obj:mass = 10 * kg      # atomic: m_obj is tagged as dimension 'mass'
-n:(int, mass) = 5         # intersection: n is tagged with both 'int' and 'mass'
+m_obj:mass = 10 * kg      # atomic: m_obj tagged as dimension 'mass'
+n:(int, mass) = 5         # intersection: n gets dim=mass AND set membership int
 ```
 
-After the annotation is stripped, the line is parsed as a normal equation or default. The annotation does NOT change the variable's numeric value — only its entry in `dim_map_`.
+After the annotation is stripped, the line is parsed as a normal equation or default. The annotation does NOT change the variable's numeric value — only its entry in `type_map_`.
 
-Operators inside intersection parentheses (`*`, `/`, `^`) raise a `BindingAnnotationError` parse-time error. Only bare identifiers separated by commas are accepted.
+**Intersection classification (since gen-5 cycle 3a):** each atom in the intersection list is looked up in the `set_definitions_` registry. Atoms registered as `DIM_SECTION` (e.g. `mass`, `length`) populate `BindingType.dim`; atoms registered as `BUILTIN_PREDICATE` (e.g. `int`, `real`, `rational`, `complex`) populate `BindingType.sets`. An unknown atom raises `BindingAnnotationError` at parse time, naming the unknown atom and listing built-in alternatives.
 
-### 17.3 Dimension-Checking Rewrite Rules
+Operators inside intersection parentheses (`*`, `/`, `^`) raise a `BindingAnnotationError`. Only bare identifiers separated by commas are accepted.
 
-The `is_in_dimension(v, dim)` predicate tests whether a wildcard's bound Var is registered under dimension `dim`. This enables dimension-rejection rules in stdlib `.fw` files:
+### 17.3 Named Sets
+
+Four built-in named sets are available in any annotation or predicate condition:
+
+| Name | Membership |
+|------|-----------|
+| `int` | value is an integer (finite, `is_integer_value(v)`) |
+| `real` | value is a finite real (non-NaN, non-inf) |
+| `rational` | currently equivalent to `real` |
+| `complex` | accepts NaN-sentinel (covers `i`-containing expressions) |
+
+These are the same names you use in intersection annotations (`n:(int, mass) = 5`) and in `is_in` rule predicates (`is_in(n, int)`).
+
+### 17.4 Dimension-Checking Rewrite Rules
+
+The canonical predicate is `is_in(v, set_name)`:
 
 ```
 # prevent adding mass to time (dim-mismatch rule):
-x + y = undefined  iff is_in_dimension(x, mass) && is_in_dimension(y, time)
+x + y = undefined  iff is_in(x, mass) && is_in(y, time)
+
+# integer-only rule:
+floor(n) = n  iff is_in(n, int)
 ```
 
-The predicate is fail-safe: if the variable is not annotated, it returns false (rule does not fire). See §10.6 for the full predicate set.
+**Legacy aliases** (accepted at rule-load time, rewritten to `is_in` internally):
+- `is_int(n)` → `is_in(n, int)`
+- `is_in_dimension(v, dim)` → `is_in(v, dim)`
 
-### 17.4 Current Scope and Limitations
+Both legacy forms still work — the engine normalizes them at parse time. All predicates are fail-safe: if the variable is not annotated or not bound, the predicate returns false (rule does not fire). See §10.6 for the full predicate table.
 
-- Atomic annotations and intersection annotations ship in cycle 2.
-- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`) is deferred to cycle 3 (Future #7b FULL). Until then, `is_in_dimension` only works on bare annotated Vars, not compound sub-expressions.
+### 17.5 Current Scope and Limitations
+
+- Atomic annotations, intersection annotations, and the four built-in named sets ship in cycle 3a.
+- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`) is deferred to cycle 3c (Future #7b FULL). Until then, `is_in(expr, mass)` only works on bare annotated Vars, not compound sub-expressions.
 - Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — Future #81.
-- Stdlib `.fw` files do not yet wrap SI base units in dim sections — that is a natural cycle-3 follow-on.
+- User-defined predicate sets (`[whole_number(n)] iff n >= 0 && is_in(n, int)`) are planned for cycle 3b.
+- Stdlib `.fw` files do not yet wrap SI base units in dim sections — that is a natural cycle-3c follow-on.

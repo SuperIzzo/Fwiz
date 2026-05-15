@@ -14959,7 +14959,7 @@ void test_physics_mechanics() {
 // predicate, intersection annotation. 9 BLOCKING + 1 NICE acceptance
 // criteria. Design: `.fwiz-workflow/design-proposal.md` Final Design.
 void test_gen3_cycle2_constants_as_units() {
-    SECTION("gen-3 cycle 2: Constants-as-units substrate (COLON, dim_map_, [dim], `:`, is_in_dimension, intersection)");
+    SECTION("gen-3 cycle 2: Constants-as-units substrate (COLON, type_map_, [dim], `:`, is_in_dimension, intersection)");
 
     // -------- M1: COLON lexer token ----------------------------------------
     // BLOCKING criterion 3 — `:` tokenizes as TokenType::COLON.
@@ -14986,31 +14986,34 @@ void test_gen3_cycle2_constants_as_units() {
         ASSERT(tokens[1].type == TokenType::END,   "':' alone: tok1 END");
     }
 
-    // -------- M2: DimName typedef + dim_map_ member ------------------------
+    // -------- M2: DimName typedef + type_map_ member -----------------------
+    // (gen-5 cycle 3a 2026-05-15: dim_map_ renamed to type_map_; value type
+    // is BindingType instead of plain string. `.dim` field carries the cycle-2
+    // semantics.)
     // Member compiles, default-constructs empty.
     {
         FormulaSystem sys;
-        ASSERT(sys.dim_map_.empty(), "fresh sys: dim_map_ empty");
+        ASSERT(sys.type_map_.empty(), "fresh sys: type_map_ empty");
         // DimName typedef sanity: assignable from string literal, comparable.
-        sys.dim_map_["test_var"] = "mass";
-        ASSERT(sys.dim_map_["test_var"] == "mass", "dim_map_['test_var'] == 'mass'");
-        ASSERT(sys.dim_map_.size() == 1, "dim_map_ size 1 after one insert");
+        sys.type_map_["test_var"].dim = "mass";
+        ASSERT(sys.type_map_["test_var"].dim == "mass", "type_map_['test_var'].dim == 'mass'");
+        ASSERT(sys.type_map_.size() == 1, "type_map_ size 1 after one insert");
     }
 
     // -------- M4: Dim section registration ---------------------------------
     // BLOCKING criterion 1: `[mass]\ng=1\nkg=1000g` loaded ⇒
-    //   dim_map_["g"]=="mass" AND dim_map_["kg"]=="mass".
+    //   type_map_["g"].dim=="mass" AND type_map_["kg"].dim=="mass".
     {
         FormulaSystem sys;
         sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m4-test1>");
-        ASSERT(sys.dim_map_.count("g") == 1,
-               "[mass]: dim_map_ contains 'g'");
-        ASSERT(sys.dim_map_["g"] == "mass",
-               "[mass]: dim_map_['g'] == 'mass'");
-        ASSERT(sys.dim_map_.count("kg") == 1,
-               "[mass]: dim_map_ contains 'kg'");
-        ASSERT(sys.dim_map_["kg"] == "mass",
-               "[mass]: dim_map_['kg'] == 'mass'");
+        ASSERT(sys.type_map_.count("g") == 1,
+               "[mass]: type_map_ contains 'g'");
+        ASSERT(sys.type_map_["g"].dim == "mass",
+               "[mass]: type_map_['g'].dim == 'mass'");
+        ASSERT(sys.type_map_.count("kg") == 1,
+               "[mass]: type_map_ contains 'kg'");
+        ASSERT(sys.type_map_["kg"].dim == "mass",
+               "[mass]: type_map_['kg'].dim == 'mass'");
     }
 
     // BLOCKING criterion 2: `mass.kg=?` resolves to 1000 (dot-access via
@@ -15034,8 +15037,8 @@ void test_gen3_cycle2_constants_as_units() {
             "[mass]\ng = 1\nkg = 1000 * g\n",
             "<m4-vec-collision>");
         // dim section side
-        ASSERT(sys.dim_map_["g"] == "mass",
-               "vec+dim: dim_map_['g'] still 'mass'");
+        ASSERT(sys.type_map_["g"].dim == "mass",
+               "vec+dim: type_map_['g'].dim still 'mass'");
         // vec side: M equation's RHS is FUNC_CALL("vec", [3 args]).
         ExprPtr m_rhs = nullptr;
         for (const auto& eq : sys.equations)
@@ -15049,21 +15052,25 @@ void test_gen3_cycle2_constants_as_units() {
     }
 
     // -------- M3: Annotation parse `var:type = expr` -----------------------
-    // BLOCKING criterion 4: `m_obj:mass = 10 * kg` parses; dim_map_["m_obj"]
-    // == "mass". The annotation MUST be at top-level (above any subsequent
-    // `[name]` section header, which would otherwise consume it). The
-    // top-level needs `kg` in scope, so we provide `kg = 1` at top-level
-    // alongside.
+    // BLOCKING criterion 4: `m_obj:mass = 10 * kg` parses; type_map_["m_obj"].dim
+    // == "mass" (gen-5 cycle 3a rename). The annotation MUST be at top-level
+    // (above any subsequent `[name]` section header, which would otherwise
+    // consume it). The top-level needs `kg` in scope, so we provide `kg = 1`
+    // at top-level alongside.
     {
         FormulaSystem sys;
+        // M4 (gen-5 cycle 3a): D10 hard error requires [mass] to be declared
+        // before annotation use. [mass] greedy-consumes following lines, so it
+        // goes at end.
         sys.load_string(
             "kg = 1\n"
-            "m_obj:mass = 10 * kg\n",
+            "m_obj:mass = 10 * kg\n"
+            "[mass]\nrefkg = 1\n",
             "<m3-test1>");
-        ASSERT(sys.dim_map_.count("m_obj") == 1,
-               "m_obj:mass: dim_map_ contains 'm_obj'");
-        ASSERT(sys.dim_map_["m_obj"] == "mass",
-               "m_obj:mass: dim_map_['m_obj'] == 'mass'");
+        ASSERT(sys.type_map_.count("m_obj") == 1,
+               "m_obj:mass: type_map_ contains 'm_obj'");
+        ASSERT(sys.type_map_["m_obj"].dim == "mass",
+               "m_obj:mass: type_map_['m_obj'].dim == 'mass'");
         // RHS still resolves through normal equation path.
         ASSERT_NUM(sys.resolve("m_obj", {}), 10,
                    "m_obj:mass = 10*kg, kg=1: m_obj resolves to 10");
@@ -15077,21 +15084,30 @@ void test_gen3_cycle2_constants_as_units() {
     // — `prepare_bindings` skips the default when target == name.
     {
         FormulaSystem sys;
-        sys.load_string("x:length = 5\nprobe_x = x\n", "<m3-test2>");
-        ASSERT(sys.dim_map_["x"] == "length",
-               "x:length without [length] section: still tags dim_map_");
+        // M4 (cycle 3a, 2026-05-15): D10 hard error on unknown atoms. Test now
+        // declares [length] dim section first so 'length' is a registered atom.
+        sys.load_string(
+            "probe_x = x\n"
+            "x:length = 5\n"
+            "[length]\nrefm = 1\n",
+            "<m3-test2>");
+        ASSERT(sys.type_map_["x"].dim == "length",
+               "x:length: type_map_['x'].dim == 'length' (with [length] section)");
         ASSERT_NUM(sys.resolve("probe_x", {}), 5,
                    "x:length = 5: probe_x = x resolves to 5");
     }
 
-    // -------- M5: is_in_dimension predicate --------------------------------
-    // BLOCKING criterion 5: `is_in_dimension(v, mass)` is recognised as a
-    // predicate clause; `check_condition` evaluates it against the system's
-    // `dim_map_`. Parse-time recognition + dispatch-time evaluation.
+    // -------- M5: is_in_dimension predicate (parse-time rewrite to is_in) ---
+    // BLOCKING criterion 5 + cycle-3a D8: `is_in_dimension(v, mass)` is
+    // rewritten to canonical `is_in(v, mass)` at parse time; dispatched via
+    // the unified is_in pathway against type_map_ + set_definitions_.
+    // Rule appears BEFORE [mass] section because dim sections (bare bracket,
+    // no `-> ret`) greedy-consume subsequent lines as body.
     {
         FormulaSystem sys;
         sys.load_string(
-            "foo + bar = undefined iff is_in_dimension(foo, mass)\n",
+            "foo + bar = undefined iff is_in_dimension(foo, mass)\n"
+            "[mass]\nrefkg = 1\n",  // register mass as DIM_SECTION
             "<m5-parse>");
         ASSERT(!sys.rewrite_rules.empty(),
                "is_in_dimension rule: rewrite_rules non-empty");
@@ -15100,61 +15116,83 @@ void test_gen3_cycle2_constants_as_units() {
                "is_in_dimension rule: condition non-empty");
         ASSERT(is_predicate_clause(rr.condition->clauses[0]),
                "is_in_dimension(v, mass): is_predicate_clause returns true");
-        ASSERT(rr.condition->clauses[0].lhs->name == "is_in_dimension",
-               "is_in_dimension rule: predicate name preserved");
+        ASSERT(rr.condition->clauses[0].lhs->name == "is_in",
+               "is_in_dimension rule: rewritten to canonical 'is_in' name");
+        ASSERT(rr.condition->clauses[0].lhs->args.size() == 2,
+               "is_in_dimension rule: 2-arg form");
+        ASSERT(rr.condition->clauses[0].lhs->args[1]->name == "mass",
+               "is_in_dimension rule: dim atom preserved");
     }
 
-    // check_condition with dim_map: bound Var with matching dim → true.
+    // check_condition with SimplifyContext: bound Var with matching dim → true.
     {
         FormulaSystem sys;
         sys.load_string(
-            "x + y = undefined iff is_in_dimension(x, mass)\n",
+            "x + y = undefined iff is_in_dimension(x, mass)\n"
+            "[mass]\nrefkg = 1\n"
+            "[time]\nrefs = 1\n",
             "<m5-dispatch>");
         const auto& cond = *sys.rewrite_rules.back().condition;
-        std::map<std::string, std::string> dim_map{{"m_a", "mass"}, {"t_a", "time"}};
+        std::map<std::string, BindingType> type_map;
+        type_map["m_a"].dim = "mass";
+        type_map["t_a"].dim = "time";
+        std::map<std::string, SetDef> set_defs;
+        set_defs["mass"] = SetDef{"mass", SetDef::Kind::DIM_SECTION, nullptr};
+        set_defs["time"] = SetDef{"time", SetDef::Kind::DIM_SECTION, nullptr};
+        const SimplifyContext ctx{&type_map, &set_defs};
         // x bound to Var("m_a") which has dim "mass" → true
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Var("m_a")}};
-            ASSERT(check_condition(cond, {}, &eb, &dim_map),
-                   "is_in_dimension(Var(m_a), mass) with dim_map[m_a]=mass → true");
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Var(m_a), mass) with type_map[m_a].dim=mass → true");
         }
         // x bound to Var("t_a") which has dim "time" → false
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Var("t_a")}};
-            ASSERT(!check_condition(cond, {}, &eb, &dim_map),
-                   "is_in_dimension(Var(t_a), mass) with dim_map[t_a]=time → false");
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Var(t_a), mass) with type_map[t_a].dim=time → false");
         }
-        // x bound to Var with no dim_map entry → false (fail-safe)
+        // x bound to Var with no type_map entry → false (fail-safe)
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Var("unknown")}};
-            ASSERT(!check_condition(cond, {}, &eb, &dim_map),
-                   "is_in_dimension(Var(unknown), mass) with no dim_map entry → false");
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Var(unknown), mass) with no type_map entry → false");
         }
-        // Null dim_map → false (fail-safe)
+        // Null ctx → false (fail-safe)
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Var("m_a")}};
             ASSERT(!check_condition(cond, {}, &eb, nullptr),
-                   "is_in_dimension with null dim_map → false (fail-safe)");
+                   "is_in with null SimplifyContext → false (fail-safe)");
         }
     }
 
     // -------- M6: Intersection annotation + is_int predicate ----------------
-    // BLOCKING criterion 7: `n:(int, mass) = 5` parses (intersection);
-    //   - dim_map_["n"] == "mass" (first dim-section atom; `int` is a type
-    //     predicate, not a dim — see D8).
-    //   - `is_int(n)` recognised as a predicate clause in rule conditions.
-    //   - `is_predicate_clause` returns true for both `is_int` and
-    //     `is_in_dimension`.
+    // BLOCKING criterion 7 (gen-5 cycle 3a, updated from cycle-2 framing):
+    //   - `n:(int, mass) = 5` parses (intersection grammar).
+    //   - Structured classification via `set_definitions_`:
+    //       'int' (BUILTIN_PREDICATE)  → type_map_["n"].sets.insert("int")
+    //       'mass' (DIM_SECTION)       → type_map_["n"].dim = "mass"
+    //   - `is_int(n)` accepted as parse-time sugar; rewrites to `is_in(n, int)`
+    //     at rule-load. `is_predicate_clause` recognises only `is_neg_num`
+    //     and the canonical `is_in` form (cycle 3a D8 SIMPLIFY).
     {
         FormulaSystem sys;
-        sys.load_string("n:(int, mass) = 5\n", "<m6-intersection-parse>");
-        ASSERT(sys.dim_map_.count("n") == 1,
-               "n:(int, mass): dim_map_ contains 'n'");
-        ASSERT(sys.dim_map_["n"] == "mass",
-               "n:(int, mass): dim_map_['n'] == 'mass' (skips 'int')");
+        // M4 (cycle 3a): full structured classification via set_definitions_.
+        // 'int' goes into .sets (BUILTIN_PREDICATE); 'mass' into .dim
+        // (DIM_SECTION). Requires [mass] declared.
+        sys.load_string(
+            "n:(int, mass) = 5\n"
+            "[mass]\nrefkg = 1\n",
+            "<m6-intersection-parse>");
+        ASSERT(sys.type_map_.count("n") == 1,
+               "n:(int, mass): type_map_ contains 'n'");
+        ASSERT(sys.type_map_["n"].dim == "mass",
+               "n:(int, mass): type_map_['n'].dim == 'mass' (DIM_SECTION classification)");
+        ASSERT(sys.type_map_["n"].sets.count("int") == 1,
+               "n:(int, mass): type_map_['n'].sets contains 'int' (BUILTIN_PREDICATE classification)");
     }
 
-    // `is_int(n)` parses as a predicate clause in a rewrite rule condition.
+    // `is_int(n)` parses and rewrites to `is_in(n, int)` (gen-5 cycle 3a D8).
     {
         FormulaSystem sys;
         sys.load_string(
@@ -15167,14 +15205,18 @@ void test_gen3_cycle2_constants_as_units() {
         ASSERT(cond_present, "is_int rule: condition non-empty");
         if (cond_present) {
             ASSERT(is_predicate_clause(rr.condition->clauses[0]),
-                   "is_int(x): is_predicate_clause returns true");
-            ASSERT(rr.condition->clauses[0].lhs->name == "is_int",
-                   "is_int rule: predicate name preserved");
+                   "is_int(x) rewritten: is_predicate_clause returns true");
+            ASSERT(rr.condition->clauses[0].lhs->name == "is_in",
+                   "is_int rule: rewritten to canonical 'is_in' name");
+            ASSERT(rr.condition->clauses[0].lhs->args.size() == 2,
+                   "is_int rule: rewritten 2-arg form");
+            ASSERT(rr.condition->clauses[0].lhs->args[1]->name == "int",
+                   "is_int rule: 2nd arg is 'int'");
         }
     }
 
-    // check_condition with is_int: bound Var → look up in expr_bindings;
-    // returns true iff the bound expression is a NUM with integer value.
+    // check_condition with is_in(_, int): SimplifyContext required since
+    // dispatch routes through set_definitions_["int"].membership.
     {
         FormulaSystem sys;
         sys.load_string(
@@ -15182,43 +15224,51 @@ void test_gen3_cycle2_constants_as_units() {
             "<m6-is_int-dispatch>");
         if (sys.rewrite_rules.empty() || !sys.rewrite_rules.back().condition
             || sys.rewrite_rules.back().condition->clauses.empty()) {
-            ASSERT(false, "is_int dispatch: rewrite rule with is_int condition unavailable (M6 GREEN not shipped)");
+            ASSERT(false, "is_int dispatch: rewrite rule with is_int condition unavailable");
         } else {
         const auto& cond = *sys.rewrite_rules.back().condition;
+        // System has set_definitions_ populated by load_builtins (incl. int).
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
         // Integer value → true.
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3)}};
-            ASSERT(check_condition(cond, {}, &eb),
-                   "is_int(Num(3)) → true");
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Num(3), int) → true");
         }
         // Negative integer → true.
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Num(-7)}};
-            ASSERT(check_condition(cond, {}, &eb),
-                   "is_int(Num(-7)) → true");
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Num(-7), int) → true");
         }
         // Non-integer numeric → false.
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3.5)}};
-            ASSERT(!check_condition(cond, {}, &eb),
-                   "is_int(Num(3.5)) → false");
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Num(3.5), int) → false");
         }
-        // Non-numeric binding → false (fail-safe).
+        // Non-numeric binding (free var, evaluate fails) → false (fail-safe).
         {
             std::map<std::string, ExprPtr> eb{{"x", Expr::Var("y")}};
-            ASSERT(!check_condition(cond, {}, &eb),
-                   "is_int(Var('y')) → false (fail-safe)");
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "is_in(Var('y'), int) with unresolved y → false (fail-safe)");
         }
         // Missing binding → false (fail-safe).
         {
             std::map<std::string, ExprPtr> eb;
-            ASSERT(!check_condition(cond, {}, &eb),
-                   "is_int with no binding for 'x' → false (fail-safe)");
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "is_in with no binding for 'x' → false (fail-safe)");
         }
         // Null expr_bindings → false (fail-safe).
         {
             ASSERT(!check_condition(cond, {}),
-                   "is_int with null expr_bindings → false (fail-safe)");
+                   "is_in with null expr_bindings → false (fail-safe)");
+        }
+        // Null SimplifyContext → false (fail-safe).
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3)}};
+            ASSERT(!check_condition(cond, {}, &eb, nullptr),
+                   "is_in with null SimplifyContext → false (fail-safe)");
         }
         }  // else branch (cond available)
     }
@@ -15253,14 +15303,13 @@ void test_gen3_cycle2_constants_as_units() {
         ASSERT(threw_sibling, "n:(int ^ mass): BindingAnnotationError on '^' inside parens");
     }
 
-    // -------- M-cross: cross-file dim_map_ propagation ----------------------
-    // BLOCKING criterion 8: dim_map_ propagates to sub-systems on
-    // `load_sub_system`. Parent file declares `[mass]\ng=1\nkg=1000g`; child
-    // file uses `m_obj:mass = ...`. After the parent calls into the child
-    // (forcing sub-system load), the child's `dim_map_` must include BOTH the
-    // parent's entries (propagated, line 2847 of system.h:
-    //   `sub->dim_map_ = dim_map_;`)
-    // AND the child's own `m_obj` annotation (registered by the child's own
+    // -------- M-cross: cross-file type_map_ propagation ----------------------
+    // BLOCKING criterion 8: type_map_ propagates to sub-systems on
+    // `load_sub_system` (gen-5 cycle 3a rename). Parent file declares
+    // `[mass]\ng=1\nkg=1000g`; child file uses `m_obj:mass = ...`. After the
+    // parent calls into the child (forcing sub-system load), the child's
+    // `type_map_` must include BOTH the parent's entries (propagated) AND the
+    // child's own `m_obj` annotation (registered by the child's own
     // parse_line annotation block).
     {
         // Child uses a self-contained equation (no parent-value dependency) so
@@ -15289,18 +15338,366 @@ void test_gen3_cycle2_constants_as_units() {
         }
         ASSERT(child != nullptr, "m-cross: child sub-system in sys.sub_systems");
         if (child) {
-            // Parent's dim entries propagated to child via `sub->dim_map_ = dim_map_`:
-            ASSERT(child->dim_map_.count("g") == 1,
-                   "m-cross: child->dim_map_ contains 'g' (propagated)");
-            ASSERT(child->dim_map_["g"] == "mass",
-                   "m-cross: child->dim_map_['g'] == 'mass' (propagated)");
-            ASSERT(child->dim_map_.count("kg") == 1,
-                   "m-cross: child->dim_map_ contains 'kg' (propagated)");
+            // Parent's dim entries propagated to child via `sub->type_map_ = type_map_`:
+            ASSERT(child->type_map_.count("g") == 1,
+                   "m-cross: child->type_map_ contains 'g' (propagated)");
+            ASSERT(child->type_map_["g"].dim == "mass",
+                   "m-cross: child->type_map_['g'].dim == 'mass' (propagated)");
+            ASSERT(child->type_map_.count("kg") == 1,
+                   "m-cross: child->type_map_ contains 'kg' (propagated)");
             // Child's own annotation (registered by child-side parse_line):
-            ASSERT(child->dim_map_.count("m_obj") == 1,
-                   "m-cross: child->dim_map_ contains 'm_obj' (child-side)");
-            ASSERT(child->dim_map_["m_obj"] == "mass",
-                   "m-cross: child->dim_map_['m_obj'] == 'mass'");
+            ASSERT(child->type_map_.count("m_obj") == 1,
+                   "m-cross: child->type_map_ contains 'm_obj' (child-side)");
+            ASSERT(child->type_map_["m_obj"].dim == "mass",
+                   "m-cross: child->type_map_['m_obj'].dim == 'mass'");
+        }
+    }
+}
+
+// gen-5 arc cycle 3a (2026-05-15): Types as Named Sets — substrate cycle.
+// Unifies dim_map_ + predicate dispatch under one mechanism (SetDef registry +
+// BindingType per-binding metadata + canonical is_in predicate). Design:
+// `.fwiz-workflow/design-proposal.md` Final Design.
+void test_gen5_cycle3a_types_as_named_sets() {
+    SECTION("gen-5 cycle 3a: Types as Named Sets (BindingType, type_map_, SetDef, is_in)");
+
+    // -------- M1: BindingType struct + type_map_ replaces dim_map_ ----------
+    // BLOCKING criterion C1: `BindingType` and `type_map_` exist; `.dim` field
+    // holds the dim-section name. `dim_map_` is replaced (not paralleled).
+    {
+        FormulaSystem sys;
+        ASSERT(sys.type_map_.empty(), "fresh sys: type_map_ empty");
+        // BindingType default-construct: empty dim + empty sets.
+        BindingType bt;
+        ASSERT(bt.dim.empty(), "BindingType default: dim empty");
+        ASSERT(bt.sets.empty(), "BindingType default: sets empty");
+    }
+    // [mass] section populates type_map_[var].dim == "mass".
+    {
+        FormulaSystem sys;
+        sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m1-mass>");
+        ASSERT(sys.type_map_.count("g") == 1,
+               "[mass]: type_map_ contains 'g'");
+        ASSERT(sys.type_map_["g"].dim == "mass",
+               "[mass]: type_map_['g'].dim == 'mass'");
+        ASSERT(sys.type_map_["g"].sets.empty(),
+               "[mass]: type_map_['g'].sets empty (no sets atoms)");
+        ASSERT(sys.type_map_.count("kg") == 1,
+               "[mass]: type_map_ contains 'kg'");
+        ASSERT(sys.type_map_["kg"].dim == "mass",
+               "[mass]: type_map_['kg'].dim == 'mass'");
+    }
+    // m_obj:mass = 10*kg with [mass] section: type_map_ populated via
+    // annotation parse + classified via set_definitions_ (M4 GREEN).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "kg = 1\n"
+            "m_obj:mass = 10 * kg\n"
+            "[mass]\nrefkg = 1\n",
+            "<m1-anno>");
+        ASSERT(sys.type_map_.count("m_obj") == 1,
+               "m_obj:mass: type_map_ contains 'm_obj'");
+        ASSERT(sys.type_map_["m_obj"].dim == "mass",
+               "m_obj:mass: type_map_['m_obj'].dim == 'mass'");
+        ASSERT_NUM(sys.resolve("m_obj", {}), 10,
+                   "m_obj:mass = 10*kg, kg=1: resolves to 10");
+    }
+    // mass.kg=? still resolves to 1000 (dot-dispatch unchanged) — BONUS2.
+    {
+        FormulaSystem sys;
+        sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m1-dotres>");
+        const double r = sys.resolve("mass.kg", {});
+        ASSERT_NUM(r, 1000, "mass.kg=? -> 1000 (BONUS2 regression check)");
+    }
+
+    // -------- M2: SetDef + set_definitions_ + 4 built-ins -------------------
+    // BLOCKING C2: SetDef registry populates at FormulaSystem construction
+    // with int/real/rational/complex.
+    {
+        FormulaSystem sys;
+        // Force load_builtins().
+        sys.load_string("test_v = 1\n", "<m2-builtins>");
+        ASSERT(sys.set_definitions_.count("int") == 1,
+               "M2: set_definitions_ contains 'int'");
+        ASSERT(sys.set_definitions_["int"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M2: int.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["int"].membership != nullptr,
+               "M2: int.membership != nullptr");
+        ASSERT(sys.set_definitions_["int"].membership(5.0),
+               "M2: int.membership(5.0) == true");
+        ASSERT(!sys.set_definitions_["int"].membership(3.7),
+               "M2: int.membership(3.7) == false");
+        // All four built-ins present + non-null membership.
+        ASSERT(sys.set_definitions_["real"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M2: real.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["real"].membership != nullptr,
+               "M2: real.membership != nullptr");
+        ASSERT(sys.set_definitions_["real"].membership(3.14),
+               "M2: real.membership(3.14) == true");
+        ASSERT(!sys.set_definitions_["real"].membership(std::nan("")),
+               "M2: real.membership(NaN) == false");
+        ASSERT(sys.set_definitions_["rational"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M2: rational.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["rational"].membership != nullptr,
+               "M2: rational.membership != nullptr");
+        ASSERT(sys.set_definitions_["complex"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M2: complex.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["complex"].membership != nullptr,
+               "M2: complex.membership != nullptr");
+        // V8 NaN-sentinel: complex.membership(NaN) returns true (for `i`).
+        ASSERT(sys.set_definitions_["complex"].membership(std::nan("")),
+               "M2: complex.membership(NaN) == true (i NaN-sentinel)");
+    }
+    // BLOCKING C2 (DIM_SECTION arm): registering [mass] populates
+    // set_definitions_["mass"] with kind == DIM_SECTION.
+    {
+        FormulaSystem sys;
+        sys.load_string("[mass]\ng = 1\n", "<m2-dim>");
+        ASSERT(sys.set_definitions_.count("mass") == 1,
+               "M2: set_definitions_ contains 'mass'");
+        ASSERT(sys.set_definitions_["mass"].kind == SetDef::Kind::DIM_SECTION,
+               "M2: mass.kind == DIM_SECTION");
+        ASSERT(sys.set_definitions_["mass"].membership == nullptr,
+               "M2: mass.membership == nullptr (DIM_SECTION)");
+    }
+    // BLOCKING C10: missing-name lookup is graceful.
+    {
+        FormulaSystem sys;
+        sys.load_string("test_v = 1\n", "<m2-missing>");
+        ASSERT(sys.set_definitions_.find("not_a_set") == sys.set_definitions_.end(),
+               "M2: set_definitions_.find('not_a_set') == end()");
+    }
+
+    // -------- M3: is_in predicate dispatch + parse-time rewrite -------------
+    // BLOCKING C3: `is_in(v, int)` parses as a predicate clause.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, int)\n",
+            "<m3-isin-parse>");
+        ASSERT(!sys.rewrite_rules.empty(),
+               "M3: is_in rule: rewrite_rules non-empty");
+        const auto& rr = sys.rewrite_rules.back();
+        ASSERT(rr.condition && !rr.condition->clauses.empty(),
+               "M3: is_in rule: condition non-empty");
+        ASSERT(is_predicate_clause(rr.condition->clauses[0]),
+               "M3: is_in: is_predicate_clause returns true");
+        ASSERT(rr.condition->clauses[0].lhs->name == "is_in",
+               "M3: is_in rule: clause name is 'is_in'");
+    }
+    // D8 SIMPLIFY: parse-time rewrite — `is_int(n)` rewrites to
+    // `is_in(n, int)`.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_int(x)\n",
+            "<m3-is_int-rewrite>");
+        const auto& rr = sys.rewrite_rules.back();
+        ASSERT(rr.condition && !rr.condition->clauses.empty(),
+               "M3: is_int rewrite: condition non-empty");
+        ASSERT(rr.condition->clauses[0].lhs->name == "is_in",
+               "M3: is_int(n) parsed as canonical is_in");
+        ASSERT(rr.condition->clauses[0].lhs->args.size() == 2,
+               "M3: is_int rewrite: now 2-arg is_in");
+        ASSERT(rr.condition->clauses[0].lhs->args[1]->name == "int",
+               "M3: is_int rewrite: 2nd arg is 'int'");
+    }
+    // D8 SIMPLIFY: `is_in_dimension(n, mass)` rewrites to `is_in(n, mass)`.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "foo + bar = undefined iff is_in_dimension(foo, mass)\n",
+            "<m3-isind-rewrite>");
+        const auto& rr = sys.rewrite_rules.back();
+        ASSERT(rr.condition && !rr.condition->clauses.empty(),
+               "M3: is_in_dimension rewrite: condition non-empty");
+        ASSERT(rr.condition->clauses[0].lhs->name == "is_in",
+               "M3: is_in_dimension(n, m) parsed as canonical is_in");
+        ASSERT(rr.condition->clauses[0].lhs->args[1]->name == "mass",
+               "M3: is_in_dimension rewrite: 2nd arg preserved");
+    }
+
+    // -------- M4: intersection-atom classification + D10 hard error --------
+    // BLOCKING C5 closure: `n:(int, mass) = 5` with [mass] section populates
+    // BOTH dim (DIM_SECTION → .dim) AND sets (BUILTIN_PREDICATE → .sets).
+    {
+        FormulaSystem sys;
+        sys.load_string("n:(int, mass) = 5\n[mass]\nrefkg = 1\n",
+                        "<m4-intersection>");
+        ASSERT(sys.type_map_.count("n") == 1,
+               "M4 C5: type_map_ contains 'n'");
+        ASSERT(sys.type_map_["n"].dim == "mass",
+               "M4 C5: type_map_['n'].dim == 'mass' (DIM_SECTION atom)");
+        ASSERT(sys.type_map_["n"].sets.size() == 1,
+               "M4 C5: type_map_['n'].sets has 1 entry");
+        ASSERT(sys.type_map_["n"].sets.count("int") == 1,
+               "M4 C5: type_map_['n'].sets contains 'int' (BUILTIN_PREDICATE atom)");
+    }
+    // C5 closure with both atom orders: ordering does not affect classification.
+    {
+        FormulaSystem sys;
+        sys.load_string("n:(mass, int) = 5\n[mass]\nrefkg = 1\n",
+                        "<m4-intersection-reordered>");
+        ASSERT(sys.type_map_["n"].dim == "mass",
+               "M4 C5: ordering doesn't matter — dim still 'mass'");
+        ASSERT(sys.type_map_["n"].sets.count("int") == 1,
+               "M4 C5: ordering doesn't matter — sets still contains 'int'");
+    }
+    // BLOCKING D10: unknown atom raises BindingAnnotationError with the
+    // updated message text (built-in set names + example for LLM-friendly
+    // recovery).
+    {
+        bool threw = false;
+        std::string msg;
+        try {
+            FormulaSystem sys;
+            sys.load_string("n:(int, unknown_atom) = 5\n", "<m4-unknown>");
+        } catch (const BindingAnnotationError& e) {
+            threw = true;
+            msg = e.what();
+        } catch (...) {}
+        ASSERT(threw, "M4 D10: unknown atom throws BindingAnnotationError");
+        ASSERT(msg.find("unknown set name 'unknown_atom'") != std::string::npos,
+               "M4 D10: error message names the unknown atom");
+        ASSERT(msg.find("int") != std::string::npos
+               && msg.find("real") != std::string::npos,
+               "M4 D10: error message lists built-in alternatives");
+    }
+    // Multi-BUILTIN intersection: v:(int, real) = 3 populates .sets with both.
+    {
+        FormulaSystem sys;
+        sys.load_string("v:(int, real) = 3\n", "<m4-multi-builtin>");
+        ASSERT(sys.type_map_["v"].dim.empty(),
+               "M4: v:(int, real) → no dim (no DIM_SECTION atoms)");
+        ASSERT(sys.type_map_["v"].sets.size() == 2,
+               "M4: v:(int, real) → sets has 2 entries");
+        ASSERT(sys.type_map_["v"].sets.count("int") == 1,
+               "M4: v:(int, real) → 'int' in sets");
+        ASSERT(sys.type_map_["v"].sets.count("real") == 1,
+               "M4: v:(int, real) → 'real' in sets");
+    }
+    // V8 NEW (visionary): predicates compute, not just inspect literals.
+    // is_in(Add(1,2), int) returns true via evaluate() projection (D7).
+    {
+        FormulaSystem sys;
+        sys.load_string("x + y = undefined iff is_int(x)\n",
+                        "<v8-strengthening>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        // x bound to Add(1, 2) → evaluate() yields 3.0 → is_in(_, int) → true.
+        std::map<std::string, ExprPtr> eb{
+            {"x", Expr::BinOpExpr(BinOp::ADD, Expr::Num(1), Expr::Num(2))}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "M4 V8: is_in(Add(1,2), int) returns true (semantic strengthening)");
+    }
+
+    // -------- M5: cross-file propagation + C8a behavioral check ------------
+    // BLOCKING C6: parent's set_definitions_ propagates to sub-system on
+    // load_sub_system. Required so child files using `var:mass = ...` resolve
+    // 'mass' against the SAME registry as the parent.
+    {
+        write_fw("/tmp/m5_cross_child.fw",
+                 "m_obj:mass = 10\n"
+                 "out = m_obj + in\n");
+        write_fw("/tmp/m5_cross_parent.fw",
+                 "m5_cross_child(out=?y, in=in)\n"
+                 "[mass]\nrefkg = 1\nkg = 1000 * refkg\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/m5_cross_parent.fw");
+        const double r = sys.resolve("y", {{"in", 0}});
+        ASSERT_NUM(r, 10, "M5 C6: y resolves through child sub-system (forces load)");
+        std::shared_ptr<FormulaSystem> child;
+        for (const auto& [key, sub] : sys.sub_systems) {
+            if (key.find("m5_cross_child") != std::string::npos) {
+                child = sub;
+                break;
+            }
+        }
+        ASSERT(child != nullptr, "M5 C6: child sub-system in sys.sub_systems");
+        if (child) {
+            // type_map_ propagation (from M1):
+            ASSERT(child->type_map_.count("refkg") == 1,
+                   "M5 C6: child->type_map_ contains 'refkg' (propagated)");
+            ASSERT(child->type_map_["refkg"].dim == "mass",
+                   "M5 C6: child->type_map_['refkg'].dim == 'mass'");
+            // set_definitions_ propagation (M5):
+            ASSERT(child->set_definitions_.count("mass") == 1,
+                   "M5 C6: child->set_definitions_ contains 'mass' (propagated)");
+            ASSERT(child->set_definitions_["mass"].kind == SetDef::Kind::DIM_SECTION,
+                   "M5 C6: child->set_definitions_['mass'].kind == DIM_SECTION");
+            // Built-ins propagated too (they're in set_definitions_ from
+            // parent's load_builtins; sub-system inherits the whole map):
+            ASSERT(child->set_definitions_.count("int") == 1,
+                   "M5 C6: child->set_definitions_ contains 'int' (built-in propagated)");
+            // Child's own annotation (registered by child-side parse_line)
+            // succeeded BECAUSE 'mass' was already in the propagated registry:
+            ASSERT(child->type_map_.count("m_obj") == 1,
+                   "M5 C6: child->type_map_ contains 'm_obj'");
+            ASSERT(child->type_map_["m_obj"].dim == "mass",
+                   "M5 C6: child->type_map_['m_obj'].dim == 'mass'");
+        }
+    }
+
+    // BLOCKING C8a (visionary): no .fw rule using is_int / is_in_dimension
+    // exhibits behavioral divergence from cycle 2 post-migration. Verify
+    // the parse-time rewrite preserves semantics atomically — driving rules
+    // through actual firing is covered by the existing M6 dispatch matrix
+    // (now uses SimplifyContext); this assertion confirms the rewrite path.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_int(x)\n",
+            "<c8a-is_int-rewrite>");
+        ASSERT(sys.rewrite_rules.back().condition->clauses[0].lhs->name == "is_in",
+               "M5 C8a: legacy is_int rule rewrites to canonical is_in (preserves semantics atomically)");
+    }
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in_dimension(x, mass)\n",
+            "<c8a-is_in_dimension-rewrite>");
+        ASSERT(sys.rewrite_rules.back().condition->clauses[0].lhs->name == "is_in",
+               "M5 C8a: legacy is_in_dimension rule rewrites to canonical is_in (preserves semantics)");
+    }
+
+    // BONUS1: is_in(v, real) and is_in(v, complex) coverage. Drive via
+    // a load_string'd .fw rule (the same shape rule-firing would see).
+    {
+        FormulaSystem sys;
+        // The rule body uses is_in canonically; the dispatcher exercises both.
+        sys.load_string(
+            "x + y = undefined iff is_in(x, real)\n",
+            "<bonus1-real>");
+        const auto& cond_real = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3.14)}};
+            ASSERT(check_condition(cond_real, {}, &eb, &ctx),
+                   "BONUS1: is_in(Num(3.14), real) → true");
+        }
+        {
+            std::map<std::string, ExprPtr> eb_nan{{"x", Expr::Num(std::nan(""))}};
+            ASSERT(!check_condition(cond_real, {}, &eb_nan, &ctx),
+                   "BONUS1: is_in(NaN, real) → false (NaN not finite)");
+        }
+    }
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, complex)\n",
+            "<bonus1-complex>");
+        const auto& cond_complex = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        {
+            std::map<std::string, ExprPtr> eb_i{{"x", Expr::Num(std::nan(""))}};
+            ASSERT(check_condition(cond_complex, {}, &eb_i, &ctx),
+                   "BONUS1: is_in(NaN, complex) → true (NaN-sentinel for i)");
+        }
+        {
+            std::map<std::string, ExprPtr> eb_r{{"x", Expr::Num(3.14)}};
+            ASSERT(!check_condition(cond_complex, {}, &eb_r, &ctx),
+                   "BONUS1: is_in(Num(3.14), complex) → false (not NaN)");
         }
     }
 }
@@ -15654,6 +16051,9 @@ int main() {
 
     // Constants-as-units arc cycle 2 (2026-05-14): substrate ship
     test_gen3_cycle2_constants_as_units();
+
+    // gen-5 arc cycle 3a (2026-05-15): Types as Named Sets
+    test_gen5_cycle3a_types_as_named_sets();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

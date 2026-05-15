@@ -302,6 +302,11 @@ struct CrossFileResolutionCycleError : std::exception {
     return "";
 }
 
+// BindingType + SetDef now live in expr.h (gen-5 cycle 3a, M3) — they are
+// referenced by check_condition's is_in dispatch which sits in expr.h.
+// Pure value types with no FormulaSystem dependency; the move is purely
+// dependency-ordering. See expr.h for the canonical definitions.
+
 class FormulaSystem {
 public:
     mutable ExprArena arena;
@@ -400,15 +405,24 @@ public:
     // alias-resolution table — used by fmt_trace's fallback path
     // (defaults / givens / @extern) where no symbolic source exists.
     mutable std::map<std::string, double> aliases_;
-    // Cycle 2 of gen-3 Constants-as-units arc (2026-05-14).
-    // Per-variable dimension as a string (atomic dim section name).
-    // Promoted to std::map<DimName, int> (exponent algebra) in cycle 3 —
-    // see Future #7b. Populated by (a) `[mass]`-style dim section scan and
-    // (b) `var:type = expr` annotation parse. Propagated to sub-systems on
-    // load_sub_system. Read by `check_condition`'s `is_in_dimension`
-    // predicate path (see expr.h).
+    // Cycle 3a of gen-5 Types-as-Named-Sets arc (2026-05-15).
+    // Per-binding type record — replaces cycle-2's `dim_map_` (still the
+    // 3rd parallel-map, richer value type). `BindingType.dim` holds the
+    // atomic dim section name; `BindingType.sets` holds set-membership
+    // atoms. Populated by (a) `[mass]`-style dim section scan and (b)
+    // `var:type = expr` annotation parse (atomic OR intersection form).
+    // Propagated to sub-systems on load_sub_system. Read by `check_condition`'s
+    // `is_in` predicate path (see expr.h). `DimName` typedef is the
+    // cycle-3c promotion hook (string → map<string,int> exponent algebra).
     using DimName = std::string;
-    std::map<std::string, DimName> dim_map_;
+    std::map<std::string, BindingType> type_map_;
+    // Cycle 3a (gen-5, 2026-05-15): named-set registry. Built-ins
+    // (int/real/rational/complex) registered in load_builtins(); dim
+    // sections register their own SetDef in register_dim_section().
+    // Read by check_condition's `is_in` predicate via SimplifyContext
+    // thread-local (M3). Non-mutable — load-time-fixed, solver reads only.
+    // See SetDef above for Kind dispatch contract.
+    std::map<std::string, SetDef> set_definitions_;
     // Dirty-flag for resolve_diff_in_equations: tracks how far we've already
     // walked. Equations only ever grow, so on a second load_string the pass
     // skips already-rewritten equations. Eliminates redundant double-walk on
@@ -738,6 +752,24 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             parse_line(line);
         }
         compute_rewrite_groups();
+
+        // Built-in named sets — BUILTIN_PREDICATE Kind dispatches via fn ptr.
+        // Design invariant (gen-5 cycle 3a): each built-in could be re-expressed
+        // as a user [name(n)] iff ... declaration; the C++ fast path is an
+        // optimization. Cycle 3b (USER_PREDICATE) makes that equivalence
+        // demonstrable.
+        // `complex` membership is the NaN-sentinel test — `i` binding (cycle 2
+        // invariant) carries NaN to mark "imaginary unit"; future complex-number
+        // values would need a richer Kind. Today: any NaN value is in `complex`.
+        // `rational`: cycle-3a fast path is integer-only; cycle 3b refines via
+        // symbolic is_int_frac on the bound ExprPtr.
+        auto reg_builtin = [this](std::string nm, bool (*pred)(double)) {
+            set_definitions_[nm] = SetDef{nm, SetDef::Kind::BUILTIN_PREDICATE, pred};
+        };
+        reg_builtin("int",      [](double v) { return is_integer_value(v); });
+        reg_builtin("real",     [](double v) { return std::isfinite(v); });
+        reg_builtin("rational", [](double v) { return is_integer_value(v); });
+        reg_builtin("complex",  [](double v) { return std::isnan(v); });
     }
 
     // Group rewrite rules by LHS pattern and check exhaustiveness.
@@ -913,15 +945,19 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     }
 
     // ------------------------------------------------------------------------
-    // Dim section registration (gen-3 cycle 2, 2026-05-14).
+    // Dim section registration (gen-3 cycle 2, 2026-05-14; updated gen-5
+    // cycle 3a 2026-05-15 — Types as Named Sets).
     //
     // A bare `[name]` Section header (no parens, no arrow) declares `name` as
     // a *dimension*. Its body is parsed into a sub-FormulaSystem; each LHS
-    // identifier in the body is registered in `dim_map_` with `name` as its
-    // dim string (D2 — DimName=std::string for cycle 2). The sub is also
-    // routed through the existing `@def:` cache-key path (D6, reviewer-
-    // resolved 2026-05-14) so `mass.kg=?` dot-access lookups hit the cached
-    // sub instead of attempting a file load.
+    // identifier in the body is registered in `type_map_` with `name` as its
+    // `BindingType.dim` field (cycle 3a: BindingType replaces the bare string
+    // value, carrying both `dim` and `sets` fields per the named-sets
+    // unification). The section is ALSO registered in `set_definitions_` with
+    // `SetDef::Kind::DIM_SECTION`, so `is_in(v, name)` predicates dispatch
+    // correctly. The sub is routed through the existing `@def:` cache-key
+    // path (D6, reviewer-resolved 2026-05-14) so `mass.kg=?` dot-access
+    // lookups hit the cached sub instead of attempting a file load.
     // ------------------------------------------------------------------------
     [[nodiscard]] static bool is_dimension_section(const Section& s) {
         return s.return_var.empty() && s.positional_args.empty();
@@ -943,9 +979,12 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // (RHS pure number → goes into `defaults`, not `equations`), while
         // `kg = 1000 * g` parses as an equation. Both are dim-typed.
         for (const auto& eq : sub->equations)
-            dim_map_[eq.lhs_var] = s.name;
+            type_map_[eq.lhs_var].dim = s.name;
         for (const auto& [name, _value] : sub->defaults)
-            dim_map_[name] = s.name;
+            type_map_[name].dim = s.name;
+        // Cycle 3a (gen-5): dim section also registers a SetDef so that
+        // `is_in(v, mass)` can dispatch via DIM_SECTION Kind.
+        set_definitions_[s.name] = SetDef{s.name, SetDef::Kind::DIM_SECTION, nullptr};
         // Serialize the section body into `custom_function_defs_` so
         // load_sub_system's dispatcher routes dotted lookups (`mass.kg`)
         // through the @def: cache-key path (matches D6 / Issue-R2 resolution).
@@ -960,9 +999,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
 
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
         sections_ = split_sections(all_lines);
-        // gen-3 cycle 2 (2026-05-14): walk sections BEFORE top-level/section
-        // load so dim_map_ is populated before any equation that references
-        // a dim-section variable is parsed.
+        // gen-3 cycle 2 (2026-05-14) / gen-5 cycle 3a (2026-05-15): walk
+        // sections BEFORE top-level/section load so type_map_ is populated
+        // before any equation that references a dim-section variable is
+        // parsed.
         for (const auto& s : sections_)
             if (!s.name.empty() && is_dimension_section(s))
                 register_dim_section(s);
@@ -1534,7 +1574,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                        int cse_threshold = 0,
                        int output_cap = 0) const {
         const ExprArena::Scope scope(arena);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_, &dim_map_);
+        const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
@@ -2036,7 +2077,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             }
         }
         auto prepared = prepare_bindings(target, bindings);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &dim_map_);
+        const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
@@ -2050,7 +2092,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         solved_symbolic_.clear(); // provenance carrier: per-query lifetime
         populate_aliases_(); // for fmt_trace fallback
         auto prepared = prepare_bindings(target, bindings);
-        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &dim_map_);
+        const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
+        const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
@@ -2553,19 +2596,36 @@ private:
                 }
             }
 
-            // Predicate-clause form (Future #53 / gen-3 cycle 2): no comparison
+            // Predicate-clause form (Future #53 / gen-5 cycle 3a): no comparison
             // operator + parses as a FUNC_CALL whose head name is a recognised
             // predicate. Mirror `is_predicate_clause` in expr.h. Encoded as
             // `CondClause{lhs=FUNC_CALL(name,{args...}), rhs=nullptr,
-            // op=CondOp::EQ}`. Switch to a static set when count >= 3.
+            // op=CondOp::EQ}`.
+            //
+            // Cycle 3a D8 SIMPLIFY (2026-05-15): `is_int(n)` and
+            // `is_in_dimension(n, m)` are rewritten to canonical
+            // `is_in(n, int)` / `is_in(n, m)` here at parse time. The
+            // dispatcher (expr.h::check_condition) and `is_predicate_clause`
+            // only know `is_in` and `is_neg_num`. Cycle-2 .fw rules and tests
+            // continue to use the legacy names; the rewrite preserves
+            // semantics atomically for atomic-Var args.
             if (op_pos == std::string::npos) {
                 auto tok = Lexer(clause_str).tokenize();
                 Parser pp(tok);
                 auto e = pp.parse_expr();
+                if (e && e->type == ExprType::FUNC_CALL) {
+                    if (e->name == "is_int" && e->args.size() == 1) {
+                        // is_int(n) → is_in(n, int)
+                        e->name = "is_in";
+                        e->args.push_back(Expr::Var("int"));
+                    } else if (e->name == "is_in_dimension" && e->args.size() == 2) {
+                        // is_in_dimension(n, m) → is_in(n, m). Just rename.
+                        e->name = "is_in";
+                    }
+                }
                 if (e && e->type == ExprType::FUNC_CALL
                     && (e->name == "is_neg_num"
-                        || e->name == "is_in_dimension"
-                        || e->name == "is_int")) {
+                        || e->name == "is_in")) {
                     cond.clauses.push_back({e, nullptr, CondOp::EQ});
                     continue;
                 }
@@ -2667,12 +2727,12 @@ private:
         }
         if (eq_pos == 0) return;  // no '=' found
 
-        // Annotation form (gen-3 cycle 2, 2026-05-14): `var:atom = expr` and
-        // `var:(atom1, atom2, ...) = expr`. The annotation registers the
-        // binding's dim in `dim_map_` and rewrites the LHS to a plain
-        // `var = expr` equation so the rest of parse_line proceeds unchanged.
-        // ATOM-only inside parens; any STAR/SLASH/CARET is a parse error per
-        // D10 grammar lock-in.
+        // Annotation form (gen-3 cycle 2, 2026-05-14 / gen-5 cycle 3a,
+        // 2026-05-15): `var:atom = expr` and `var:(atom1, atom2, ...) = expr`.
+        // The annotation registers the binding's type in `type_map_` and
+        // rewrites the LHS to a plain `var = expr` equation so the rest of
+        // parse_line proceeds unchanged. ATOM-only inside parens; any
+        // STAR/SLASH/CARET is a parse error per D10 grammar lock-in.
         if (mod_tok.size() >= 4
             && mod_tok[0].type == TokenType::IDENT
             && mod_tok[1].type == TokenType::COLON) {
@@ -2711,15 +2771,35 @@ private:
             }
             if (!atoms.empty()) {
                 const std::string& lhs_name = mod_tok[0].text;
-                // Cycle-2 dim_map_ stores a single string (DimName=std::string,
-                // D2). For an intersection of multiple dim atoms, store the
-                // *first dim-section* atom (skip `int` which is a type
-                // predicate, not a dim — see D8). Atoms without backing dim
-                // sections still register (fail-safe in `check_condition`).
+                // M4 (gen-5 cycle 3a, 2026-05-15): structured classification
+                // via set_definitions_. Each atom resolves to a SetDef Kind;
+                // DIM_SECTION populates `.dim`, BUILTIN_PREDICATE populates
+                // `.sets`. Unknown atoms raise BindingAnnotationError per D10
+                // hard-error commitment. Cycle-2's `if (a == "int") continue`
+                // hack retired — `int` now formally classifies as
+                // BUILTIN_PREDICATE → goes into `.sets`.
                 for (const auto& a : atoms) {
-                    if (a == "int") continue; // type predicate, not dim
-                    dim_map_[lhs_name] = a;
-                    break;
+                    auto sit = set_definitions_.find(a);
+                    if (sit == set_definitions_.end()) {
+                        throw BindingAnnotationError(
+                            "binding annotation: unknown set name '" + a
+                            + "' — register a dim section like [" + a
+                            + "] or use a built-in set: int, real, rational, complex");
+                    }
+                    switch (sit->second.kind) {
+                        case SetDef::Kind::DIM_SECTION:
+                            // Last DIM_SECTION atom wins on overwrite — multi-
+                            // dim intersections are structurally ambiguous user
+                            // input; cleanest semantics is "last one wins".
+                            type_map_[lhs_name].dim = a;
+                            break;
+                        case SetDef::Kind::BUILTIN_PREDICATE:
+                            type_map_[lhs_name].sets.insert(a);
+                            break;
+                        case SetDef::Kind::COUNT_:
+                            assert(false && "SetDef::Kind::COUNT_ unreachable");
+                            break;
+                    }
                 }
                 // Rewrite mod_tok so the rest of parse_line sees a plain
                 // `var = expr` equation. Drop indices 1..after-1 (the
@@ -2858,7 +2938,8 @@ private:
         sub->numeric_mode = numeric_mode;
         sub->approximate_mode = approximate_mode;
         sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
-        sub->dim_map_ = dim_map_;  // gen-3 cycle 2: propagate dim_map_ to sub-systems
+        sub->type_map_ = type_map_;  // gen-5 cycle 3a: propagate type_map_ to sub-systems
+        sub->set_definitions_ = set_definitions_;  // gen-5 cycle 3a M5: propagate named-set registry
 
         // Try loading from file first; fall back to embedded definition
         if (!def_source) {
@@ -2894,6 +2975,11 @@ private:
                 sub->numeric_mode = numeric_mode;
                 sub->approximate_mode = approximate_mode;
                 sub->custom_functions_ = custom_functions_;
+                // gen-5 cycle 3a (D11): propagate type_map_ AND set_definitions_
+                // in BOTH branches — pre-existing auto-section gap closed in M1
+                // (type_map_) and M5 (set_definitions_).
+                sub->type_map_ = type_map_;
+                sub->set_definitions_ = set_definitions_;
                 if (def_source)
                     sub->load_string(*def_source, "@def:" + file_part, auto_section);
                 else

@@ -2,6 +2,28 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Types as Named Sets — type-axis unification substrate (gen-5 cycle 3a) — ✅ SHIPPED (2026-05-15, ROADMAP gen-5)
+
+**Substrate ship** — 5 milestones M1–M5 implementing the Types-as-Named-Sets unification. 3641/3641 tests passing; sanitize and analyze-fast clean.
+
+**What shipped:**
+- `src/system.h`: `type_map_` replaces `dim_map_` (value type `BindingType{dim, sets}` instead of bare `string`); `set_definitions_` registry (`map<string, SetDef>`); intersection-atom classification via `SetDef::Kind` switch — `DIM_SECTION` atoms → `.dim`, `BUILTIN_PREDICATE` atoms → `.sets.insert`; unknown atoms throw `BindingAnnotationError` with LLM-friendly message naming the atom and listing known alternatives. Cross-file propagation: both branches of `load_sub_system` now copy `type_map_` and `set_definitions_` (pre-existing bug at lines 2892-2900 — auto-section branch had silently omitted `dim_map_` propagation — fixed). 4 built-in `SetDef` entries registered in `load_builtins()`: `int`, `real`, `rational`, `complex` (all `BUILTIN_PREDICATE` kind with C++ membership lambdas). `register_dim_section` populates `set_definitions_[name]` with `DIM_SECTION` kind.
+- `src/expr.h`: `BindingType` + `SetDef` + `SimplifyContext` structs moved here (architecture-emergent — `check_condition` needs full definitions; forward declarations were insufficient). `simplify_set_ctx_()` thread-local replaces `simplify_dim_map_()`. `RewriteRulesGuard` 5th-arg type changed from `const map<string,string>*` to `const SimplifyContext*`. `check_condition` 4th param changed from `const map<string,string>* dim_map` to `const SimplifyContext* set_ctx`. `is_predicate_clause` narrowed to `is_neg_num` + `is_in` only (aliases rewritten before it runs). Unified `is_in` dispatch arm added with `SetDef::Kind` switch. `BUILTIN_PREDICATE` dispatch uses `val.value_or_nan()` (deliberate boundary escape — NaN is meaningful for the `complex` built-in; comment in dispatcher names all 4 cooperating locations).
+- `src/system.h` — `parse_condition`: parse-time rewrite of `is_int(n)` → `is_in(n, int)` and `is_in_dimension(n, m)` → `is_in(n, m)`. Cycle-2 `.fw` rules and tests using legacy names continue to work transparently.
+- `src/tests.cpp`: 39 cycle-2 test migrations (`is_int` / `is_in_dimension` → canonical `is_in` form with `SimplifyContext`); M1–M5 test additions (+76 tests total across the cycle).
+
+**Future.md outcomes:**
+- Future #82 "Today" paragraph updated: `dim_map_` → `type_map_` (richer `BindingType` value). Trigger unchanged (4th parallel-map).
+- Future #65 updated: `is_int` and `is_in_dimension` now documented as parse-time sugar for `is_in`; note that future named predicates fitting the membership-test shape should ship as `SetDef` entries.
+- Future #83 NEW PARKED: `copy_metadata_to_sub` helper extraction. Trigger: 4th field added to `load_sub_system` metadata copy block.
+- Future #84 NEW PARKED: `NumberDomain` enum deletion. Trigger: gen-5 cycle 3c completes or ValueSet adopts SetDef-compatible domain semantics.
+
+**Semantic strengthening (cycle 3a vs cycle 2):** `is_in(compound_expr, int)` now succeeds when the expression evaluates to an integer value (e.g. `is_in(Add(1,2), int)` returns true via `evaluate()` projection). Cycle 2's `is_int` only worked on bare `Num` leaves.
+
+**Tests:** 3565 (baseline) → 3641 (+76). Net production LOC: approximately +166 (`expr.h` +95/-46 net, `system.h` +27/-15 net; `tests.cpp` +280 gross including migrations).
+
+---
+
 ## Constants-as-units substrate (gen-3 cycle 2) — ✅ SHIPPED (2026-05-15, ROADMAP gen-3)
 
 **Substrate ship** — 6 milestones M1–M6 implementing the gen-3 cycle 1 design decision. 3565/3565 tests passing; sanitize and analyze-fast clean.

@@ -1704,17 +1704,19 @@ struct CondClause {
 };
 
 // Typed-binding predicates for rule conditions (Future #53). A predicate clause
-// is encoded as `CondClause{lhs=FUNC_CALL("is_*", {Var("name")}), rhs=nullptr,
-// op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape structurally —
-// no extra fields on CondClause. Current set: `is_neg_num`, `is_in_dimension`,
-// `is_int`. Additional predicates ship per-consumer schedule (see Future #65).
-// Direct string compare is still cheap at 3 entries; switch to a static set
-// when count >= 5.
+// is encoded as `CondClause{lhs=FUNC_CALL("is_*", {Var("name"), ...}),
+// rhs=nullptr, op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape
+// structurally — no extra fields on CondClause.
+//
+// Current canonical set (gen-5 cycle 3a, 2026-05-15): `is_neg_num` (literal-shape
+// test) and `is_in` (named-set membership). The cycle-2 names `is_int` and
+// `is_in_dimension` are rewritten to `is_in(_, int)` / `is_in(_, _)` at
+// parse time (system.h::parse_condition) per critic D8 SIMPLIFY — they no
+// longer appear at this layer. Switch to a static set when count >= 6.
 [[nodiscard]] inline bool is_predicate_clause(const CondClause& c) {
     return c.lhs && c.lhs->type == ExprType::FUNC_CALL
         && (c.lhs->name == "is_neg_num"
-            || c.lhs->name == "is_in_dimension"
-            || c.lhs->name == "is_int");
+            || c.lhs->name == "is_in");
 }
 
 struct Condition {
@@ -1783,50 +1785,135 @@ struct Condition {
     }
 };
 
+// Per-binding type record (gen-5 cycle 3a, 2026-05-15).
+// `dim` holds the atomic dimension name from DIM_SECTION annotation,
+//   empty if none declared. Promoted to map<DimName,int> exponent algebra
+//   in cycle 3c (Future #7b FULL) — field name and access pattern unchanged;
+//   only the value type widens. The `using DimName = std::string` typedef
+//   on FormulaSystem is the cycle-3c promotion hook.
+// `sets` holds BUILTIN_PREDICATE and (cycle 3b) USER_PREDICATE memberships
+//   by set name: "int", "real", "complex", "rational", and user-defined.
+//
+// Lives in expr.h (M3) so check_condition's is_in dispatch can see the full
+// shape; FormulaSystem owns the per-system map<string, BindingType> instance.
+struct BindingType {
+    std::string dim;               // DimName = std::string in cycle 3a
+    std::set<std::string> sets;    // membership: {"int"}, {"complex"}, ...
+};
+
+// Named-set registry value type (gen-5 cycle 3a, 2026-05-15).
+// `kind` selects the dispatch path used by `check_condition`'s `is_in`
+// predicate; `membership` is populated for BUILTIN_PREDICATE only.
+//
+// Forward-compat: cycles 3b (USER_PREDICATE) and 3d (FUNCTION_SECTION) each
+// bump the COUNT_ static_assert and extend the dispatch switch. Per critic
+// D3: dead-fields not pre-allocated — each cycle ships exactly what it
+// needs.
+struct SetDef {
+    std::string name;
+    enum class Kind { BUILTIN_PREDICATE, DIM_SECTION, COUNT_ };
+    static_assert(static_cast<int>(Kind::COUNT_) == 2,
+                  "SetDef::Kind: cycle 3b/3d each bump this and update check_condition dispatch");
+    Kind kind = Kind::BUILTIN_PREDICATE;
+    bool (*membership)(double v) = nullptr;  // BUILTIN_PREDICATE only
+};
+
+// Solver context bundle (gen-5 cycle 3a) — replaces the cycle-2
+// simplify_dim_map_ with a struct-extensible single thread-local. Set by
+// RewriteRulesGuard during rule firing; read by check_condition's `is_in`
+// predicate dispatch. Pointer fields nullable; check_condition fail-safes
+// to false when context is incomplete.
+struct SimplifyContext {
+    const std::map<std::string, BindingType>* type_map = nullptr;
+    const std::map<std::string, SetDef>*      set_defs = nullptr;
+};
+
+inline const SimplifyContext*& simplify_set_ctx_() {
+    static thread_local const SimplifyContext* ctx = nullptr;
+    return ctx;
+}
+
 // Check if a condition is satisfied given current bindings.
 // Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied
 // for COMPARISON clauses (permissive-true). PREDICATE clauses use fail-safe
 // semantics: unknown binding → false. `expr_bindings` is optional — only rule-
 // condition callers (e.g. `apply_rewrite_rules`) pass it; equation-context callers
 // pass nullptr and predicate clauses then short-circuit to false (Future #53).
+//
+// `set_ctx` (gen-5 cycle 3a) carries the type_map_ + set_definitions_ pointers
+// for the `is_in(_, _)` predicate dispatch. Nullable; null → false (fail-safe).
 [[nodiscard]] inline bool check_condition(const Condition& cond,
                             const std::map<std::string, double>& bindings,
                             const std::map<std::string, ExprPtr>* expr_bindings = nullptr,
-                            const std::map<std::string, std::string>* dim_map = nullptr) {
+                            const SimplifyContext* set_ctx = nullptr) {
     auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
-        // Predicate clauses (Future #53 / gen-3 cycle 2): typed dispatch on
+        // Predicate clauses (Future #53 / gen-5 cycle 3a): typed dispatch on
         // the bound ExprPtr. Fail-safe semantics — any unknown/missing/
         // wrong-shape arg → false.
         if (is_predicate_clause(c)) {
             const std::string& name = c.lhs->name;
             if (!expr_bindings) return false;
-            // 2-arg predicates: `is_in_dimension(var, dim_atom)`.
-            if (name == "is_in_dimension") {
+            // is_in(v, set_name) — unified named-set membership predicate
+            // (gen-5 cycle 3a). 4 cooperating locations:
+            //   1. Parse-time rewrite (system.h::parse_condition):
+            //      is_int(n) → is_in(n, int) and is_in_dimension(n, m) →
+            //      is_in(n, m). is_predicate_clause and this dispatcher only
+            //      recognize is_in (and is_neg_num, the literal-shape
+            //      predicate that does not fit the membership pattern).
+            //   2. Registry populated (system.h::load_builtins for built-ins,
+            //      system.h::register_dim_section for DIM_SECTION).
+            //   3. Transport (this file): const SimplifyContext* via
+            //      thread-local simplify_set_ctx_(), set by RewriteRulesGuard
+            //      (3 sites in system.h).
+            //   4. Dispatch (this block): kind-based — BUILTIN_PREDICATE
+            //      projects via evaluate(); DIM_SECTION compares
+            //      type_map[var].dim to set_name.
+            if (name == "is_in") {
                 if (c.lhs->args.size() != 2) return false;
-                if (!is_var(c.lhs->args[0])) return false;
-                if (!is_var(c.lhs->args[1])) return false;
-                const std::string& var_name = c.lhs->args[0]->name;
-                const std::string& dim_atom = c.lhs->args[1]->name;
-                if (!dim_map) return false;
-                auto it = expr_bindings->find(var_name);
-                if (it == expr_bindings->end()) return false;
-                if (!is_var(it->second)) return false;
-                auto dim_it = dim_map->find(it->second->name);
-                if (dim_it == dim_map->end()) return false;
-                return dim_it->second == dim_atom;
+                if (!is_var(c.lhs->args[0]) || !is_var(c.lhs->args[1])) return false;
+                if (!set_ctx || !set_ctx->set_defs || !set_ctx->type_map) return false;
+                const std::string& wildcard_name = c.lhs->args[0]->name;
+                const std::string& set_name      = c.lhs->args[1]->name;
+                auto bind_it = expr_bindings->find(wildcard_name);
+                if (bind_it == expr_bindings->end()) return false;
+                auto sdef_it = set_ctx->set_defs->find(set_name);
+                if (sdef_it == set_ctx->set_defs->end()) return false; // unknown set → fail-safe
+                const SetDef& sdef = sdef_it->second;
+                switch (sdef.kind) {
+                    case SetDef::Kind::BUILTIN_PREDICATE: {
+                        // D7 semantic strengthening: project bound expr to
+                        // double via evaluate() — is_in(Add(1,2), int)
+                        // succeeds because evaluate yields 3.0 (cycle 2's
+                        // is_int returned false on non-Num bindings).
+                        //
+                        // value_or_nan() — not value() — is the deliberate
+                        // boundary escape here. NaN is meaningful for the
+                        // `complex` built-in (cycle 2 invariant: the `i`
+                        // binding uses NaN as a complex-unit sentinel), and
+                        // the membership predicate may legitimately want to
+                        // accept NaN. The membership fn itself decides.
+                        auto val = evaluate(*bind_it->second);
+                        return sdef.membership && sdef.membership(val.value_or_nan());
+                    }
+                    case SetDef::Kind::DIM_SECTION: {
+                        if (!is_var(bind_it->second)) return false;
+                        auto tm_it = set_ctx->type_map->find(bind_it->second->name);
+                        if (tm_it == set_ctx->type_map->end()) return false;
+                        return tm_it->second.dim == set_name;
+                    }
+                    case SetDef::Kind::COUNT_:
+                        assert(false && "SetDef::Kind::COUNT_ unreachable in check_condition");
+                        return false;
+                }
+                return false; // exhaustive switch fall-through guard
             }
-            // 1-arg predicates: `is_neg_num(n)`, `is_int(n)`.
+            // 1-arg predicates: `is_neg_num(n)`.
             if (c.lhs->args.size() != 1) return false;
             if (!is_var(c.lhs->args[0])) return false;
             const std::string& var_name = c.lhs->args[0]->name;
             auto it = expr_bindings->find(var_name);
             if (it == expr_bindings->end()) return false;
             if (name == "is_neg_num") return is_neg_num(it->second);
-            if (name == "is_int") {
-                // True iff bound expression is a NUM with integer value.
-                // Fail-safe on non-NUM bindings (e.g. Var(y)).
-                return is_num(it->second) && is_integer_value(it->second->num);
-            }
             return false; // unknown predicate name — fail-safe
         }
         ExprPtr lhs = c.lhs, rhs = c.rhs;
@@ -1949,13 +2036,9 @@ inline const std::map<std::string, double>*& simplify_bindings_() {
     return b;
 }
 
-// Dim map (gen-3 cycle 2, 2026-05-14) — `is_in_dimension` predicate reads it
-// during rule-condition evaluation. nullptr in equation-context callers; set
-// to `&FormulaSystem::dim_map_` by the rule-firing RewriteRulesGuard.
-inline const std::map<std::string, std::string>*& simplify_dim_map_() {
-    static thread_local const std::map<std::string, std::string>* dm = nullptr;
-    return dm;
-}
+// (BindingType / SetDef / SimplifyContext / simplify_set_ctx_() are defined
+// above, before check_condition. See gen-5 cycle 3a M3 comments at those
+// declarations for the full-stack rationale.)
 
 inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
                                         const std::vector<bool>* exhaustive = nullptr) {
@@ -1968,23 +2051,25 @@ inline void simplify_set_rewrite_rules(const std::vector<RewriteRule>* rules,
 }
 
 // RAII guard: sets rewrite rules + exhaustiveness flags + bindings + custom
-// functions + dim_map (gen-3 cycle 2 addition).
+// functions + SimplifyContext (gen-5 cycle 3a, 2026-05-15 — was a raw
+// dim_map pointer in cycle 2; now a struct so future predicate additions
+// extend the struct rather than the thread-local count).
 struct RewriteRulesGuard {
     explicit RewriteRulesGuard(const std::vector<RewriteRule>* rules,
                       const std::vector<bool>* exhaustive = nullptr,
                       const std::map<std::string, double>* bindings = nullptr,
                       const std::map<std::string, double(*)(double)>* custom_funcs = nullptr,
-                      const std::map<std::string, std::string>* dim_map = nullptr) {
+                      const SimplifyContext* ctx = nullptr) {
         simplify_set_rewrite_rules(rules, exhaustive);
         simplify_bindings_() = bindings;
         custom_functions_ptr_() = custom_funcs;
-        simplify_dim_map_() = dim_map;
+        simplify_set_ctx_() = ctx;
     }
     ~RewriteRulesGuard() {
         simplify_set_rewrite_rules(nullptr, nullptr);
         simplify_bindings_() = nullptr;
         custom_functions_ptr_() = nullptr;
-        simplify_dim_map_() = nullptr;
+        simplify_set_ctx_() = nullptr;
     }
     RewriteRulesGuard(const RewriteRulesGuard&) = delete;
     RewriteRulesGuard& operator=(const RewriteRulesGuard&) = delete;
@@ -2577,7 +2662,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 }
             }
             if (!check_condition(*rule.condition, numeric, &*bindings,
-                                 simplify_dim_map_())) continue;
+                                 simplify_set_ctx_())) continue;
             const AssumptionSource source = (exhaustive_flags && rule.group_index >= 0
                 && static_cast<size_t>(rule.group_index) < exhaustive_flags->size()
                 && (*exhaustive_flags)[rule.group_index])

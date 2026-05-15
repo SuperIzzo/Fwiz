@@ -60,8 +60,8 @@ This item splits along the engine/stdlib axis per the project's wrapper-tier dis
 - **#7 (this item — IN-SCOPE core)**: language-level support for unit suffixes. **Cycle 1 shipped 2026-05-13**: Option C (parser desugar `100kg` → `MUL(Num(100), Var("kg"))`) chosen and implemented. `kg` is an ordinary `Var`; unit semantics live in stdlib `.fw` bindings. `stdlib/units/si-minimal.fw` ships the 7 SI base units as scalar 1. **Cycle 2 shipped 2026-05-13**: CLI-arg evaluation (#73 DONE); stdlib expanded 16→42 lines (SI prefixes + derived units). Remaining #7 work: dim-analysis stdlib (#7a), dimensional rejection (#7b).
 - **#7a (NEW SUB-ITEM — WRAPPER-TOOL)**: the unit catalog itself (SI units, prefixes, derived units, conversion factors) lives in `stdlib/units/*.fw`. Built ON the engine's suffix mechanism, not inside the core.
 - **#7b (UNBLOCKED 2026-05-14 — two-step DONE framing per gen-3 cycle 1)**: dimensional analysis rejection at parse/simplify time. Future #78 resolved (hybrid dim model). Two-step DONE:
-  - **#7b BASIC (atomic-Var dimensional rejection)**: ✅ BASIC DONE 2026-05-15 (gen-3 cycle 2 substrate). Atomic-Var dimensional rejection rules can now be written in stdlib `.fw` — e.g. `x + y = undefined iff is_in_dimension(x, mass) && is_in_dimension(y, time)` — and the engine evaluates them at simplify time via `is_in_dimension` predicate + `dim_map_`. Criterion 5 (predicate works as rule condition) passed.
-  - **#7b FULL (compound-expression dimensional rejection)**: shipped as part of cycle 3 of the gen-3 arc — `compute_dim` propagation + `BuiltinMeta.dim_propagate` callbacks. Lets `is_in_dimension(MUL(a, b), mass)` resolve through compound expressions, not just bare Vars. **Trigger to mark DONE**: cycle 3 ships with ADD/SUB mismatch warnings and compound-expression test passing.
+  - **#7b BASIC (atomic-Var dimensional rejection)**: ✅ BASIC DONE 2026-05-15 (gen-3 cycle 2 substrate). Atomic-Var dimensional rejection rules can now be written in stdlib `.fw` — e.g. `x + y = undefined iff is_in(x, mass) && is_in(y, time)` (canonical form; `is_in_dimension(x, mass)` also accepted as sugar) — and the engine evaluates them at simplify time via `is_in` predicate + `type_map_` + `set_definitions_` registry (gen-5 cycle 3a unified these under `SimplifyContext`). Criterion 5 (predicate works as rule condition) passed.
+  - **#7b FULL (compound-expression dimensional rejection)**: cycle 3c of the Types arc — `compute_dim` propagation + `BuiltinMeta.dim_propagate` callbacks. Lets `is_in(MUL(a, b), mass)` resolve through compound expressions, not just bare Vars. **Trigger to mark DONE**: cycle 3c ships with ADD/SUB mismatch warnings and compound-expression test passing.
 
   Original blocker (Future #78 resolution) cleared. Cycle-4-of-Units-arc verdict ("`.fw` predicates can't ship today because substrate doesn't exist") superseded — the substrate is the gen-3 cycle 2 deliverable.
 
@@ -700,10 +700,10 @@ Migrated. The C++ block at `expr.h:2471-2477` (`is_num(r) && r->num < 0` branch)
 
 Four predicates have named consumers but were not shipped in #53 (which delivered `is_neg_num` only, per minimalism critique). Each predicate ships in the cycle that consumes it:
 
-- `is_int(n)` — ✅ DONE (gen-3 cycle 2, 2026-05-15). Binding is `Num` with integer value (`is_integer_value(e->num)`). Ships in this cycle as part of the substrate (5-line dispatch in `check_condition`, 1-line in `is_predicate_clause`, 1-line in `parse_condition`). Note: the original consumer (T3.5/#54 migration) still requires the independent `make_rational`-callable-from-rule-RHS blocker.
-- `is_pos_num(n)` — binding is `Num` with value > 0. Consumer: Future #31 (`abs(x) = x iff x >= 0` partial form, partial form `abs(x) = x iff is_pos_num(x)` is deliverable without full global-condition propagation).
+- `is_int(n)` — ✅ DONE (gen-3 cycle 2, 2026-05-15); **unified (gen-5 cycle 3a, 2026-05-15)**. `is_int(n)` is now sugar: `parse_condition` rewrites it to `is_in(n, int)` at parse time. The `int` built-in `SetDef` (`BUILTIN_PREDICATE` kind, `is_integer_value` membership) handles dispatch. Users may still write `is_int(n)` — the engine normalizes it. Note: the original consumer (T3.5/#54 migration) still requires the independent `make_rational`-callable-from-rule-RHS blocker. Future named predicates whose semantics fit the membership-test shape SHOULD ship as built-in `SetDef` entries rather than new dispatch arms.
+- `is_pos_num(n)` — binding is `Num` with value > 0. Consumer: Future #31 (`abs(x) = x iff is_pos_num(x)` partial form, deliverable without full global-condition propagation).
 - `is_num(n)` — binding is any `Num`. Consumer: Future #49 BuiltinMeta migration to `.fw` rules (needs integration-variable context threading as the independent secondary blocker).
-- `is_in_dimension(v, dim)` — ✅ DONE (gen-3 cycle 2, 2026-05-15). 2-argument predicate: looks up the Var that `v` binds to in `dim_map_`, compares to the dim-atom Var literal `dim`. Encoded as `CondClause{lhs=FUNC_CALL("is_in_dimension", {Var("v"), Var("mass")}), rhs=nullptr, op=CondOp::EQ}`. `check_condition` receives `dim_map` via a 4th optional parameter; `RewriteRulesGuard` passes `&dim_map_` as the 5th ctor arg (defaulted).
+- `is_in_dimension(v, dim)` — ✅ DONE (gen-3 cycle 2, 2026-05-15); **unified (gen-5 cycle 3a, 2026-05-15)**. `is_in_dimension(v, dim)` is now sugar: `parse_condition` rewrites it to `is_in(v, dim)` at parse time. Dispatch goes through `set_definitions_[dim]` (kind `DIM_SECTION` → compares `type_map_[v_name].dim`). The 4th `check_condition` param is now `const SimplifyContext*` (carries both `type_map_` and `set_definitions_` together); `RewriteRulesGuard` 5th-arg type changed accordingly.
 
 **Reopen trigger (each remaining):** the named consumer cycle starts. The predicate machinery (encoding, `predicate_names()` extension, `check_condition` dispatch branch) is already in place — adding a new predicate is one dispatch line + tests.
 
@@ -840,11 +840,11 @@ EOF
 
 **Reopen trigger:** user reports being confused by `undefined` output on a runtime shape mismatch (i.e. an issue or a benchmark question of shape "why does fwiz say `R = undefined` instead of telling me which matrix was the wrong shape"), OR cycle 3/4 of the diagnostic arc surfaces it as a downstream blocker for the LLM-collaboration story.
 
-## 82. Consolidate binding-side metadata (dim_map_, solved_symbolic_, aliases_) — PARKED
+## 82. Consolidate binding-side metadata (type_map_, solved_symbolic_, aliases_) — PARKED
 
 **Surfaced 2026-05-14** during gen-3 cycle 1 design (visionary risk #6b).
 
-**Today**: `FormulaSystem` carries three parallel mutable maps for per-variable metadata: `solved_symbolic_` (post-solve ExprPtrs for `--steps`/`--calc` rendering), `aliases_` (file-defined constants for `--derive` output), and `dim_map_` (dimension tags — landing in cycle 2 of the gen-3 arc). Each new code path that creates or modifies a binding must remember to update each parallel map. `solved_symbolic_` is the precedent and it works fine; `dim_map_` joins it as a second; the system stays manageable.
+**Today**: `FormulaSystem` carries three parallel mutable maps for per-variable metadata: `solved_symbolic_` (post-solve ExprPtrs for `--steps`/`--calc` rendering), `aliases_` (file-defined constants for `--derive` output), and `type_map_` (replaces `dim_map_` from cycle 2 — upgraded to `BindingType{dim, sets}` value type in gen-5 cycle 3a). Each new code path that creates or modifies a binding must remember to update each parallel map. `solved_symbolic_` is the precedent and it works fine; `type_map_` joins it as the third; the system stays manageable.
 
 **Concern**: when a *fourth* parallel-map appears (e.g. for type categories, source provenance, simplification flags), the maintenance friction becomes a real cost. Each new binding-side metadata kind costs N call-site updates.
 
@@ -864,6 +864,18 @@ Single map, single update site per binding mutation.
 **Reopen trigger**: a fourth parallel-map proposal lands on `FormulaSystem` (after `solved_symbolic_`, `aliases_`, `dim_map_`). Triggers a refactor cycle to consolidate. Approximate scale: ~50-80 LOC refactor + careful test verification of all existing binding-mutation sites.
 
 **Vision principle**: per CLAUDE.md "Remove > Add" — consolidating the parallel-map pattern removes the implicit invariant ("update N maps in lockstep") and replaces it with a structural one (single Binding owns all per-variable state).
+
+## 83. Extract `copy_metadata_to_sub` helper from `load_sub_system` — PARKED
+
+**Surfaced gen-5 cycle 3a (2026-05-15)** when the cross-file propagation bug at the auto-section branch (lines 2892-2900, `system.h`) was fixed. The pre-existing bug (auto-section branch silently omitted `dim_map_` propagation while the manual branch included it) is precisely the class of error a named helper would prevent: `load_sub_system` currently has two branches that each duplicate the metadata copy block (`type_map_`, `set_definitions_`, and any future fields). Extracting a `copy_metadata_to_sub(FormulaSystem& child) const` helper (~10 LOC) makes the two branches share one call site, so adding a new metadata field requires exactly one edit.
+
+**Reopen trigger:** a 4th field is added to `load_sub_system`'s metadata copy block (i.e., any future cycle adds another parallel map that must propagate cross-file).
+
+## 84. `NumberDomain` enum deletion — PARKED
+
+**Surfaced gen-5 cycle 3a (2026-05-15)** as a residual artifact. `NumberDomain` enum (or equivalent discriminator) is the last surviving remnant of the pre-cycle-3a three-way specialization (dim / domain / predicate). Now that `SetDef::Kind` unifies these under one mechanism (`BUILTIN_PREDICATE` / `DIM_SECTION` / future USER_PREDICATE / FUNCTION_SECTION), the old enum is redundant.
+
+**Reopen trigger:** gen-5 cycle 3c (dim algebra promotion) completes, OR `ValueSet` adopts `SetDef`-compatible domain semantics, making the enum's remaining consumers expressible as `SetDef` lookups.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 
