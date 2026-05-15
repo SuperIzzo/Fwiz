@@ -64,7 +64,7 @@ For each design item you're given:
 - Named constants (`EPSILON_ZERO`, `EPSILON_REL`, `SIMPLIFY_MAX_ITER`)
 - `static_assert` for enum counts, table sizes, constant ranges
 - `assert` in factories and post-conditions
-- Enum `COUNT_` sentinels — `case COUNT_: assert(false)`, never `default:`
+- Enum `COUNT_` sentinels — `case COUNT_: assert(false && "<enum>::COUNT_ unreachable in <site>"); return <safe-default>;`, never `default:`. **The `assert(false)` is mandatory even when the static_assert on `COUNT_ == N` already guards the switch at compile-time**: the static_assert protects against forgotten enum extensions; the runtime `assert` protects against the unreachable-code-path-actually-being-reached class of bugs (which the compile-time guard cannot catch). Both are required as defense-in-depth. Canonical miss: gen-5 cycle 3a 2026-05-15 — `SetDef::Kind::COUNT_` case shipped with `return false; // sentinel — never reached` instead of `assert(false && "...")` despite the static_assert(COUNT_ == 2) being in place; reviewer R1 self-fixed at REVIEW. The compile-time guard had the implementer thinking "the runtime case is dead, so an assert adds nothing" — wrong: the assert is the runtime canary if a future change disables the static_assert or routes a value past the switch via reinterpret_cast.
 - Data-driven: BinOp table, builtin registry, strategy enumeration
 - No empty catch blocks — return, log, or handle
 - No external dependencies
