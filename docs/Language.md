@@ -596,6 +596,8 @@ Some rule conditions test the *type* of a wildcard binding rather than comparing
 | `is_neg_num(n)` | 1 | `n` binds to a negative numeric literal |
 | `is_in(v, set_name)` | 2 | binding of `v` is a member of the named set (see §17.3) |
 
+**Infix `in` syntax** (preferred, since cycle 3f, 2026-05-16): `v in set_name` is syntax sugar for `is_in(v, set_name)`. Both forms lower to the same AST. The infix form reads as the math `v ∈ S` and is preferred in new rule writing.
+
 **Legacy aliases** (accepted at rule-load time, rewritten to `is_in` internally):
 - `is_int(n)` → `is_in(n, int)`
 - `is_in_dimension(v, dim)` → `is_in(v, dim)`
@@ -604,16 +606,25 @@ Some rule conditions test the *type* of a wildcard binding rather than comparing
 x ^ n = 1 / x ^ (-n)  iff is_neg_num(n)
 # Only fires when exponent is a known negative literal; symbolic -k is unaffected.
 
-x + y = undefined  iff is_in(x, mass) && is_in(y, time)
-# Dimension-rejection rule: adding mass to time is undefined.
+x + y = undefined  iff x in mass && y in time
+# Dimension-rejection rule (infix form): adding mass to time is undefined.
 
-floor(n) = n  iff is_in(n, int)
-# Rule using built-in named set.
+floor(n) = n  iff n in int
+# Rule using built-in named set (infix form).
+
+x + y = undefined  iff is_in(x, mass) && is_in(y, time)
+# Function-call form — equivalent, still accepted.
 ```
 
 Fail-safe semantics: if the wildcard is not bound, or the binding does not satisfy the predicate, it returns false (contrast comparison clauses like `x != 0`, which default to permissive-true on unknown bindings). Predicates and comparison clauses can be combined freely in a single condition.
 
 `is_in(v, dim_name)` where `dim_name` is a dimension section requires dimension annotations on variables — see §17.
+
+**Precedence quirk:** `in` is detected by a string-level scan in `parse_condition` BEFORE the comparison-op loop. As a result `iff x == 5 in int` splits at ` in ` first and would attempt to parse `x == 5` as an expression (which fails — `==` is condition-level, not expression-level). Parenthesise to make intent explicit: `iff (x == 5) in int` (parses as `is_in((x == 5), int)`, also fails because `==` is not expression-level — but is the documented intent). For typical cycle-3a/3b/3d/3f usage this never matters; document for future-proofing.
+
+**Chained `in`:** `x in y in z` is rejected at parse time with a clear "Infix 'in' does not chain" error message; use `(x in y) && (x in z)` for compound membership tests.
+
+**Reserved-word note:** `in` is a true lexer keyword (since cycle 3f). It cannot be used as a variable name in any equation or expression. It CAN appear as a parameter name in formula-call bindings (`foo(in=value)`).
 
 ---
 
@@ -920,17 +931,20 @@ These are the same names you use in intersection annotations (`n:(int, mass) = 5
 
 ### 17.4 Dimension-Checking Rewrite Rules
 
-The canonical predicate is `is_in(v, set_name)`:
+The canonical predicate is `is_in(v, set_name)`. **Preferred infix form (cycle 3f):** `v in set_name`. Both forms produce the same AST; the infix form reads as math.
 
 ```
-# prevent adding mass to time (dim-mismatch rule):
-x + y = undefined  iff is_in(x, mass) && is_in(y, time)
+# prevent adding mass to time (dim-mismatch rule, infix form):
+x + y = undefined  iff x in mass && y in time
 
 # integer-only rule:
-floor(n) = n  iff is_in(n, int)
+floor(n) = n  iff n in int
 
 # user-defined set in a rule:
-p + q = undefined  iff is_in(p, whole_number)
+p + q = undefined  iff p in whole_number
+
+# function-call form — equivalent, still accepted:
+x + y = undefined  iff is_in(x, mass) && is_in(y, time)
 ```
 
 **Legacy aliases** (accepted at rule-load time, rewritten to `is_in` internally):

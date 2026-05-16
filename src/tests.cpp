@@ -15333,17 +15333,20 @@ void test_gen3_cycle2_constants_as_units() {
         // dim_map_ semantics are isolated from value-propagation semantics.
         write_fw("/tmp/m_cross_child.fw",
                  "m_obj:mass = 10\n"
-                 "out = m_obj + in\n");
+                 "out = m_obj + inp\n");
         // Section headers (`[mass]`) consume everything until the next header
         // (no closing-bracket form), so the formula call must precede the
         // dim-section header to stay at top level.
+        // gen-5 cycle 3f: `in` is now reserved (TokenType::IN). Pre-3f this
+        // test used `in` as the input-binding name; renamed to `inp` for the
+        // reserved-word migration (D6).
         write_fw("/tmp/m_cross_parent.fw",
-                 "m_cross_child(out=?y, in=in)\n"
+                 "m_cross_child(out=?y, inp=inp)\n"
                  "[mass]\ng = 1\nkg = 1000 * g\n");
         FormulaSystem sys;
         sys.load_file("/tmp/m_cross_parent.fw");
         // Force the child sub-system to load by resolving y.
-        const double r = sys.resolve("y", {{"in", 0}});
+        const double r = sys.resolve("y", {{"inp", 0}});
         ASSERT_NUM(r, 10, "m-cross: y resolves through child sub-system (forces load)");
         // Find the child sub-system in the cache.
         std::shared_ptr<FormulaSystem> child;
@@ -15614,15 +15617,17 @@ void test_gen5_cycle3a_types_as_named_sets() {
     // load_sub_system. Required so child files using `var:mass = ...` resolve
     // 'mass' against the SAME registry as the parent.
     {
+        // gen-5 cycle 3f: `in` is reserved (TokenType::IN). Renamed to `inp`
+        // per D6 migration (same shape as the m_cross_child rename above).
         write_fw("/tmp/m5_cross_child.fw",
                  "m_obj:mass = 10\n"
-                 "out = m_obj + in\n");
+                 "out = m_obj + inp\n");
         write_fw("/tmp/m5_cross_parent.fw",
-                 "m5_cross_child(out=?y, in=in)\n"
+                 "m5_cross_child(out=?y, inp=inp)\n"
                  "[mass]\nrefkg = 1\nkg = 1000 * refkg\n");
         FormulaSystem sys;
         sys.load_file("/tmp/m5_cross_parent.fw");
-        const double r = sys.resolve("y", {{"in", 0}});
+        const double r = sys.resolve("y", {{"inp", 0}});
         ASSERT_NUM(r, 10, "M5 C6: y resolves through child sub-system (forces load)");
         std::shared_ptr<FormulaSystem> child;
         for (const auto& [key, sub] : sys.sub_systems) {
@@ -16008,20 +16013,22 @@ void test_gen5_cycle3b_user_defined_predicates() {
     // BLOCKING C12: USER_PREDICATE entries propagate to sub-systems on
     // load_sub_system. Same map-copy mechanism as cycle-3a M5.
     {
-        write_fw("/tmp/m5_3b_child.fw", "out = in\n");
+        // gen-5 cycle 3f: `in` is reserved (TokenType::IN). Renamed to `inp`
+        // per D6 migration.
+        write_fw("/tmp/m5_3b_child.fw", "out = inp\n");
         // Predicate section MUST be last in file: split_sections appends
         // any subsequent lines as the section's body, so a predicate
         // section at the top would slurp the formula call below into its
         // body (breaking parse).
         write_fw("/tmp/m5_3b_parent.fw",
-                 "m5_3b_child(out=?y, in=in)\n"
+                 "m5_3b_child(out=?y, inp=inp)\n"
                  "[whole_number(n)] iff n >= 0 && is_in(n, int)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/m5_3b_parent.fw");
         ASSERT(sys.set_definitions_.count("whole_number") == 1,
                "M5 C12: parent has whole_number USER_PREDICATE");
         // Force child load
-        const double r = sys.resolve("y", {{"in", 7}});
+        const double r = sys.resolve("y", {{"inp", 7}});
         ASSERT_NUM(r, 7, "M5 C12: child sub-system loads via formula call");
         std::shared_ptr<FormulaSystem> child;
         for (const auto& [key, sub] : sys.sub_systems) {
@@ -16363,6 +16370,319 @@ void test_gen5_cycle3d_function_section_sets() {
             ASSERT(!check_condition(cond2, {}, &eb, &ctx),
                    "M5 C11: rule does NOT fire when y=0 is outside image [1,∞)");
         }
+    }
+}
+
+// gen-5 arc cycle 3f (2026-05-16): infix `in` operator as syntax sugar for
+// is_in(x, set). Reserved word at lexer level (TokenType::IN). Synthesised
+// at parse_condition string-scan to FUNC_CALL("is_in", [lhs, rhs]).
+// Backward compat: is_in(x, set) function-call form continues to work.
+// Design: `.fwiz-workflow/design-proposal.md` Final Design.
+void test_gen5_cycle3f_infix_in() {
+    SECTION("gen-5 cycle 3f: infix `in` operator (syntax sugar for is_in)");
+
+    // ---- C1: Lexer tokenises `in` as TokenType::IN ----
+    {
+        auto tokens = Lexer("x in int").tokenize();
+        ASSERT(tokens.size() == 4, "C1: 'x in int' tokenizes to 4 tokens (IDENT IN IDENT END)");
+        ASSERT(tokens[0].type == TokenType::IDENT && tokens[0].text == "x",
+               "C1: tokens[0] is IDENT('x')");
+        ASSERT(tokens[1].type == TokenType::IN && tokens[1].text == "in",
+               "C1: tokens[1] is IN");
+        ASSERT(tokens[2].type == TokenType::IDENT && tokens[2].text == "int",
+               "C1: tokens[2] is IDENT('int')");
+        ASSERT(tokens[3].type == TokenType::END, "C1: tokens[3] is END");
+    }
+
+    // ---- C2: TokenType::COUNT_ is 17 (compile-time, but cross-check at runtime) ----
+    {
+        // static_assert lives in lexer.h; runtime mirror for visibility.
+        ASSERT(static_cast<int>(TokenType::COUNT_) == 17,
+               "C2: TokenType::COUNT_ == 17 (IN added in cycle 3f)");
+    }
+
+    // ---- C3: `in` in expression context raises parse error ----
+    // Two flavours: (a) direct Parser-level — IN falls through to "Unexpected
+    // token" in primary() per design D2; (b) end-to-end load_string — the
+    // equation does not resolve (no equation found for the LHS var).
+    {
+        // (a) Parser-level direct probe.
+        bool threw_parser = false;
+        try {
+            auto tokens = Lexer("x + in").tokenize();
+            Parser pp(tokens);
+            (void)pp.parse_expr();
+        } catch (const std::exception&) {
+            threw_parser = true;
+        }
+        ASSERT(threw_parser,
+               "C3a: Parser::parse_expr on 'x + in' raises an error (IN token has no expression handler)");
+
+        // (b) End-to-end: load_string the bad equation; resolve throws
+        // (either at parse time or because the equation never lands).
+        bool threw_load = false;
+        try {
+            FormulaSystem sys;
+            sys.load_string("y = x + in\n", "<c3b-expr-in>");
+            (void)sys.resolve("y", {{"x", 1}});
+        } catch (const std::exception&) {
+            threw_load = true;
+        }
+        ASSERT(threw_load,
+               "C3b: `y = x + in` end-to-end produces an error (either at load or resolve)");
+    }
+
+    // ---- C4: parse_condition("x in int") synthesises FUNC_CALL("is_in", [Var(x), Var(int)]) ----
+    // Compare both forms (infix vs function-call) — both must arrive at
+    // structurally-identical CondClause shape: is_in name, 2 args, EQ op.
+    {
+        FormulaSystem sys_infix;
+        sys_infix.load_string(
+            "x + y = undefined iff x in int\n",
+            "<c4-infix>");
+        FormulaSystem sys_func;
+        sys_func.load_string(
+            "x + y = undefined iff is_in(x, int)\n",
+            "<c4-func>");
+        ASSERT(!sys_infix.rewrite_rules.empty(),
+               "C4: infix form produces a rewrite rule");
+        ASSERT(!sys_func.rewrite_rules.empty(),
+               "C4: function-call form produces a rewrite rule");
+        const auto& cl_inf = sys_infix.rewrite_rules.back().condition->clauses[0];
+        const auto& cl_fun = sys_func.rewrite_rules.back().condition->clauses[0];
+        ASSERT(cl_inf.lhs->type == ExprType::FUNC_CALL,
+               "C4: infix clause lhs is FUNC_CALL");
+        ASSERT(cl_inf.lhs->name == "is_in", "C4: infix clause name is 'is_in'");
+        ASSERT(cl_inf.lhs->args.size() == 2, "C4: infix clause has 2 args");
+        ASSERT(cl_inf.lhs->args[0]->name == "x", "C4: infix arg0 is Var('x')");
+        ASSERT(cl_inf.lhs->args[1]->name == "int", "C4: infix arg1 is Var('int')");
+        ASSERT(cl_inf.rhs == nullptr, "C4: infix clause rhs is nullptr (predicate form)");
+        ASSERT(cl_inf.op == CondOp::EQ, "C4: infix clause op is EQ (predicate form)");
+        // Structural parity with function-call form:
+        ASSERT(cl_fun.lhs->name == "is_in" && cl_fun.lhs->args.size() == 2
+               && cl_fun.lhs->args[0]->name == "x"
+               && cl_fun.lhs->args[1]->name == "int",
+               "C4: function-call form produces same AST shape");
+    }
+
+    // ---- C5: `iff x in int` fires identically to `iff is_in(x, int)` ----
+    // Use the BUILTIN_PREDICATE 'int' (auto-registered, no [section] required —
+    // section-header semantics consume subsequent lines into the section body,
+    // so a rewrite-rule line cannot follow a dim-section header at top level).
+    {
+        FormulaSystem sys_inf;
+        sys_inf.load_string(
+            "p + q = undefined iff p in int\n",
+            "<c5-infix-int>");
+        FormulaSystem sys_fn;
+        sys_fn.load_string(
+            "p + q = undefined iff is_in(p, int)\n",
+            "<c5-func-int>");
+        const SimplifyContext ctx_inf{&sys_inf.type_map_, &sys_inf.set_definitions_};
+        const SimplifyContext ctx_fn{&sys_fn.type_map_, &sys_fn.set_definitions_};
+        std::map<std::string, ExprPtr> eb_pos{{"p", Expr::Num(5)}};
+        std::map<std::string, ExprPtr> eb_neg{{"p", Expr::Num(3.7)}};
+        const auto& c_inf = *sys_inf.rewrite_rules.back().condition;
+        const auto& c_fn = *sys_fn.rewrite_rules.back().condition;
+        const bool inf_pos = check_condition(c_inf, {}, &eb_pos, &ctx_inf);
+        const bool fn_pos = check_condition(c_fn, {}, &eb_pos, &ctx_fn);
+        const bool inf_neg = check_condition(c_inf, {}, &eb_neg, &ctx_inf);
+        const bool fn_neg = check_condition(c_fn, {}, &eb_neg, &ctx_fn);
+        ASSERT(inf_pos, "C5: infix rule fires for integer wildcard (p=5)");
+        ASSERT(!inf_neg, "C5: infix rule does NOT fire for non-integer (p=3.7)");
+        ASSERT(inf_pos == fn_pos && inf_neg == fn_neg,
+               "C5: infix and function-call forms agree on positive AND negative cases");
+    }
+
+    // ---- C6: compound `iff x in int && y in real` ----
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff p in int && q in real\n",
+            "<c6-compound>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        ASSERT(cond.clauses.size() == 2, "C6: compound condition produces 2 clauses");
+        ASSERT(cond.clauses[0].lhs->name == "is_in"
+               && cond.clauses[0].lhs->args[1]->name == "int",
+               "C6: first clause is is_in(p, int)");
+        ASSERT(cond.clauses[1].lhs->name == "is_in"
+               && cond.clauses[1].lhs->args[1]->name == "real",
+               "C6: second clause is is_in(q, real)");
+        ASSERT(cond.connectors.size() == 1
+               && cond.connectors[0] == CondLogic::AND,
+               "C6: connector is AND");
+    }
+
+    // ---- C7: precedence — `(x + 1) in int` parses as is_in(Add(x,1), int) ----
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "u + v = undefined iff (u + 1) in int\n",
+            "<c7-precedence>");
+        const auto& cl = sys.rewrite_rules.back().condition->clauses[0];
+        ASSERT(cl.lhs->name == "is_in" && cl.lhs->args.size() == 2,
+               "C7: precedence: clause is is_in/2");
+        ASSERT(cl.lhs->args[0]->type == ExprType::BINOP,
+               "C7: precedence: LHS arg is a BINOP (not just Var('u'))");
+        ASSERT(cl.lhs->args[1]->name == "int",
+               "C7: precedence: RHS arg is Var('int')");
+    }
+
+    // ---- C8: backward compat — pick representative cycle-3a/3b tests
+    // and verify is_in(...) function-call form still parses + fires ----
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, int)\n",
+            "<c8-bc-isin>");
+        ASSERT(!sys.rewrite_rules.empty(),
+               "C8 BC: is_in(x, int) still parses to a rewrite rule");
+        const auto& cl = sys.rewrite_rules.back().condition->clauses[0];
+        ASSERT(cl.lhs->name == "is_in" && cl.lhs->args[1]->name == "int",
+               "C8 BC: is_in clause shape preserved");
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+        ASSERT(check_condition(*sys.rewrite_rules.back().condition,
+                               {}, &eb, &ctx),
+               "C8 BC: is_in fires for integer wildcard");
+    }
+    {
+        // is_int alias path (cycle-3a D8 SIMPLIFY) still works.
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_int(x)\n",
+            "<c8-bc-isint-alias>");
+        const auto& cl = sys.rewrite_rules.back().condition->clauses[0];
+        ASSERT(cl.lhs->name == "is_in" && cl.lhs->args[1]->name == "int",
+               "C8 BC: is_int(x) alias still rewrites to is_in(x, int)");
+    }
+    {
+        // USER_PREDICATE (cycle 3b) still fires.
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, whole_number)\n"
+            "[whole_number(n)] iff n >= 0 && is_in(n, int)\n",
+            "<c8-bc-user-pred>");
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(3)}};
+        ASSERT(check_condition(*sys.rewrite_rules.back().condition,
+                               {}, &eb, &ctx),
+               "C8 BC: USER_PREDICATE whole_number fires for non-negative integer");
+    }
+
+    // ---- C9: design victory — `iff (x*x) in int && x > 0` ----
+    // Composes infix `in` with the existing comparison-op `>`. Two clauses,
+    // first via the in-synthesis branch, second via the comparison-op branch.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff (x * x) in int && x > 0\n",
+            "<c9-design-victory>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        ASSERT(cond.clauses.size() == 2,
+               "C9: compound (in + comparison) produces 2 clauses");
+        // Clause 0: infix in
+        ASSERT(cond.clauses[0].lhs->name == "is_in",
+               "C9: clause 0 is is_in (infix path)");
+        ASSERT(cond.clauses[0].lhs->args[0]->type == ExprType::BINOP,
+               "C9: clause 0 LHS arg is BINOP (x*x)");
+        ASSERT(cond.clauses[0].lhs->args[1]->name == "int",
+               "C9: clause 0 RHS arg is Var('int')");
+        ASSERT(cond.clauses[0].rhs == nullptr,
+               "C9: clause 0 rhs is nullptr (predicate form)");
+        // Clause 1: comparison
+        ASSERT(cond.clauses[1].op == CondOp::GT,
+               "C9: clause 1 op is GT (comparison path)");
+        ASSERT(cond.connectors.size() == 1
+               && cond.connectors[0] == CondLogic::AND,
+               "C9: connector is AND");
+        // Behavioural: rule structurally compose. The is_in dispatcher
+        // currently requires Var LHS (expr.h:1921 `is_var(c.lhs->args[0])`);
+        // computed-LHS dispatch (is_in(Add(x,1), int) with x bound) is
+        // exercised by cycle-3a V8 via single-Var wildcard + binding-map
+        // projection. The cycle-3f design victory is the STRUCTURAL win
+        // (infix syntax composes cleanly with existing comparison ops via
+        // the && clause splitter). Behavioural-compose with non-Var LHS
+        // arg is an engine extension orthogonal to syntax.
+    }
+
+    // ---- C10: stdlib + examples load with no `in`-related parse errors ----
+    // The cycle-3f IN-as-keyword promotion could in principle break any .fw
+    // file that uses `in` as a variable. The pre-design grep verified zero
+    // collisions; this test makes that a regression check.
+    {
+        // stdlib.fw transitively loads builtin.fw via includes.
+        bool ok_stdlib = true;
+        try {
+            FormulaSystem sys_stdlib;
+            sys_stdlib.load_file("/run/media/data/users/izzo/Projects/C++/Fwiz/stdlib/stdlib.fw");
+        } catch (const std::exception&) {
+            ok_stdlib = false;
+        }
+        ASSERT(ok_stdlib, "C10: stdlib/stdlib.fw loads cleanly (no `in` collision)");
+    }
+    {
+        for (const std::string& name : {
+                 "geometry.fw", "physics.fw", "rectangle.fw", "triangle.fw",
+                 "derivatives.fw", "factorial.fw"
+             }) {
+            bool ok = true;
+            try {
+                FormulaSystem sys;
+                sys.load_file("/run/media/data/users/izzo/Projects/C++/Fwiz/examples/" + name);
+            } catch (const std::exception&) {
+                ok = false;
+            }
+            ASSERT(ok, "C10: examples/" + name + " loads cleanly (no `in` collision)");
+        }
+    }
+
+    // ---- C12: chained `x in y in z` raises clear error ----
+    // The rewrite-rule load path swallows `runtime_error` from parse_condition
+    // (system.h:~3182) and emits a stderr warning; the rule is dropped with
+    // cond_ok=false. To test the throw shape directly, call parse_condition
+    // through the (parse-time) global-condition path which also catches but —
+    // more reliably — by exercising parse_condition via Lexer-level reproduction
+    // here. We do this by capturing stderr from a load_string call and asserting
+    // the warning text contains "does not chain"; AND by counting that no rule
+    // was added with the offending description.
+    {
+        FormulaSystem sys;
+        // Force builtins-load up front via a no-op load so the next
+        // load_string call only adds (or fails to add) the test rule.
+        sys.load_string("dummy_var = 1\n", "<c12-prime>");
+        const size_t before = sys.rewrite_rules.size();
+        // Stderr capture: redirect rdbuf to a stringstream during the load
+        // that contains the chained-`in` clause.
+        std::stringstream captured;
+        std::streambuf* orig = std::cerr.rdbuf(captured.rdbuf());
+        sys.load_string(
+            "p + q = undefined iff p in int in real\n",
+            "<c12-chained>");
+        std::cerr.rdbuf(orig);
+        const size_t after = sys.rewrite_rules.size();
+        const std::string err = captured.str();
+        ASSERT(after == before,
+               "C12: chained `in` causes rule to be dropped (rewrite_rules count unchanged)");
+        ASSERT(err.find("does not chain") != std::string::npos,
+               "C12: stderr warning contains 'does not chain' (clearer than raw parser throw)");
+    }
+
+    // ---- Bonus: M2 IDENT|IN widening — formula call with `in` as
+    // parameter NAME does not silently drop. After cycle 3f, `in` is reserved
+    // in expression context, but parameter-name positions accept it. We use
+    // synthetic call here (load_string with a self-defined sub-section
+    // wouldn't fit one-line) — verify via the tokenization path that the
+    // call-args parser would see the IN parameter without skipping. ----
+    {
+        // Tokenization sanity: `foo(in=value)` produces IDENT LPAREN IN
+        // EQUALS IDENT RPAREN — and parse_call_args (post-M2) must not
+        // discard the IN-named parameter.
+        auto tokens = Lexer("foo(in=value)").tokenize();
+        ASSERT(tokens.size() == 7,
+               "M2 bonus: tokens count = 7 (IDENT LPAREN IN EQUALS IDENT RPAREN END)");
+        ASSERT(tokens[2].type == TokenType::IN,
+               "M2 bonus: token at parameter-name position is IN");
     }
 }
 
@@ -16722,6 +17042,9 @@ int main() {
     // gen-5 arc cycle 3b (2026-05-16): User-defined predicate sets
     test_gen5_cycle3b_user_defined_predicates();
     test_gen5_cycle3d_function_section_sets();
+
+    // gen-5 arc cycle 3f (2026-05-16): infix `in` operator
+    test_gen5_cycle3f_infix_in();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

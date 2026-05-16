@@ -15,10 +15,16 @@ enum class TokenType : uint8_t {
     // `var:(atom1, atom2, ...) = expr` are the ONLY shapes; map literals,
     // ternaries, range syntax etc. require a separate design cycle.
     COLON,
+    // IN: reserved word for infix membership predicate (gen-5 cycle 3f).
+    // `x in set_name` is syntax sugar for `is_in(x, set_name)`. Lexer-level
+    // keyword (read_ident intercepts) — distinct from cycle 1.1 `{if, iff, e}`
+    // NUMBER-IDENT denylist which is a parser-level desugar guard, not a token
+    // upgrade. See parse_condition for the infix-to-FUNC_CALL synthesis.
+    IN,
     END,
     COUNT_
 };
-static_assert(static_cast<int>(TokenType::COUNT_) == 16,
+static_assert(static_cast<int>(TokenType::COUNT_) == 17,
     "TokenType count drift — update lexer dispatch table if adding/removing tokens.");
 
 struct Token {
@@ -109,6 +115,12 @@ private:
             while (pos_ < src_.size() && (is_alnum(src_[pos_]) || src_[pos_] == '_'))
                 pos_++;
         }
-        return {TokenType::IDENT, src_.substr(start, pos_ - start)};
+        const std::string name = src_.substr(start, pos_ - start);
+        // Reserved-word upgrade (gen-5 cycle 3f): `in` lexes as TokenType::IN
+        // so `parse_condition` can string-scan ` in ` and synthesise
+        // `is_in(lhs, rhs)`. `in` falls through to "Unexpected token" in
+        // expression context — correct fail-safe per design D2.
+        if (name == "in") return {TokenType::IN, name, 0};
+        return {TokenType::IDENT, name};
     }
 };

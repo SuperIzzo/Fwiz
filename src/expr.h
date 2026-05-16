@@ -1881,13 +1881,18 @@ inline ExistenceChecker& solve_existence_checker_();
             const std::string& name = c.lhs->name;
             if (!expr_bindings) return false;
             // is_in(v, set_name) — unified named-set membership predicate
-            // (gen-5 cycle 3a, extended cycles 3b + 3d). 8 cooperating
+            // (gen-5 cycle 3a, extended cycles 3b + 3d + 3f). 9 cooperating
             // locations (V6c numbering preserved):
             //   1. Parse-time rewrite (system.h::parse_condition):
             //      is_int(n) → is_in(n, int) and is_in_dimension(n, m) →
             //      is_in(n, m). is_predicate_clause and this dispatcher only
             //      recognize is_in (and is_neg_num, the literal-shape
             //      predicate that does not fit the membership pattern).
+            //   9. Infix-`in` synthesis (cycle 3f, system.h::parse_condition):
+            //      ` in ` string-scan BEFORE the comparison-op loop lowers
+            //      `x in set` to FUNC_CALL("is_in", [Var(x), Var(set)]) —
+            //      identical AST to the function-call form. Both syntaxes
+            //      arrive here through the same dispatch.
             //   2. Registry populated: system.h::load_builtins (built-ins),
             //      system.h::register_dim_section (DIM_SECTION),
             //      system.h::register_predicate_section (USER_PREDICATE —

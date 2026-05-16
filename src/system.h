@@ -2714,7 +2714,15 @@ public:
             // Skip commas
             if (tok[i].type == TokenType::COMMA) { i++; continue; }
 
-            if (tok[i].type != TokenType::IDENT) { i++; continue; }
+            // gen-5 cycle 3f: accept IN as parameter-name token in binding
+            // position. `in` is reserved in expression context (cycle 3f D2)
+            // but ALLOWED as a parameter name here — formula-call bindings
+            // are name=expr positions, not expressions. Python's `class`/`def`
+            // precedent: reserved words can appear as keyword-arg names in
+            // some call surfaces. This site, line ~+8 (alias-after-?), and
+            // extract_formula_calls' implied-alias guard form the 3-site set.
+            if (tok[i].type != TokenType::IDENT
+                && tok[i].type != TokenType::IN) { i++; continue; }
 
             // Check for query: IDENT EQUALS QUESTION [IDENT]
             if (i + 2 < rparen_pos
@@ -2722,7 +2730,9 @@ public:
                 && tok[i + 2].type == TokenType::QUESTION) {
                 call.query_var = tok[i].text;
                 // Check for alias after ?
-                if (i + 3 < rparen_pos && tok[i + 3].type == TokenType::IDENT) {
+                if (i + 3 < rparen_pos
+                    && (tok[i + 3].type == TokenType::IDENT
+                        || tok[i + 3].type == TokenType::IN)) {
                     call.output_var = tok[i + 3].text;
                     i += 4;
                 } else {
@@ -2794,10 +2804,13 @@ public:
                     auto call = parse_call_args(tok, i, rparen);
 
                     // Implied alias: if preceded by "IDENT =" and call has no explicit alias
+                    // gen-5 cycle 3f: accept IN as the output-var token in
+                    // the implied-alias guard (parallel to parse_call_args).
                     if (call.output_var == call.query_var
                         && result.size() >= 2
                         && result[result.size() - 1].type == TokenType::EQUALS
-                        && result[result.size() - 2].type == TokenType::IDENT) {
+                        && (result[result.size() - 2].type == TokenType::IDENT
+                            || result[result.size() - 2].type == TokenType::IN)) {
                         call.output_var = result[result.size() - 2].text;
                     }
 
@@ -2844,6 +2857,55 @@ private:
         for (auto& clause_str : clause_strs) {
             clause_str = trim(clause_str);
             if (clause_str.empty()) continue;
+
+            // gen-5 cycle 3f: infix `in` operator as syntax sugar for
+            // is_in(x, set). Scan for space-padded ` in ` to disambiguate
+            // from `sin(x)`, `infinity`, etc. Lower to
+            // FUNC_CALL("is_in", [lhs, rhs]) — identical AST to the
+            // function-call form. Parse-time synthesis; AST equivalence
+            // means backward compat is structural (existing tests asserting
+            // on FUNC_CALL form pass unchanged).
+            //
+            // Edge cases (documented per visionary V3):
+            //   - `x == 5 in int` → ` in ` matches first; parse_expr("x == 5")
+            //     fails (parser.h has no comparison level). Fails loudly.
+            //   - `x in y in z` → first ` in ` consumed; defensive check
+            //     below produces clearer error than raw RHS parse failure.
+            //   - `xin mass` (no space) → no IN token; lexer sees IDENT IDENT;
+            //     comparison-op scan fails. Fails loudly.
+            //   - `is_in(x, int)` → `find(" in ")` returns npos (no space-i-n-
+            //     space substring); flows to existing predicate path. (Verified
+            //     char-by-char in design proposal.)
+            const size_t in_pos = clause_str.find(" in ");
+            if (in_pos != std::string::npos) {
+                std::string in_lhs_str = clause_str.substr(0, in_pos);
+                std::string in_rhs_str = clause_str.substr(in_pos + 4); // skip " in "
+                while (!in_lhs_str.empty()
+                       && std::isspace(static_cast<unsigned char>(in_lhs_str.back())))
+                    in_lhs_str.pop_back();
+                size_t rhs_start = 0;
+                while (rhs_start < in_rhs_str.size()
+                       && std::isspace(static_cast<unsigned char>(in_rhs_str[rhs_start])))
+                    rhs_start++;
+                in_rhs_str = in_rhs_str.substr(rhs_start);
+                if (in_lhs_str.empty() || in_rhs_str.empty())
+                    throw std::runtime_error(
+                        "Infix 'in': empty LHS or RHS in '" + clause_str + "'");
+                ExprPtr in_lhs = Parser(Lexer(in_lhs_str).tokenize()).parse_expr();
+                // Chained-`in` defensive check (cycle 3f critic): verify RHS
+                // tokens contain no IN. Catches `x in y in z` with a clearer
+                // error than the raw parser throw.
+                auto in_rhs_tokens = Lexer(in_rhs_str).tokenize();
+                if (std::any_of(in_rhs_tokens.begin(), in_rhs_tokens.end(),
+                                [](const Token& t) { return t.type == TokenType::IN; }))
+                    throw std::runtime_error(
+                        "Infix 'in' does not chain: '" + clause_str
+                        + "'. Use '(x in y) && (x in z)' for compound membership.");
+                ExprPtr in_rhs = Parser(std::move(in_rhs_tokens)).parse_expr();
+                auto func_call = Expr::Call("is_in", {in_lhs, in_rhs});
+                cond.clauses.push_back({func_call, nullptr, CondOp::EQ});
+                continue;
+            }
 
             // Parse clause: expr op expr
             // Find comparison operator
