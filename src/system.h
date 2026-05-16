@@ -772,7 +772,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         auto reg_builtin = [this](std::string nm, bool (*pred)(double)) {
             // Trailing parameter/predicate fields explicitly default — cycle
             // 3b USER_PREDICATE-only; built-ins leave them empty/nullopt.
-            set_definitions_[nm] = SetDef{nm, SetDef::Kind::BUILTIN_PREDICATE, pred, {}, std::nullopt};
+            set_definitions_[nm] = SetDef{nm, SetDef::Kind::BUILTIN_PREDICATE, pred, {}, std::nullopt, {}};
         };
         reg_builtin("int",      [](double v) { return is_integer_value(v); });
         reg_builtin("real",     [](double v) { return std::isfinite(v); });
@@ -992,6 +992,29 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             && !s.lines.empty();
     }
 
+    // ------------------------------------------------------------------------
+    // Function section registration (gen-5 cycle 3d, 2026-05-16).
+    //
+    // A `[name(arg) -> ret]` Section with exactly one positional arg and a
+    // non-empty return variable is a *function section* — testable as a set
+    // via existential solving: `is_in(x, name)` ↔ `∃ n: name(n) = x`.
+    //
+    // Multi-arg formula sections (`args.size() > 1`) are explicitly excluded:
+    // `is_in(3, add)` would be semantically ambiguous (which arg maps to 3?).
+    // They remain callable as functions via `add(a=1, b=2)` syntax but NOT
+    // set-testable. Future multi-arg relation syntax is Future #88.
+    //
+    // Complete section-shape disambiguation (cycle 3d):
+    //   `[name]`           → dim section       (args empty, no return)  cycle 3a
+    //   `[name(arg)]`      → predicate section (one arg, no return)     cycle 3b
+    //   `[name(arg)->ret]` → function section  (one arg, return set)    cycle 3d
+    //   `[name(a,b)->ret]` → callable formula  (multi-arg, NOT a set)
+    // ------------------------------------------------------------------------
+    [[nodiscard]] static bool is_function_section(const Section& s) {
+        return s.positional_args.size() == 1
+            && !s.return_var.empty();
+    }
+
     void register_predicate_section(const Section& s) {
         assert(s.positional_args.size() == 1);
         const std::string& param = s.positional_args[0];
@@ -1050,7 +1073,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // Cycle 3a (gen-5): dim section also registers a SetDef so that
         // `is_in(v, mass)` can dispatch via DIM_SECTION Kind.
         // Trailing fields explicitly default for cppcheck-clean compile.
-        set_definitions_[s.name] = SetDef{s.name, SetDef::Kind::DIM_SECTION, nullptr, {}, std::nullopt};
+        set_definitions_[s.name] = SetDef{s.name, SetDef::Kind::DIM_SECTION, nullptr, {}, std::nullopt, {}};
         // Serialize the section body into `custom_function_defs_` so
         // load_sub_system's dispatcher routes dotted lookups (`mass.kg`)
         // through the @def: cache-key path (matches D6 / Issue-R2 resolution).
@@ -1061,6 +1084,101 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // Store the in-memory sub under the matching cache key so the
         // dispatcher short-circuits the would-be re-parse.
         sub_systems[std::string("@def:") + s.name] = sub;
+    }
+
+    // ------------------------------------------------------------------------
+    // Function section registration (gen-5 cycle 3d, 2026-05-16).
+    //
+    // Mirrors `register_dim_section`'s dual-registration pattern: serialize
+    // the section header+body into `custom_function_defs_` (so a later
+    // `load_sub_system(name)` call — e.g. the M3 ExistenceChecker callback —
+    // finds the inline definition instead of attempting a filesystem read)
+    // AND cache the parsed sub under `@def:<name>` so the first lookup
+    // short-circuits the re-parse step.
+    //
+    // The pre-parse uses `sub->load_lines(s.lines)` — NOT `load_string` —
+    // so the sub does NOT recursively trigger `load_with_sections` (and thus
+    // does NOT recursively call `register_function_section` on itself). That
+    // matters for self-recursive formula sections like `[fib(n)->r] = ...
+    // fib(n-1) + fib(n-2)`: if the sub re-registered, the sub's recursive
+    // resolve_positional_calls walk would hit `load_sub_system("fib")` on
+    // the sub, and the still-in-flight outer `currently_loading[@def:fib]`
+    // guard would fire — falsely flagging legitimate recursion as a cross-
+    // file cycle.
+    //
+    // Field-copy block kept minimal per critic D4 — no `trace`/`numeric_mode`/
+    // etc. copied. If tests show field-copy gaps, add the missing fields then.
+    // ------------------------------------------------------------------------
+    void register_function_section(const Section& s) {
+        assert(s.positional_args.size() == 1 && !s.return_var.empty());
+        // Pre-parse the body into a sub via load_lines (NOT load_string —
+        // load_string would re-run load_with_sections and re-register, which
+        // breaks legitimate self-recursive sections — see doc comment above).
+        // Apply the `= ...` return_var sugar transform that load_section
+        // would normally apply: lines starting with `=` get the return_var
+        // prepended.
+        std::vector<std::string> body_lines;
+        body_lines.reserve(s.lines.size());
+        for (const auto& raw : s.lines) {
+            std::string ln = trim(raw);
+            if (!ln.empty() && ln[0] == '=' && (ln.size() == 1 || ln[1] != '='))
+                body_lines.push_back(s.return_var + " " + ln);
+            else
+                body_lines.push_back(raw);
+        }
+        auto sub = std::make_shared<FormulaSystem>();
+        sub->load_lines(body_lines);
+        // Populate sub.sections_ with this section so extract_positional_calls
+        // can find positional metadata when reverse-resolving cross-section
+        // calls (e.g. inside the body, references to OTHER function sections
+        // need the sections_ table to bind positional args correctly).
+        sub->sections_.push_back(s);
+        // Serialize the full header (with arg + return_var) and body into
+        // custom_function_defs_ so a later load_sub_system call finds the
+        // inline definition.
+        std::ostringstream oss;
+        oss << "[" << s.name << "(" << s.positional_args[0]
+            << ") -> " << s.return_var << "]\n";
+        for (const auto& line : s.lines) oss << line << "\n";
+        custom_function_defs_[s.name] = oss.str();
+        // Pre-cache the parsed sub so load_sub_system's first lookup returns
+        // it immediately.
+        //
+        // Cycle-3d caveat: this pre-cache disables the LOAD-time cross-file
+        // cycle guard for single-arg FUNCTION_SECTION-eligible files (Future
+        // #69 narrows). Self-recursive function sections like `[fib(n)->r] =
+        // fib(n-1) + fib(n-2)` are accepted at load time; their reverse-solve
+        // (n given r) is bounded by max_formula_depth at resolve time. Pure-
+        // degenerate cases like `[myfn(x)->r] = myfn(x)` (no base case) also
+        // load successfully but reverse-resolve unconditionally fails the
+        // budget guard.
+        //
+        // Deliberately NOT propagating parent's custom_function_defs_ or
+        // adding self-reference to sub.sub_systems[@def:s.name]. Two reasons:
+        // (1) Forward / reverse solving of self-recursive bodies via the
+        //     pre-cached sub blows the stack on a tight self-call before
+        //     max_formula_depth fires (templates inflate per-frame to ~30KB;
+        //     8MB default stack ≈ 270 frames). Without self-reference, the
+        //     sub treats the inner self-call as an unresolved FUNC_CALL —
+        //     no recursion, fail-safe NaN.
+        // (2) For non-recursive function sections (perfect_square, double_it,
+        //     cube, sqp1) the body has no FUNC_CALLs that need resolution,
+        //     so this restriction is invisible. These cases work end-to-end
+        //     (verified in M3 C4/C5/C8 tests).
+        // Recursive function-section reverse-solve requires formula-call
+        // memoization — Future #85. Documented as cycle-3d limitation.
+        const std::string cache_key = "@def:" + s.name;
+        sub_systems[cache_key] = sub;
+        // Register the SetDef. `parameter` carries the formal arg name;
+        // `function_section_name` carries the return-var name. Both are used
+        // by the ExistenceChecker callback (M3) to build the reverse query:
+        //   sub.resolve(sd.parameter, {{sd.function_section_name, value}})
+        SetDef sd;
+        sd.name = s.name;
+        sd.kind = SetDef::Kind::FUNCTION_SECTION;
+        sd.parameter = s.positional_args[0];
+        sd.function_section_name = s.return_var;
+        set_definitions_[s.name] = std::move(sd);
     }
 
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
@@ -1081,6 +1199,14 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         for (const auto& s : sections_)
             if (!s.name.empty() && is_predicate_section(s))
                 register_predicate_section(s);
+        // Pass 3: function sections (cycle 3d) — FUNCTION_SECTION entries.
+        // Ordering after predicate is conventional (matches the 4-flavor
+        // enum order); function-section existential queries don't reference
+        // other set names at parse time, so the pass-2/pass-3 ordering is
+        // flexible.
+        for (const auto& s : sections_)
+            if (!s.name.empty() && is_function_section(s))
+                register_function_section(s);
         if (sections_.size() <= 1 && section.empty())
             load_lines(all_lines);
         else
@@ -1652,6 +1778,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
         const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &numeric_bindings, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
+        const ExistenceCheckerGuard ec_guard(  // cycle 3d: wires FUNCTION_SECTION dispatch
+            [this](const std::string& set_name, double v) -> bool {
+                return this->exists_for_function_section(set_name, v);
+            });
         auto bindings = prepare_derive_bindings(target, numeric_bindings, symbolic_bindings);
 
         // Alias table is stable across the whole call; build once and reuse
@@ -2128,6 +2258,64 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         ~FuncInverterGuard() { solve_set_func_inverter(nullptr); }
     };
 
+    // RAII guard for ExistenceChecker thread-local (gen-5 cycle 3d). Mirrors
+    // FuncInverterGuard above; installed at every SimplifyContext construction
+    // site (derive_all, resolve, resolve_all) so check_condition's
+    // FUNCTION_SECTION dispatch arm finds the callback.
+    //
+    // Restore-not-clear semantics: the destructor restores the PREVIOUS
+    // checker rather than clearing to empty. Critical for the nested case —
+    // when an outer is_in clause invokes the checker, which calls sub.resolve,
+    // which installs its OWN guard, the outer guard would otherwise be wiped
+    // out on the inner guard's exit, breaking subsequent clauses in the same
+    // outer condition. (FuncInverterGuard does NOT have this problem because
+    // its nullptr-clear is symmetric — the outer caller never reads the
+    // inverter mid-flight. The ExistenceChecker IS read mid-flight by
+    // sibling AND-connected clauses.)
+    struct ExistenceCheckerGuard {
+        ExistenceChecker prev;
+        explicit ExistenceCheckerGuard(ExistenceChecker fn)
+            : prev(solve_existence_checker_()) {
+            solve_set_existence_checker(std::move(fn));
+        }
+        ~ExistenceCheckerGuard() { solve_set_existence_checker(std::move(prev)); }
+    };
+
+    // ------------------------------------------------------------------------
+    // ExistenceChecker callback body (gen-5 cycle 3d). Wraps the reverse-solve
+    // primitive that backs `is_in(x, sec)` for FUNCTION_SECTION sets:
+    //   `is_in(x, sec)` ↔ `∃ n: sec(n) = x`
+    // Implementation: bind the section's return variable to `value`, resolve
+    // for the parameter. Any non-throwing resolve indicates existence. All
+    // budget/cycle/runtime errors caught → fail-safe false.
+    //
+    // Public (not lambda-inlined) so tests can drive it directly through an
+    // ExistenceCheckerGuard. The 3 solver-entry sites construct guards with
+    // this method as the callback body (`[this](...){return this->...;}`).
+    // ------------------------------------------------------------------------
+    [[nodiscard]] bool exists_for_function_section(const std::string& set_name, double value) const {
+        auto sdef_it = set_definitions_.find(set_name);
+        if (sdef_it == set_definitions_.end()) return false;
+        const SetDef& sd = sdef_it->second;
+        if (sd.kind != SetDef::Kind::FUNCTION_SECTION) return false;
+        if (sd.parameter.empty() || sd.function_section_name.empty()) return false;
+        try {
+            auto& sub = load_sub_system(set_name);
+            std::map<std::string, double> sub_binds;
+            sub_binds[sd.function_section_name] = value;
+            (void)sub.resolve(sd.parameter, sub_binds);
+            return true;
+        // NOLINTNEXTLINE(bugprone-empty-catch) — solve/budget/cycle failure → no such n exists (fail-safe false)
+        } catch (const std::runtime_error&) { return false; }
+          // Sibling exceptions (NOT runtime_error subclasses) — also fail-safe
+          // false for membership probe context. The siblings normally surface
+          // to top-level callers; here, exists_for_function_section IS the
+          // fail-safe layer for is_in dispatch, so we swallow them too.
+          // Required by Final Design D6b (cycle 3d reviewer-flagged 2026-05-16).
+          catch (const SolveBudgetExceededError&) { return false; }
+          catch (const CrossFileResolutionCycleError&) { return false; }
+    }
+
     [[nodiscard]] double resolve(const std::string& target,
                    std::map<std::string, double> bindings) const {
         const ExprArena::Scope scope(arena);
@@ -2155,6 +2343,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
         const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
+        const ExistenceCheckerGuard ec_guard(  // cycle 3d: wires FUNCTION_SECTION dispatch
+            [this](const std::string& set_name, double v) -> bool {
+                return this->exists_for_function_section(set_name, v);
+            });
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
         return solve_recursive(target, prepared, {}, 0, dead_ends);
@@ -2170,6 +2362,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         const SimplifyContext simplify_ctx{&type_map_, &set_definitions_};
         const RewriteRulesGuard rr_guard(&rewrite_rules, &rewrite_exhaustive_flags_, &prepared, &custom_functions_, &simplify_ctx);
         const FuncInverterGuard fi_guard(make_func_inverter());
+        const ExistenceCheckerGuard ec_guard(  // cycle 3d: wires FUNCTION_SECTION dispatch
+            [this](const std::string& set_name, double v) -> bool {
+                return this->exists_for_function_section(set_name, v);
+            });
         if (auto it = prepared.find(target); it != prepared.end())
             return ValueSet::eq(it->second);
 
@@ -2859,7 +3055,9 @@ private:
                         throw BindingAnnotationError(
                             "binding annotation: unknown set name '" + a
                             + "' — register a dim section like [" + a
-                            + "] or use a built-in set: int, real, rational, imaginary");
+                            + "], a predicate section like [" + a + "(n)] iff ..., "
+                            + "a function section like [" + a + "(n) -> result] = ..., "
+                            + "or use a built-in set: int, real, rational, imaginary");
                     }
                     switch (sit->second.kind) {
                         case SetDef::Kind::DIM_SECTION:
@@ -2868,14 +3066,15 @@ private:
                             // input; cleanest semantics is "last one wins".
                             type_map_[lhs_name].dim = a;
                             break;
+                        // BUILTIN_PREDICATE + USER_PREDICATE (cycle 3b) +
+                        // FUNCTION_SECTION (cycle 3d) all share the same
+                        // annotation behavior: insert atom into `.sets`. The
+                        // dispatch difference lives in check_condition. Cases
+                        // grouped via fall-through (closes cycle-3b R3
+                        // deferral; documented at design D7).
                         case SetDef::Kind::BUILTIN_PREDICATE:
-                            type_map_[lhs_name].sets.insert(a);
-                            break;
                         case SetDef::Kind::USER_PREDICATE:
-                            // Cycle 3b: user-defined predicate sets behave
-                            // identically to BUILTIN_PREDICATE for annotation
-                            // — go into `.sets`. Dispatch difference lives in
-                            // check_condition.
+                        case SetDef::Kind::FUNCTION_SECTION:
                             type_map_[lhs_name].sets.insert(a);
                             break;
                         case SetDef::Kind::COUNT_:

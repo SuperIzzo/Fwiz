@@ -1811,23 +1811,29 @@ struct BindingType {
 // needs.
 struct SetDef {
     std::string name;
-    // Enum order: BUILTIN_PREDICATE=0, USER_PREDICATE=1, DIM_SECTION=2 — matches
-    // registration order (built-ins first via load_builtins(); then
-    // user-defined via register_predicate_section(); then dim sections via
-    // register_dim_section() in the pre-scan loop). Cycle 3d adds
-    // FUNCTION_SECTION as the next value.
-    enum class Kind { BUILTIN_PREDICATE, USER_PREDICATE, DIM_SECTION, COUNT_ };
-    static_assert(static_cast<int>(Kind::COUNT_) == 3,
-                  "SetDef::Kind: cycle 3b added USER_PREDICATE; update check_condition "
-                  "dispatch switch (expr.h) AND annotation-parse switch (system.h)");
+    // Enum order: BUILTIN_PREDICATE=0, USER_PREDICATE=1, DIM_SECTION=2,
+    // FUNCTION_SECTION=3 — matches registration order (built-ins first via
+    // load_builtins(); then user-defined via register_predicate_section();
+    // then dim sections via register_dim_section(); then function sections
+    // via register_function_section() in the pre-scan loop).
+    enum class Kind { BUILTIN_PREDICATE, USER_PREDICATE, DIM_SECTION, FUNCTION_SECTION, COUNT_ };
+    static_assert(static_cast<int>(Kind::COUNT_) == 4,
+                  "SetDef::Kind: cycle 3d added FUNCTION_SECTION; update check_condition "
+                  "dispatch (expr.h) AND annotation-parse switch (system.h)");
     Kind kind = Kind::BUILTIN_PREDICATE;
     bool (*membership)(double v) = nullptr;  // BUILTIN_PREDICATE only
     // USER_PREDICATE fields (cycle 3b, 2026-05-16). Empty/nullopt for other Kinds.
-    // `parameter` is the formal parameter name from `[name(param)]` header.
-    // `predicate` is the parsed iff-body Condition — evaluated with `parameter`
-    // temporarily bound to the queried expression's numeric value.
+    // `parameter` is the formal parameter name from `[name(param)]` header;
+    // for FUNCTION_SECTION (cycle 3d) it stores the single positional arg
+    // name from `[name(arg) -> ret]` instead — semantically consistent (both
+    // are the formal parameter name).
     std::string parameter;
     std::optional<Condition> predicate;
+    // FUNCTION_SECTION field (cycle 3d, 2026-05-16). Empty for other Kinds.
+    // Stores the section's return variable (e.g. "result" for
+    // `[fibonacci(n) -> result]`). Used by the ExistenceChecker callback
+    // wired in system.h: sub.resolve(parameter, {{function_section_name, v}}).
+    std::string function_section_name;
 };
 
 // Solver context bundle (gen-5 cycle 3a) — replaces the cycle-2
@@ -1844,6 +1850,15 @@ inline const SimplifyContext*& simplify_set_ctx_() {
     static thread_local const SimplifyContext* ctx = nullptr;
     return ctx;
 }
+
+// Forward-declare ExistenceChecker accessor (gen-5 cycle 3d): the full
+// using-alias + thread-local accessor are defined near solve_func_inverter_
+// (see end of this file). `check_condition`'s FUNCTION_SECTION dispatch arm
+// calls this accessor; the definition can't be moved up without dragging
+// FuncInverter with it (both are part of the same solver-boundary erasure
+// surface, conventionally grouped at the end of expr.h).
+using ExistenceChecker = std::function<bool(const std::string& set_name, double value)>;
+inline ExistenceChecker& solve_existence_checker_();
 
 // Check if a condition is satisfied given current bindings.
 // Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied
@@ -1866,31 +1881,41 @@ inline const SimplifyContext*& simplify_set_ctx_() {
             const std::string& name = c.lhs->name;
             if (!expr_bindings) return false;
             // is_in(v, set_name) — unified named-set membership predicate
-            // (gen-5 cycle 3a, extended cycle 3b). 7 cooperating locations:
+            // (gen-5 cycle 3a, extended cycles 3b + 3d). 8 cooperating
+            // locations (V6c numbering preserved):
             //   1. Parse-time rewrite (system.h::parse_condition):
             //      is_int(n) → is_in(n, int) and is_in_dimension(n, m) →
             //      is_in(n, m). is_predicate_clause and this dispatcher only
             //      recognize is_in (and is_neg_num, the literal-shape
             //      predicate that does not fit the membership pattern).
             //   2. Registry populated: system.h::load_builtins (built-ins),
-            //      system.h::register_dim_section (DIM_SECTION), and
+            //      system.h::register_dim_section (DIM_SECTION),
             //      system.h::register_predicate_section (USER_PREDICATE —
-            //      cycle 3b).
-            //   3. Section disambiguation (system.h): is_dimension_section
-            //      vs is_predicate_section by section header shape.
-            //   4. Two-pass load_with_sections (system.h): dim sections
-            //      first, predicate sections second — atom availability
-            //      ordering.
+            //      cycle 3b), and system.h::register_function_section
+            //      (FUNCTION_SECTION — cycle 3d).
+            //   3. Section disambiguation (system.h): is_dimension_section,
+            //      is_predicate_section, and is_function_section (cycle 3d)
+            //      by section header shape.
+            //   4. Three-pass load_with_sections (system.h): dim → predicate
+            //      → function (cycle 3d) — atom availability ordering.
             //   5. Transport (this file): const SimplifyContext* via
             //      thread-local simplify_set_ctx_(), set by RewriteRulesGuard
             //      (3 sites in system.h).
             //   6. Dispatch (this block): kind-based — BUILTIN_PREDICATE
             //      projects via evaluate(); DIM_SECTION compares
             //      type_map[var].dim to set_name; USER_PREDICATE evaluates
-            //      stored Condition with parameter bound (cycle 3b).
+            //      stored Condition with parameter bound (cycle 3b);
+            //      FUNCTION_SECTION delegates to ExistenceChecker (cycle 3d).
             //   7. Recursion guard: thread-local evaluating_predicates_
             //      keyed on set_name; blocks self-recursion AND chains
-            //      (fail-safe for 3b).
+            //      (lifted to switch-prelude in cycle 3d; shared by
+            //      USER_PREDICATE + FUNCTION_SECTION).
+            //   8. ExistenceChecker thread-local + Guard (cycle 3d):
+            //      expr.h::solve_existence_checker_ + system.h::
+            //      ExistenceCheckerGuard. Set at 3 SimplifyContext
+            //      construction sites (system.h:1652, 2155, 2170 — pre-3d
+            //      line numbers; see derive_all/resolve/resolve_all). Each
+            //      invocation wraps `sub.resolve(parameter, {{return_var, v}})`.
             if (name == "is_in") {
                 if (c.lhs->args.size() != 2) return false;
                 if (!is_var(c.lhs->args[0]) || !is_var(c.lhs->args[1])) return false;
@@ -1902,6 +1927,22 @@ inline const SimplifyContext*& simplify_set_ctx_() {
                 auto sdef_it = set_ctx->set_defs->find(set_name);
                 if (sdef_it == set_ctx->set_defs->end()) return false; // unknown set → fail-safe
                 const SetDef& sdef = sdef_it->second;
+                // Shared recursion guard for USER_PREDICATE + FUNCTION_SECTION
+                // (cycle 3d: lifted from inside the USER_PREDICATE arm to
+                // switch-prelude scope). Keyed on `set_name` only — conservative:
+                // blocks `is_in(x, a) → is_in(y, a)` chains too. BUILTIN_PREDICATE
+                // and DIM_SECTION enter harmlessly — neither can recurse into
+                // is_in dispatch — so the guard cost is one set insert+erase
+                // per dispatch on those paths. Value-aware dedup parked
+                // (Future #86).
+                static thread_local std::set<std::string> evaluating_predicates_;
+                if (evaluating_predicates_.count(set_name)) return false;
+                evaluating_predicates_.insert(set_name);
+                struct PredGuard {
+                    std::set<std::string>& s;
+                    std::string k;
+                    ~PredGuard() { s.erase(k); }
+                } _pg{evaluating_predicates_, set_name};
                 switch (sdef.kind) {
                     case SetDef::Kind::BUILTIN_PREDICATE: {
                         // D7 semantic strengthening: project bound expr to
@@ -1924,22 +1965,12 @@ inline const SimplifyContext*& simplify_set_ctx_() {
                         // the predicate's formal parameter into the caller's
                         // `bindings` map with RAII restoration, and
                         // recursively evaluate the stored Condition.
+                        // (Recursion guard armed in switch-prelude above —
+                        // shared with FUNCTION_SECTION per cycle 3d.)
                         if (!sdef.predicate.has_value() || sdef.parameter.empty())
                             return false;
                         auto val = evaluate(*bind_it->second);
                         if (!val) return false;
-                        // Recursion guard — thread-local set keyed on set
-                        // name only. Conservative: blocks `foo(1) → foo(2)`
-                        // chains too. Fail-safe for cycle 3b; full
-                        // value-aware guard parked (Future #86).
-                        static thread_local std::set<std::string> evaluating_predicates_;
-                        if (evaluating_predicates_.count(set_name)) return false;
-                        evaluating_predicates_.insert(set_name);
-                        struct PredGuard {
-                            std::set<std::string>& s;
-                            std::string k;
-                            ~PredGuard() { s.erase(k); }
-                        } _pg{evaluating_predicates_, set_name};
                         // D6 SIMPLIFY: insert-then-erase on caller's
                         // bindings map with RAII restoration (saves a full
                         // map copy per dispatch). `const_cast` is safe here:
@@ -1978,6 +2009,25 @@ inline const SimplifyContext*& simplify_set_ctx_() {
                         auto tm_it = set_ctx->type_map->find(bind_it->second->name);
                         if (tm_it == set_ctx->type_map->end()) return false;
                         return tm_it->second.dim == set_name;
+                    }
+                    case SetDef::Kind::FUNCTION_SECTION: {
+                        // Cycle 3d: existential-solve dispatch via the
+                        // boundary-erased ExistenceChecker thread-local
+                        // (expr.h:solve_existence_checker_). The callback
+                        // (installed by FormulaSystem at every solver-entry
+                        // site) wraps `sub.resolve(parameter, {{return_var, v}})`
+                        // and returns true iff some n satisfies section(n) = v.
+                        //
+                        // Perf trap: every `is_in(x, sec)` rewrite-rule
+                        // condition triggers a full solver invocation. For
+                        // rules consulting function-sections in tight
+                        // matching loops, this can dominate `simplify()`
+                        // time. Memoization deferred — Future #85.
+                        auto val = evaluate(*bind_it->second);
+                        if (!val) return false;
+                        const auto& checker = solve_existence_checker_();
+                        if (!checker) return false;  // no FormulaSystem context — fail-safe
+                        return checker(set_name, val.value());
                     }
                     case SetDef::Kind::COUNT_:
                         assert(false && "SetDef::Kind::COUNT_ unreachable in check_condition");
@@ -3576,6 +3626,29 @@ inline FuncInverter& solve_func_inverter_() {
 
 inline void solve_set_func_inverter(FuncInverter fn) {
     solve_func_inverter_() = std::move(fn);
+}
+
+// Existence checker (gen-5 cycle 3d, 2026-05-16): boundary-erased callback
+// answering "does there exist n such that section(n) = value?". Wired by
+// FormulaSystem at every solver-entry site via ExistenceCheckerGuard (3
+// sites: derive_all, resolve, resolve_all). Read by `check_condition`'s
+// FUNCTION_SECTION dispatch arm.
+//
+// Matches FuncInverter precedent immediately above. If profiled hot, both
+// std::function carriers should migrate to fn-ptr+opaque together — single
+// trigger, single migration. See Future #89.
+//
+// `using ExistenceChecker = ...` + forward-decl of solve_existence_checker_
+// live up at the SimplifyContext block (so check_condition can call it
+// without a layout change). Definition lives here next to FuncInverter.
+
+inline ExistenceChecker& solve_existence_checker_() {
+    static thread_local ExistenceChecker checker;
+    return checker;
+}
+
+inline void solve_set_existence_checker(ExistenceChecker fn) {
+    solve_existence_checker_() = std::move(fn);
 }
 
 // Try to isolate target by peeling off invertible functions and operations.

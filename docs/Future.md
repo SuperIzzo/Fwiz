@@ -893,6 +893,10 @@ Single map, single update site per binding mutation.
 
 **Possible fixes**: (a) per-predicate-call timing in debug mode + warning if cumulative time per `simplify()` exceeds threshold; (b) memoization layer on USER_PREDICATE results; (c) stdlib author tooling (`fwiz --benchmark-predicates`).
 
+**Extension (gen-5 cycle 3d 2026-05-16, visionary V3)**: FUNCTION_SECTION dispatch is the highest-cost predicate flavor in the named-set family — each `is_in(x, sec_name)` invocation triggers a full solver call via `exists_for_function_section`. For rewrite rules consulting function-sections in tight matching loops (e.g. stdlib dimensional-rejection rules that reference function-section sets), this is likely the FIRST predicate kind to surface measurably. When this trigger fires, FUNCTION_SECTION dispatch is the primary measurement target alongside USER_PREDICATE. **Note**: this is the PERF-MEMOIZATION axis. The separate CORRECTNESS axis (recursive function-sections that legitimately need memoization to terminate, like `is_in(8, fibonacci)`) is tracked at Future #90.
+
+**Cycle 3d update (2026-05-16)**: FUNCTION_SECTION dispatch is a likely measurement target. Every `is_in(x, sec)` for FUNCTION_SECTION-Kind sets triggers a full numeric reverse-solve via `sub.resolve(parameter, {{return_var, x}})`. For rules consulting function-sections in tight matching loops, this can dominate `simplify()` time. Memoization (fix-b) becomes more compelling — both USER_PREDICATE and FUNCTION_SECTION results share the same `(set_name, value) → bool` cache shape. Also: recursive function-section reverse-solve (e.g. `is_in(8, fibonacci)`) requires this memoization to terminate at all — the cycle-3d test scaffolding documents this gap by reformulating C4/C5 from recursive fibonacci to non-recursive `double_it` + `sqp1`.
+
 ## 86. Mutual-recursion full handling for predicate sets — PARKED
 
 **Surfaced gen-5 cycle 3b (2026-05-16, D7 + V5)** as a known limitation of the cycle-3b recursion guard.
@@ -942,6 +946,42 @@ The simple-LHS form parses, loads, and runs — but the `is_in` predicate clause
 **Possible fixes**: (a) parse-time warning when `is_in` (or any predicate clause) appears in an equation-condition context; (b) runtime warning at the first equation-condition `check_condition` call where a predicate clause is skipped due to null `expr_bindings`; (c) lift the equation-condition path to ALSO populate `expr_bindings` from the equation's variables (semantic change — predicates would fire in equation conditions too; needs design call on whether predicate semantics make sense for equations).
 
 **Documentation**: Language.md §17.4 "Context requirement" subsection (filed by cycle-3b doc-updater) captures the current constraint user-facing-ly. This Future.md entry tracks the resolution work.
+
+## 89. `std::function` carrier migration for solver-boundary erasure — PARKED
+
+**Surfaced gen-5 cycle 3d (2026-05-16, visionary V2)** as a perf-driven follow-up to the two existing `std::function`-based solver-boundary erasure carriers.
+
+**Today**: two `std::function` thread-locals live next to each other in `src/expr.h` (around line 3613):
+- `FuncInverter` (cycle 1 / Future #12 era) — invokes inverse equations from `.fw` sub-system definitions.
+- `ExistenceChecker` (cycle 3d) — invokes `sub.resolve(parameter, {{return_var, v}})` for FUNCTION_SECTION sets.
+
+Both use `std::function` for boundary erasure (type-erased lambda capturing `this` from `FormulaSystem` in `system.h`; the carrier lives in `expr.h` which is the lower layer and cannot name `FormulaSystem`).
+
+**Concern**: `std::function` has known overhead — heap allocation for non-SBO captures, virtual dispatch on call, exception-spec erasure. For cold/rare paths (rule-firing during simplify), the cost is invisible. For hot paths — particularly FUNCTION_SECTION dispatch in tight matching loops — the std::function cost could become measurable. Visionary V2 framed this as a paired migration: if EITHER carrier shows up as a measured hot path, BOTH should migrate together to keep architectural consistency.
+
+**Reopen trigger**: FUNCTION_SECTION dispatch OR FuncInverter shows up as >1% of solve time in a perf-auditor reproducer. Then BOTH `std::function` carriers should be migrated to `fn-ptr + opaque-void*` shape together (single trigger, single migration).
+
+**Possible fixes**: (a) replace both `std::function<bool(string, double)>` and `std::function<vector<ExprPtr>(string, ExprPtr)>` with `bool (*)(void* ctx, string, double)` + opaque ctx pointer; FormulaSystem* threads through as ctx; (b) PIMPL-style erasure with a virtual base class; (c) accept the overhead and document it.
+
+## 90. Recursive FUNCTION_SECTION reverse-solve (`is_in` over recursive sections) — PARKED
+
+**Surfaced gen-5 cycle 3d (2026-05-16, implementer architecture-emergent #1)** as a capability gap discovered during M3 implementation. Decoupled from Future #85 (perf-memoization) per cycle-3d reviewer recommendation — #85 is a perf axis; this is a correctness/feature axis.
+
+**Today**: `is_in(x, sec_name)` works correctly for **non-recursive** function-sections. Verified via `[perfect_square(n) -> result] = n * n`, `[double_it(n) -> result] = 2 * n`, `[sqp1(n) -> result] = n*n + 1` — all reverse-solve cleanly.
+
+**Capability gap**: recursive function-sections like `[fibonacci(n) -> result]` (where body contains `fibonacci(n-1)` / `fibonacci(n-2)`) cannot reverse-solve. The chain:
+- `is_in(8, fibonacci)` invokes `exists_for_function_section("fibonacci", 8)`.
+- `sub.resolve("n", {{"result", 8.0}})` triggers the numeric solver's adaptive scan over candidate `n` values.
+- For each candidate, the solver evaluates `fibonacci(n)` forward — but the body re-invokes `fibonacci(n-1)` / `fibonacci(n-2)` recursively.
+- Without memoization, each forward eval is O(2^n) formula calls; deeper candidate scans exhaust `max_formula_depth` (default 1000) before the numeric scan converges.
+
+**Root cause**: `register_function_section`'s pre-cache (system.h:~1080) deliberately omits self-reference (`sub.sub_systems[@def:name] = sub` self-reference + `custom_function_defs_` propagation to sub) to avoid stack-overflow on self-recursive bodies during the load pass. Without self-reference, the recursive body's `fibonacci(n-1)` call inside the sub becomes an unresolved FUNC_CALL.
+
+**The fix is structural**: formula-call memoization (memoize `fibonacci(k)` results across the solver's scan). This is the SAME memoization that #85 mentions as a perf-axis fix for USER_PREDICATE; here it's a CORRECTNESS-axis prerequisite for FUNCTION_SECTION recursive cases. Sharing implementation is natural; the trigger is different.
+
+**Reopen trigger**: user reports `is_in(<value>, <recursive_function_section>)` returns false-from-budget-exhaustion when they expect true OR a stdlib author writes a recursive sequence definition (factorial, fibonacci, primes-via-sieve) and expects set-membership tests to work. **The cycle-3d test reformulation from `fibonacci` to `double_it`/`sqp1` is the canonical signal that this trigger has not yet fired in practice; when it does, this entry is the resolution path.**
+
+**Possible fixes**: (a) formula-call memoization (also closes #85); (b) integer-domain-restricted reverse-solve with explicit bounds (e.g. `is_in(8, fibonacci, max=20)`); (c) special-case caching for self-recursive function-sections at `register_function_section` time.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 
