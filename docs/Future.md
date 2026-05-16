@@ -963,25 +963,55 @@ Both use `std::function` for boundary erasure (type-erased lambda capturing `thi
 
 **Possible fixes**: (a) replace both `std::function<bool(string, double)>` and `std::function<vector<ExprPtr>(string, ExprPtr)>` with `bool (*)(void* ctx, string, double)` + opaque ctx pointer; FormulaSystem* threads through as ctx; (b) PIMPL-style erasure with a virtual base class; (c) accept the overhead and document it.
 
-## 90. Recursive FUNCTION_SECTION reverse-solve (`is_in` over recursive sections) — PARKED
+## 90. Recursive FUNCTION_SECTION reverse-solve (`is_in` over recursive sections) — PARTIAL (gen-5 cycle 3g 2026-05-16: forward works; reverse blocked on 2 NEW gaps)
 
-**Surfaced gen-5 cycle 3d (2026-05-16, implementer architecture-emergent #1)** as a capability gap discovered during M3 implementation. Decoupled from Future #85 (perf-memoization) per cycle-3d reviewer recommendation — #85 is a perf axis; this is a correctness/feature axis.
+**Surfaced gen-5 cycle 3d (2026-05-16, implementer architecture-emergent #1)** as a capability gap.
 
-**Today**: `is_in(x, sec_name)` works correctly for **non-recursive** function-sections. Verified via `[perfect_square(n) -> result] = n * n`, `[double_it(n) -> result] = 2 * n`, `[sqp1(n) -> result] = n*n + 1` — all reverse-solve cleanly.
+**Today** (post-cycle-3g):
+- ✅ **Forward recursive evaluation WORKS**: `fibonacci(n=6) → 8` via direct formula-call. Cycle 3g's 3-part substrate (self_name_ field + try_formula resolve_memoized switch + currently_inverting guard) shipped clean.
+- ❌ **Reverse existential solve (the `is_in` flagship) STILL doesn't work**: `is_in(8, fibonacci)` does NOT return true. Two NEW root causes discovered mid-cycle-3g implementation, blocking C1-C9 + D1 of the design:
 
-**Capability gap**: recursive function-sections like `[fibonacci(n) -> result]` (where body contains `fibonacci(n-1)` / `fibonacci(n-2)`) cannot reverse-solve. The chain:
-- `is_in(8, fibonacci)` invokes `exists_for_function_section("fibonacci", 8)`.
-- `sub.resolve("n", {{"result", 8.0}})` triggers the numeric solver's adaptive scan over candidate `n` values.
-- For each candidate, the solver evaluates `fibonacci(n)` forward — but the body re-invokes `fibonacci(n-1)` / `fibonacci(n-2)` recursively.
-- Without memoization, each forward eval is O(2^n) formula calls; deeper candidate scans exhaust `max_formula_depth` (default 1000) before the numeric scan converges.
+**NEW GAP 1 — Parser limitation (filed as Future #91)**: the design's suggested fibonacci body line `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2` is a PARSE ERROR. The parser only accepts named-arg form (`func(arg=value)`) when there's a `?` (which routes through `extract_formula_calls`). Inside arithmetic expressions, named-arg syntax fails. Workaround: split into helper equations (`prev1 = fibonacci(result=?prev1, n=n-1); prev2 = fibonacci(result=?prev2, n=n-2); result = prev1 + prev2 if n >= 2`). Three equations instead of one; messier body.
 
-**Root cause**: `register_function_section`'s pre-cache (system.h:~1080) deliberately omits self-reference (`sub.sub_systems[@def:name] = sub` self-reference + `custom_function_defs_` propagation to sub) to avoid stack-overflow on self-recursive bodies during the load pass. Without self-reference, the recursive body's `fibonacci(n-1)` call inside the sub becomes an unresolved FUNC_CALL.
+**NEW GAP 2 — Strategy ordering (filed as Future #92)**: even with the split-helper body, `sub.resolve("n", {{"result", 8.0}})` does NOT trigger numeric scan first. The solver's `solve_recursive` tries ALGEBRAIC strategies first: invert the recursive chain `result = prev1 + prev2` → `prev1 = result - prev2` → recursively invert prev2 via FormulaCall → `make_func_inverter` activates → infinite chain (caught by cycle 3g's `currently_inverting` guard which returns empty branches → strategies all give up → no solution).
 
-**The fix is structural**: formula-call memoization (memoize `fibonacci(k)` results across the solver's scan). This is the SAME memoization that #85 mentions as a perf-axis fix for USER_PREDICATE; here it's a CORRECTNESS-axis prerequisite for FUNCTION_SECTION recursive cases. Sharing implementation is natural; the trigger is different.
+**The design's D4 dry-run assumed integer scan fires first**, but actual `solve_recursive` strategy ordering puts algebraic before numeric. For non-recursive function-sections (perfect_square, double_it) the algebraic path SUCCEEDS via inversion of the closed-form RHS — that's why they work. For recursive function-sections, the algebraic path needs to be skipped + the numeric scan needs to fire directly.
 
-**Reopen trigger**: user reports `is_in(<value>, <recursive_function_section>)` returns false-from-budget-exhaustion when they expect true OR a stdlib author writes a recursive sequence definition (factorial, fibonacci, primes-via-sieve) and expects set-membership tests to work. **The cycle-3d test reformulation from `fibonacci` to `double_it`/`sqp1` is the canonical signal that this trigger has not yet fired in practice; when it does, this entry is the resolution path.**
+**Reopen trigger** (unchanged): user reports `is_in(<value>, <recursive_function_section>)` returns false; or a stdlib author writes a recursive sequence definition expecting set-membership tests to work. **Note**: closing this entry now requires resolving BOTH #91 (parser limitation) AND #92 (strategy ordering).
 
-**Possible fixes**: (a) formula-call memoization (also closes #85); (b) integer-domain-restricted reverse-solve with explicit bounds (e.g. `is_in(8, fibonacci, max=20)`); (c) special-case caching for self-recursive function-sections at `register_function_section` time.
+**Cycle 3g shipped substrate**: M1 self_name_ field (enables forward recursive lookup), M2 try_formula resolve_memoized switch (prevents O(2^n) budget exhaustion on forward eval), M3-X currently_inverting guard (prevents the inverter cycle that self_name_ inadvertently exposed). The substrate IS the correctness prerequisite for the eventual reverse-solve fix.
+
+**Cycle 3g status update**: PARTIAL close. The pre-3g "self-reference alone is insufficient" hypothesis was correct; the 3g substrate work is correct AND useful. But the reverse-solve goal needs two MORE design decisions (parser extension + strategy-ordering policy) not within 3g's scope.
+
+## 91. Named-arg syntax in arithmetic expressions (`func(arg=value)` inside `+`/`-`/`*`/`/`) — PARKED
+
+**Surfaced gen-5 cycle 3g (2026-05-16, implementer architecture-emergent #2)** during M3 fibonacci test attempt.
+
+**Today**: the parser accepts `func(arg=value)` (named-arg form) ONLY when the call appears as a top-level binding RHS or returns via `?`-query. Inside arithmetic expressions (e.g. `result = func(arg=value) + 1`), the parser hits the `=` token unexpectedly and fails.
+
+**Concrete failure case**: the design's suggested fibonacci body line `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2` cannot be loaded. Workaround: split into helper equations.
+
+**Why this matters**: recursive sequence definitions (fibonacci, factorial, primes, anything with `func(...) op func(...)` body pattern) cannot use the natural body shape. Each recurrence requires N helper equations.
+
+**Reopen trigger**: (a) cycle that tackles Future #90 reverse-solve needs this AND #92 resolved; (b) stdlib author writes a recurrence and reports the parse error as surprising; (c) LLM benchmark surfaces it.
+
+**Possible fixes**: (a) lift named-arg parsing into expression context (`primary()` recognizes `IDENT LPAREN IDENT EQUALS ...` as named-arg call); (b) require positional-arg form in expressions (`fibonacci(n-1)` instead of `fibonacci(n=n-1)`) — this works today IF positional args are recognized for the existing function-call; need to verify; (c) document the helper-equation workaround as the canonical pattern.
+
+## 92. Solver strategy ordering for self-referential FUNCTION_SECTION subs — PARKED
+
+**Surfaced gen-5 cycle 3g (2026-05-16, implementer architecture-emergent #3)** during M3 fibonacci test attempt.
+
+**Today**: `sub.resolve("n", {{"result", 8.0}})` on a self-referential function-section sub (fibonacci) tries ALGEBRAIC strategies first. Algebraic chain `result = prev1 + prev2` inverts to `prev1 = result - prev2`, then inverts `prev2 = fibonacci(n=n-2)` via `make_func_inverter` → triggers `currently_inverting` guard (cycle 3g) → empty branches → strategies give up → no solution found. The numeric scan strategy (which would correctly find integer n satisfying `fibonacci(n) = 8`) is never reached because the algebraic path exhausts solver state first.
+
+**Why this fires post-3g**: pre-3g, the algebraic path failed cleanly because `load_sub_system("fibonacci")` on the sub couldn't find fibonacci. Post-3g (self_name_), the algebraic path enters the recursive chain.
+
+**The fix**: solver needs strategy-ordering policy that prefers numeric scan FIRST for self-referential function-section subs (or any sub where the body recursively references the same FUNC_CALL). Could be:
+- (a) Detect self-referential body at `register_function_section` time; mark the sub with a `prefer_numeric_strategy` flag; `solve_recursive` consults the flag.
+- (b) Detect during `solve_recursive`: if the sub IS its own `self_name_` AND the body contains FUNC_CALL to self, reorder strategies.
+- (c) Always-prefer-numeric for FUNCTION_SECTION subs (changes behavior for non-recursive cases — may regress).
+- (d) Add a `@solve_strategy = numeric` annotation that .fw authors can opt into.
+
+**Reopen trigger**: cycle that closes Future #90 needs this. Likely a dedicated cycle (3h-3i or similar) after #91 resolution.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 

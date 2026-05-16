@@ -334,6 +334,16 @@ public:
     // system. Used by build_alias_table() as the stem qualifier on
     // cross-file constant-name collisions.
     std::string source_label_;
+    // gen-5 cycle 3g (2026-05-16): function-section self-reference for
+    // recursive bodies. Set by register_function_section AFTER
+    // sub->load_lines() returns (lazy timing avoids cycle-3d's load-time
+    // stack-overflow trap — load_lines doesn't call load_sub_system, so
+    // setting the name post-load defers resolution to solve time).
+    // load_sub_system short-circuits to *this when file_part == self_name_,
+    // so the body's recursive `fibonacci(n-1)` reaches the same sub without
+    // inserting a cyclic shared_ptr. Empty for non-FUNCTION_SECTION subs
+    // (default-constructed std::string).
+    std::string self_name_;
     mutable Trace trace;
     mutable int max_formula_depth = 1000;
     mutable bool numeric_mode = false;
@@ -1128,6 +1138,12 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         }
         auto sub = std::make_shared<FormulaSystem>();
         sub->load_lines(body_lines);
+        // gen-5 cycle 3g (2026-05-16): enable recursive bodies. Lazy timing
+        // (post-load_lines) avoids cycle-3d's load-time stack overflow —
+        // load_lines doesn't call load_sub_system, so the body's recursive
+        // FUNC_CALLs stay unresolved at parse time and resolve via
+        // load_sub_system's self_name_ short-circuit at solve time.
+        sub->self_name_ = s.name;
         // Populate sub.sections_ with this section so extract_positional_calls
         // can find positional metadata when reverse-resolving cross-section
         // calls (e.g. inside the body, references to OTHER function sections
@@ -2217,6 +2233,24 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     [[nodiscard]] FuncInverter make_func_inverter() const {
         return [this](const std::string& func_name, const ExprPtr& rhs) -> std::vector<ExprPtr> {
             std::vector<ExprPtr> branches;
+            // gen-5 cycle 3g RECOVERY: re-entrance guard for self-referential
+            // function sections. The cycle-3g M1 self_name_ short-circuit in
+            // load_sub_system exposes a `solve_by_inversion → inverter lambda
+            //   → solve_for → solve_for_all → solve_by_inversion` cycle when
+            // the section body itself contains the same FUNC_CALL — depth
+            // resets to 0 across the solve_for_all boundary, defeating the
+            // `depth > 20` guard in solve_by_inversion. Mirrors the existing
+            // guard pattern (evaluating_predicates_ at cycle 3b USER_PREDICATE
+            // dispatch; currently_loading at cycle 2 cross-file resolution
+            // cycle detection). Fail-safe contract: re-entrant invocation
+            // returns empty branches → algebraic solver gives up cleanly.
+            static thread_local std::set<std::string> currently_inverting;
+            if (currently_inverting.count(func_name)) return branches;
+            currently_inverting.insert(func_name);
+            struct InverterGuard {
+                std::set<std::string>& s; const std::string& n;
+                ~InverterGuard() { s.erase(n); }
+            } const _ig{currently_inverting, func_name};
             try {
                 auto& sub = load_sub_system(func_name);
                 // Find the section with positional args (the function definition)
@@ -3234,6 +3268,19 @@ private:
             section = file_stem.substr(dot + 1);
         }
 
+        // gen-5 cycle 3g: function-section self-reference short-circuit.
+        // Recursive bodies (fibonacci(n-1) inside [fibonacci(n)->result] = ...)
+        // resolve via this branch — no cache lookup, no filesystem fallback,
+        // no shared_ptr cycle. Lazy timing: self_name_ is set by
+        // register_function_section AFTER load_lines completes, so the body's
+        // unresolved FUNC_CALLs at parse time become resolvable at solve time
+        // without triggering the cycle-3d load-time stack overflow.
+        // 10th location in the is_in dispatch comprehension-gate chain
+        // (the 9 prior live across expr.h + system.h; see check_condition).
+        if (!self_name_.empty() && file_part == self_name_) {
+            return *this;
+        }
+
         // Check custom and builtin function definitions
         auto& builtins = builtin_function_defs();
         auto blt = custom_function_defs_.find(file_part);
@@ -4192,8 +4239,20 @@ private:
                         }
                     }
                 }
-                if (!used_extern)
-                    result = sub_sys.resolve(resolve_var, sub_binds);
+                if (!used_extern) {
+                    // gen-5 cycle 3g (2026-05-16): use resolve_memoized so
+                    // recursive bodies share the sub's numeric_memo_ — collapses
+                    // O(2^n) Fibonacci-style recursion to O(n). Passing
+                    // `&dead_ends` from the enclosing solve_recursive parameter
+                    // keeps the lighter "non-outermost" code path (no fresh
+                    // BudgetGuard / solved_symbolic_.clear() / Guard installs),
+                    // which also shrinks the per-call stack frame enough that
+                    // a runaway recursion like cycle-3d's `[bad(n)]=bad(n+1)`
+                    // hits formula_depth_'s 1000 limit before blowing the
+                    // 8MB stack. T7 bridge below still reads solved_symbolic_
+                    // (stale on memo hit but numerically correct — see design D4).
+                    result = sub_sys.resolve_memoized(resolve_var, sub_binds, &dead_ends);
+                }
                 if (std::isnan(result) || std::isinf(result)) { had_nan_inf = true; return false; }
                 // T7 sub-system bridge: borrow the sub-system's recognized
                 // symbolic form (populated at its T10) so the parent's trace

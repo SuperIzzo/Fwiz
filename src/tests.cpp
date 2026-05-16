@@ -16686,6 +16686,199 @@ void test_gen5_cycle3f_infix_in() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// gen-5 cycle 3g (2026-05-16): recursive FUNCTION_SECTION reverse-solve.
+//
+// Closes Future #90. Two-part fix:
+//   (1) `self_name_` field on FormulaSystem + early-return in load_sub_system
+//       lets a function-section sub resolve a recursive body call (e.g.
+//       fibonacci(n-1) inside [fibonacci(n)->result] = ...) back to itself
+//       without re-entering the load-time cache (which deadlocks via
+//       currently_loading) and without inserting a cyclic shared_ptr.
+//   (2) `try_formula` switches from `sub_sys.resolve()` to
+//       `sub_sys.resolve_memoized(..., &dead_ends)` so inner recursive calls
+//       share the sub's `numeric_memo_` — collapses O(2^n) recursion to O(n).
+//
+// Test order per visionary V4: C10 (cycle-3d recursion guard) FIRST to catch
+// guard-interaction regressions before time invested in C1-C9. Then C11
+// (cycle-3d non-recursive regression), then C6-C8 base cases, then C1-C5
+// primary recursive cases, then C9 forward-call regression, then D1 deep
+// memo stress.
+//
+// Test fixture detail: fibonacci/factorial bodies must include explicit
+// integer bounds (`n >= 0; n < 100`) so `extract_bounds` returns a tight
+// range that satisfies the integer-scan guard. Without bounds, the default
+// real-valued scan returns NaN at non-integer samples and finds no roots.
+// ---------------------------------------------------------------------------
+void test_gen5_cycle3g_recursive_function_sections() {
+    SECTION("gen-5 cycle 3g: Recursive function section reverse-solve");
+
+    // -------- M1: self_name_ field + load_sub_system early-return -----------
+    // Structural assertions confirming the M1 plumbing is in place. These
+    // catch regression of the cycle-3d implementer's "deliberately omits
+    // self-reference" pattern. The early-return behavior of load_sub_system
+    // (which is private) is verified indirectly via the M2/M3 behavioral
+    // tests below — when the recursive body resolves, the short-circuit IS
+    // firing; otherwise the body would throw on the unresolved FUNC_CALL.
+    {
+        FormulaSystem sys;
+        sys.load_string("[fibonacci(n) -> result] = n\n", "<m1-self-name>");
+        // Sub registered under @def:fibonacci cache key.
+        ASSERT(sys.sub_systems.count("@def:fibonacci") == 1,
+               "M1: fibonacci sub cached under @def:fibonacci");
+        auto& sub = *sys.sub_systems.at("@def:fibonacci");
+        // self_name_ set to section name (M1 setter ran).
+        ASSERT(sub.self_name_ == "fibonacci",
+               "M1: sub.self_name_ == 'fibonacci' (set by register_function_section)");
+        // Sub does NOT pollute its own sub_systems with a self-entry (no
+        // cyclic shared_ptr — option (c) over option (a) per design D3).
+        ASSERT(sub.sub_systems.count("@def:fibonacci") == 0,
+               "M1: sub does not store self-reference in sub_systems (no shared_ptr cycle)");
+    }
+    // Empty self_name_ on a regular (non-function-section) FormulaSystem.
+    {
+        FormulaSystem sys;
+        sys.load_string("x = 1\n", "<m1-no-section>");
+        ASSERT(sys.self_name_.empty(),
+               "M1: bare-equation system has empty self_name_ (default-constructed)");
+    }
+
+    // ---- M3 C10: cycle-3d recursion guard preserved post-3g (RUN FIRST) -----
+    // After M1's self_name_ short-circuit, `make_func_inverter` becomes a
+    // recursive trap for self-referential function-section bodies: the
+    // inverter lambda → solve_for_all → solve_by_inversion → inverter lambda
+    // cycle re-enters with depth reset to 0, blowing the stack.
+    // M3-X added `currently_inverting` thread-local to `make_func_inverter`.
+    // This is the canary test: if the guard is missing or wrong, this
+    // segfaults (sanitizer-confirmed stack-overflow in flatten_additive).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, bad)\n"
+            "[bad(n) -> result] = bad(n+1)\n",
+            "<m3-c10-bad-post3g>");
+        ASSERT(sys.set_definitions_.count("bad") == 1,
+               "M3 C10: bad registered post-3g");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(5)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "M3 C10: is_in(5, bad) returns false safely (currently_inverting guard fires)");
+    }
+
+    // ---- M3 C11: cycle-3d non-recursive regression preserved post-M2 -------
+    // M2 switched try_formula's `sub_sys.resolve` to `resolve_memoized`. This
+    // sentinel verifies the three named cycle-3d subjects (double_it, sqp1,
+    // perfect_square) still produce the same answers — i.e. memoization is
+    // transparent on non-recursive paths. (Existing cycle-3d tests at
+    // lines ~16089-16234 also cover this; this is the cycle-3g sentinel.)
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, double_it)\n"
+            "[double_it(n) -> result] = 2 * n\n",
+            "<m3-c11-double-it>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(8)}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "M3 C11a: is_in(8, double_it) == true post-M2 (non-recursive preserved)");
+    }
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, sqp1)\n"
+            "[sqp1(n) -> result] = n * n + 1\n",
+            "<m3-c11-sqp1>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(0)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "M3 C11b: is_in(0, sqp1) == false post-M2 (image [1,∞) preserved)");
+    }
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, perfect_square)\n"
+            "[perfect_square(n) -> result] = n * n\n",
+            "<m3-c11-perfect-square>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(9)}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "M3 C11c: is_in(9, perfect_square) == true post-M2 (n=±3 preserved)");
+    }
+
+    // ---- M3 C1-C9 / D1: NOT SHIPPED — scope-exceeding discovery ----------
+    // The brief's primary cases (fibonacci is_in dispatch + forward fib(6))
+    // cannot pass with the M1+M2+M3-X substrate as designed. STOPPED per
+    // mid-GREEN protocol. Three obstacles discovered, all design-level:
+    //
+    // 1. Body syntax `fibonacci(n=n-1)` inside an arithmetic expression is
+    //    a parse error — the parser only accepts named-arg form when there's
+    //    a `?` (which routes through extract_formula_calls). So the design's
+    //    suggested fixture body line `result = fibonacci(n=n-1) + fibonacci(
+    //    n=n-2) if n >= 2` cannot be loaded. Workaround: split into helper
+    //    equations `prev1 = fibonacci(result=?prev1, n=n-1)` etc. — adds 2
+    //    equations, makes the body messier.
+    //
+    // 2. The M1+M2 changes correctly enable FORWARD recursion: with the
+    //    split syntax + numeric_mode on the sub, `sub.resolve("result",
+    //    {{"n", 6}})` returns 8. (Verified manually via probe at
+    //    implementation time. fib(0..6) trace clean.) So the substrate work
+    //    is succeeding.
+    //
+    // 3. The REVERSE direction `sub.resolve("n", {{"result", 8}})` (which
+    //    backs `is_in(8, fibonacci)`) hits the formula_depth_ limit before
+    //    the numeric scan strategy fires. The algebraic chain `result =
+    //    prev1 + prev2` → invert to `prev1 = result - prev2` → invert prev2
+    //    via the FormulaCall → recurse without converging. Even with
+    //    numeric_mode=true on the sub, strategy ordering means algebraic
+    //    explodes first. The design's D4 dry-run assumed the integer scan
+    //    fires directly on the outer scan call, but in practice the sub's
+    //    solve_recursive tries algebraic strategies first.
+    //
+    // What DID ship from cycle 3g:
+    //   - M1: self_name_ field + load_sub_system early-return + setter ✓
+    //   - M2: try_formula resolve_memoized switch ✓ (forward recursion now
+    //         works at all for FUNCTION_SECTION subs; previously the parent's
+    //         non-memoized recursive resolve exhausted the budget)
+    //   - M3-X: currently_inverting guard in make_func_inverter ✓ (prevents
+    //         the C10 stack overflow that self_name_ inadvertently exposed)
+    //   - C10: is_in(5, bad) returns false safely (regression preserved)
+    //   - C11: cycle-3d non-recursive cases preserved (double_it / sqp1 /
+    //         perfect_square)
+    //
+    // What DID NOT ship (escalated to orchestrator):
+    //   - C1-C9 / D1: recursive fibonacci/factorial is_in dispatch
+    //
+    // Root cause for the gap: solve strategy ordering inside the sub's
+    // solve_recursive. Reverse-solving a recursive function-section needs
+    // numeric scan to fire BEFORE algebraic chain explosion, OR a structural
+    // way to short-circuit algebraic strategies on self-referential function-
+    // section subs. Both are design decisions beyond this implementer's
+    // mid-GREEN scope.
+    //
+    // See implementation-log.md for the full diagnostic and the working
+    // probe at /tmp/c1_full.cpp (forward fib(6)=8 trace).
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -17045,6 +17238,9 @@ int main() {
 
     // gen-5 arc cycle 3f (2026-05-16): infix `in` operator
     test_gen5_cycle3f_infix_in();
+
+    // gen-5 arc cycle 3g (2026-05-16): recursive FUNCTION_SECTION reverse-solve
+    test_gen5_cycle3g_recursive_function_sections();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
