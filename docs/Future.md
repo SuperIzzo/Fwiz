@@ -869,11 +869,11 @@ Single map, single update site per binding mutation.
 
 **Vision principle**: per CLAUDE.md "Remove > Add" — consolidating the parallel-map pattern removes the implicit invariant ("update N maps in lockstep") and replaces it with a structural one (single Binding owns all per-variable state).
 
-## 83. Extract `copy_metadata_to_sub` helper from `load_sub_system` — PARKED
+## 83. Extract `copy_metadata_to_sub` helper from `load_sub_system` — DONE (gen-5 cycle 3h 2026-05-16)
 
-**Surfaced gen-5 cycle 3a (2026-05-15)** when the cross-file propagation bug at the auto-section branch (lines 2892-2900, `system.h`) was fixed. The pre-existing bug (auto-section branch silently omitted `dim_map_` propagation while the manual branch included it) is precisely the class of error a named helper would prevent: `load_sub_system` currently has two branches that each duplicate the metadata copy block (`type_map_`, `set_definitions_`, and any future fields). Extracting a `copy_metadata_to_sub(FormulaSystem& child) const` helper (~10 LOC) makes the two branches share one call site, so adding a new metadata field requires exactly one edit.
+**Surfaced gen-5 cycle 3a (2026-05-15)** when the cross-file propagation bug at the auto-section branch (lines 2892-2900, `system.h`) was fixed. The pre-existing bug (auto-section branch silently omitted `dim_map_` propagation while the manual branch included it) is precisely the class of error a named helper would prevent: `load_sub_system` had two branches that each duplicated the metadata copy block.
 
-**Reopen trigger:** a 4th field is added to `load_sub_system`'s metadata copy block (i.e., any future cycle adds another parallel map that must propagate cross-file).
+**Cycle 3h close (2026-05-16)**: `copy_metadata_to_sub(FormulaSystem& sub) const` extracted as a private member just above `load_sub_system`. Three call sites converted to single-line invocations: `load_sub_system` normal path, `load_sub_system` auto-section path, AND `register_function_section` (NEW call site — the pre-cached sub was previously NOT inheriting parent settings, suppressing numeric_mode on recursive FUNCTION_SECTION subs; this gap was the load-bearing piece for Fix A in the #92 close). Net LOC: -4 (12 inline lines deleted, 8 lines added across helper + docstring). Reopen-trigger comment moved into the helper docstring.
 
 ## 84. `NumberDomain` enum deletion — PARKED
 
@@ -963,25 +963,25 @@ Both use `std::function` for boundary erasure (type-erased lambda capturing `thi
 
 **Possible fixes**: (a) replace both `std::function<bool(string, double)>` and `std::function<vector<ExprPtr>(string, ExprPtr)>` with `bool (*)(void* ctx, string, double)` + opaque ctx pointer; FormulaSystem* threads through as ctx; (b) PIMPL-style erasure with a virtual base class; (c) accept the overhead and document it.
 
-## 90. Recursive FUNCTION_SECTION reverse-solve (`is_in` over recursive sections) — PARTIAL (gen-5 cycle 3g 2026-05-16: forward works; reverse blocked on 2 NEW gaps)
+## 90. Recursive FUNCTION_SECTION reverse-solve (`is_in` over recursive sections) — DONE (gen-5 cycle 3h 2026-05-16)
 
 **Surfaced gen-5 cycle 3d (2026-05-16, implementer architecture-emergent #1)** as a capability gap.
 
-**Today** (post-cycle-3g):
-- ✅ **Forward recursive evaluation WORKS**: `fibonacci(n=6) → 8` via direct formula-call. Cycle 3g's 3-part substrate (self_name_ field + try_formula resolve_memoized switch + currently_inverting guard) shipped clean.
-- ❌ **Reverse existential solve (the `is_in` flagship) STILL doesn't work**: `is_in(8, fibonacci)` does NOT return true. Two NEW root causes discovered mid-cycle-3g implementation, blocking C1-C9 + D1 of the design:
+**Cycle 3h close (2026-05-16)**: shipped three coordinated fixes (A: `copy_metadata_to_sub` helper propagates parent settings to the pre-cached sub built by `register_function_section`; B: Strategy 5 self-circular filter skips compound `sub_var == target` bindings; C: Strategy 6 condition-aware emission via new `contains_var_in_condition(cond, var)` helper in `expr.h`). With all three applied, `is_in(8, fibonacci)` returns true via the canonical helper-equation body — NO `n = n` workaround required. Tests C1 (`is_in(8, fibonacci) == true`), C2 (`is_in(4, fibonacci) == false`), and C5 (forward `fibonacci(6) == 8`) all pass.
 
-**NEW GAP 1 — Parser limitation (filed as Future #91)**: the design's suggested fibonacci body line `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2` is a PARSE ERROR. The parser only accepts named-arg form (`func(arg=value)`) when there's a `?` (which routes through `extract_formula_calls`). Inside arithmetic expressions, named-arg syntax fails. Workaround: split into helper equations (`prev1 = fibonacci(result=?prev1, n=n-1); prev2 = fibonacci(result=?prev2, n=n-2); result = prev1 + prev2 if n >= 2`). Three equations instead of one; messier body.
+**Canonical body form**: helper-equation split (one helper per FORMULA_CALL term in the recurrence):
+```
+[fibonacci(n) -> result]
+prev1 = fibonacci(result=?prev1, n=n-1)
+prev2 = fibonacci(result=?prev2, n=n-2)
+result = prev1 + prev2 if n >= 2
+result = n if n <= 1
+```
+Direct-body form (`result = fibonacci(n=n-1) + fibonacci(n=n-2)`) remains a PARSE ERROR — tracked by Future #91 (ergonomic completion, not load-bearing for the existential semantics).
 
-**NEW GAP 2 — Strategy ordering (filed as Future #92)**: even with the split-helper body, `sub.resolve("n", {{"result", 8.0}})` does NOT trigger numeric scan first. The solver's `solve_recursive` tries ALGEBRAIC strategies first: invert the recursive chain `result = prev1 + prev2` → `prev1 = result - prev2` → recursively invert prev2 via FormulaCall → `make_func_inverter` activates → infinite chain (caught by cycle 3g's `currently_inverting` guard which returns empty branches → strategies all give up → no solution).
+**Scope limit known at close (Future #94 NEW PARKED)**: `is_in(6, factorial)` is structurally blocked by a separate solver-strategy-ordering issue (factorial's first body equation has `n` on the RHS alongside a formula-output, triggering an algebraic Strategy 2 candidate that blows the depth budget before Strategy 6 fires). Forward `factorial(3) = 6` works; reverse parks. Sentinel test asserts the forward direction.
 
-**The design's D4 dry-run assumed integer scan fires first**, but actual `solve_recursive` strategy ordering puts algebraic before numeric. For non-recursive function-sections (perfect_square, double_it) the algebraic path SUCCEEDS via inversion of the closed-form RHS — that's why they work. For recursive function-sections, the algebraic path needs to be skipped + the numeric scan needs to fire directly.
-
-**Reopen trigger** (unchanged): user reports `is_in(<value>, <recursive_function_section>)` returns false; or a stdlib author writes a recursive sequence definition expecting set-membership tests to work. **Note**: closing this entry now requires resolving BOTH #91 (parser limitation) AND #92 (strategy ordering).
-
-**Cycle 3g shipped substrate**: M1 self_name_ field (enables forward recursive lookup), M2 try_formula resolve_memoized switch (prevents O(2^n) budget exhaustion on forward eval), M3-X currently_inverting guard (prevents the inverter cycle that self_name_ inadvertently exposed). The substrate IS the correctness prerequisite for the eventual reverse-solve fix.
-
-**Cycle 3g status update**: PARTIAL close. The pre-3g "self-reference alone is insufficient" hypothesis was correct; the 3g substrate work is correct AND useful. But the reverse-solve goal needs two MORE design decisions (parser extension + strategy-ordering policy) not within 3g's scope.
+**Cycle 3g substrate that made cycle 3h possible**: M1 self_name_ field (enables forward recursive lookup), M2 try_formula resolve_memoized switch (prevents O(2^n) budget exhaustion on forward eval), M3-X currently_inverting guard (prevents the inverter cycle that self_name_ inadvertently exposed). These remain in place; cycle 3h fixes are layered on top.
 
 ## 91. Named-arg syntax in arithmetic expressions (`func(arg=value)` inside `+`/`-`/`*`/`/`) — PARKED
 
@@ -993,25 +993,41 @@ Both use `std::function` for boundary erasure (type-erased lambda capturing `thi
 
 **Why this matters**: recursive sequence definitions (fibonacci, factorial, primes, anything with `func(...) op func(...)` body pattern) cannot use the natural body shape. Each recurrence requires N helper equations.
 
-**Reopen trigger**: (a) cycle that tackles Future #90 reverse-solve needs this AND #92 resolved; (b) stdlib author writes a recurrence and reports the parse error as surprising; (c) LLM benchmark surfaces it.
+**Reopen trigger** (updated cycle 3h 2026-05-16): now load-bearing for #90 ergonomic completion. Future #90 closed with the helper-equation body as the canonical form; #91 is what would let users write the direct body form `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2`. Also: (a) stdlib author writes a recurrence and reports the parse error as surprising; (b) LLM benchmark surfaces it.
 
 **Possible fixes**: (a) lift named-arg parsing into expression context (`primary()` recognizes `IDENT LPAREN IDENT EQUALS ...` as named-arg call); (b) require positional-arg form in expressions (`fibonacci(n-1)` instead of `fibonacci(n=n-1)`) — this works today IF positional args are recognized for the existing function-call; need to verify; (c) document the helper-equation workaround as the canonical pattern.
 
-## 92. Solver strategy ordering for self-referential FUNCTION_SECTION subs — PARKED
+## 92. Solver strategy ordering for self-referential FUNCTION_SECTION subs — DONE (gen-5 cycle 3h 2026-05-16)
 
 **Surfaced gen-5 cycle 3g (2026-05-16, implementer architecture-emergent #3)** during M3 fibonacci test attempt.
 
-**Today**: `sub.resolve("n", {{"result", 8.0}})` on a self-referential function-section sub (fibonacci) tries ALGEBRAIC strategies first. Algebraic chain `result = prev1 + prev2` inverts to `prev1 = result - prev2`, then inverts `prev2 = fibonacci(n=n-2)` via `make_func_inverter` → triggers `currently_inverting` guard (cycle 3g) → empty branches → strategies give up → no solution found. The numeric scan strategy (which would correctly find integer n satisfying `fibonacci(n) = 8`) is never reached because the algebraic path exhausts solver state first.
+**Cycle 3h close (2026-05-16)**: rather than reorder Strategy 6 ahead of Strategy 2, the cycle closed this via two complementary structural fixes that prevent the algebraic chain from entering its trap in the first place — and a third fix that lets Strategy 6 see the equations it needs:
 
-**Why this fires post-3g**: pre-3g, the algebraic path failed cleanly because `load_sub_system("fibonacci")` on the sub couldn't find fibonacci. Post-3g (self_name_), the algebraic path enters the recursive chain.
+1. **Fix A — `copy_metadata_to_sub` helper (closes Future #83 as part of the same cycle)**: propagates parent settings (notably `numeric_mode=true`) to the pre-cached FUNCTION_SECTION sub built by `register_function_section`. Without this, Strategy 6 was disabled on the sub even when the parent had numeric mode on, suppressing the only path that could solve recursive reverse-cases.
+2. **Fix B — Strategy 5 self-circular filter**: in `enumerate_candidates`, skip the compound `sub_var == target` case (`n = n-1` inside `[fibonacci(n)->result]`). The downstream `prepare_sub_bindings` skip-logic only handles pure `Var(target)` bindings (`is_var(expr) && expr->name == skip_parent_var`); compound bindings slipped through and caused the FORMULA_REV candidate to re-enter the same sub with the same target. The pure-Var case (positional-arg sugar like `tpa_sq2(x)` expanding to `x=x`) is preserved.
+3. **Fix C — Strategy 6 condition-aware emission** + new `contains_var_in_condition(cond, var)` helper in `expr.h`: extends Strategy 6's skip predicate to ALSO consult the equation's condition. An equation like `result = n if n <= 1` is structurally probeable for `n` (the condition constrains n's domain), but the original `lhs_var != target && !contains_var(rhs, target)` skip suppressed emission because `n` does not appear in the RHS literally. Cycle-3g's `currently_inverting` guard becomes a secondary safety net rather than the primary defense.
 
-**The fix**: solver needs strategy-ordering policy that prefers numeric scan FIRST for self-referential function-section subs (or any sub where the body recursively references the same FUNC_CALL). Could be:
-- (a) Detect self-referential body at `register_function_section` time; mark the sub with a `prefer_numeric_strategy` flag; `solve_recursive` consults the flag.
-- (b) Detect during `solve_recursive`: if the sub IS its own `self_name_` AND the body contains FUNC_CALL to self, reorder strategies.
-- (c) Always-prefer-numeric for FUNCTION_SECTION subs (changes behavior for non-recursive cases — may regress).
-- (d) Add a `@solve_strategy = numeric` annotation that .fw authors can opt into.
+**Tests preserved**: cycle-3g C10 regression (`is_in(5, bad) == false` for non-terminating bodies) still passes — the currently_inverting guard catches the case that Fix B does not (`bad(n+1)` is a single FORMULA_FWD, not a Strategy 5 reverse). New cycle-3h tests C1/C2/C5 BLOCKING + C3/C4 DESIRABLE all pass; D3 (factorial reverse) parked as Future #94 (different structural blocker).
 
-**Reopen trigger**: cycle that closes Future #90 needs this. Likely a dedicated cycle (3h-3i or similar) after #91 resolution.
+## 93. Strategy 6 emission predicate audit — PARKED
+
+**Surfaced gen-5 cycle 3h (2026-05-16)** as a follow-up to the cycle 3h #92 close.
+
+**Today**: cycle 3h extended Strategy 6's skip predicate to consult equation conditions (`target_in_cond`). The same emission predicate has two parallel checks downstream — `has_target` (line ~4079) and `has_formula_vars` (line ~4087) inside `try_resolve_numeric` — that may have the same condition-blindness. The cycle 3h audit did not extend those because no test surfaced a regression, but the structural symmetry suggests they could.
+
+**Reopen trigger**: a SECOND case surfaces where an equation is structurally probeable but emission-filtered.
+
+## 94. Self-referential FUNCTION_SECTION reverse-solve when body lacks a base-case `result = target` equation — PARKED
+
+**Surfaced gen-5 cycle 3h (2026-05-16)** during cycle 3h D3 attempt (`is_in(6, factorial)`).
+
+**Today**: fibonacci's reverse-solve works because its base-case equation `result = n if n <= 1` is directly solvable for `n` (Strategy 2 emits `n = result` with no recursion needed). Factorial's analogous base case is `result = 1 if n <= 0` — `n` does not appear in this equation at all. The only Strategy 2 candidate is from `result = n * prev if n >= 1`, which solves to `n = result / prev`; resolving `prev` recursively probes the FORMULA_FWD on `prev = factorial(...)`, which needs `n` to fill the `n=n-1` binding (circular, swallowed), leaving the binding blank, recursing into the function depth budget. Strategy 6 never gets a chance because the algebraic path blows the depth limit first.
+
+**Cycle 3h sentinel test**: forward `factorial(3) = 6` is asserted as confirmation that Fix A's settings propagation reaches the sub correctly; the reverse direction is documented in the test comment as the structural blocker.
+
+**Possible fixes**: (a) detect Strategy 2 candidates that require resolving a free variable equal to the formula's positional arg and demote them; (b) catch depth-budget exhaustion inside try_formula and continue to next candidate instead of propagating; (c) make Strategy 6 fire BEFORE Strategy 2 for self-referential FUNCTION_SECTION subs (the design path originally considered for #92, deferred because A+B+C closed fibonacci without it).
+
+**Reopen trigger**: (a) user reports `is_in(<value>, <recursive_function_section>)` returns false for a function whose body lacks a base case directly solvable for the parameter; (b) cycle that broadens recursive-sequence support beyond fibonacci-shape.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 

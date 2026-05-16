@@ -16825,7 +16825,154 @@ void test_gen5_cycle3g_recursive_function_sections() {
                "M3 C11c: is_in(9, perfect_square) == true post-M2 (n=±3 preserved)");
     }
 
+    // ---- Cycle 3h: C1/C2/C5 BLOCKING + C3/C4/D3 DESIRABLE (2026-05-16) ----
+    // Cycle 3h ships the three coordinated fixes (A: copy_metadata_to_sub
+    // helper, B: Strategy 5 self-circular filter, C: Strategy 6 condition-aware
+    // emission). With all three applied, the canonical helper-equation
+    // fibonacci body reverse-solves under is_in dispatch — NO `n = n` workaround
+    // required. Strategy 6's emission predicate now sees `result = n if n <= 1`
+    // as a candidate for solving `n`, where previously the absence of `n` in
+    // the RHS suppressed emission even though the condition contained `n`.
+    // The "NOT SHIPPED" comment block below describes the cycle-3g state for
+    // historical reference.
+
+    // BLOCKING C1: is_in(8, fibonacci) → true via canonical helper-equation body
+    // (the planner's pre-flight RED-light test for Fix C).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, fibonacci)\n"
+            "[fibonacci(n) -> result]\n"
+            "prev1 = fibonacci(result=?prev1, n=n-1)\n"
+            "prev2 = fibonacci(result=?prev2, n=n-2)\n"
+            "result = prev1 + prev2 if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3h-c1-fibonacci>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(8)}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "3h C1: is_in(8, fibonacci) == true (8 = fib(6); canonical helper-equation body)");
+    }
+
+    // BLOCKING C2: is_in(4, fibonacci) → false (4 is not in the Fibonacci sequence)
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, fibonacci)\n"
+            "[fibonacci(n) -> result]\n"
+            "prev1 = fibonacci(result=?prev1, n=n-1)\n"
+            "prev2 = fibonacci(result=?prev2, n=n-2)\n"
+            "result = prev1 + prev2 if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3h-c2-fibonacci>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(4)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "3h C2: is_in(4, fibonacci) == false (4 not in {0,1,1,2,3,5,8,13,...})");
+    }
+
+    // BLOCKING C5: forward fibonacci sub.resolve("result", {{"n", 6}}) == 8
+    // Memoization preserved post-cycle-3g M2.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "[fibonacci(n) -> result]\n"
+            "prev1 = fibonacci(result=?prev1, n=n-1)\n"
+            "prev2 = fibonacci(result=?prev2, n=n-2)\n"
+            "result = prev1 + prev2 if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3h-c5-fibonacci-fwd>");
+        const auto& sub = *sys.sub_systems.at("@def:fibonacci");
+        const double r = sub.resolve("result", {{"n", 6.0}});
+        ASSERT(std::abs(r - 8.0) < 1e-9,
+               "3h C5: forward fibonacci(6) = 8 (got " + std::to_string(r) + ")");
+    }
+
+    // DESIRABLE C3: settings propagation via copy_metadata_to_sub (Fix A).
+    // The pre-cached fibonacci sub should inherit numeric_mode=true from the
+    // parent (without this, Strategy 6 won't fire on the sub during C1/C2).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "[fibonacci(n) -> result]\n"
+            "prev1 = fibonacci(result=?prev1, n=n-1)\n"
+            "prev2 = fibonacci(result=?prev2, n=n-2)\n"
+            "result = prev1 + prev2 if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3h-c3-settings-prop>");
+        const auto& sub = *sys.sub_systems.at("@def:fibonacci");
+        ASSERT(sub.numeric_mode == true,
+               "3h C3: pre-cached sub inherits numeric_mode from parent (Fix A)");
+    }
+
+    // DESIRABLE C4: regression — is_in(5, bad) still returns false safely.
+    // After Fix B's Strategy 5 filter, the cycle-3g currently_inverting guard
+    // becomes a secondary safety net rather than the primary defense.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, bad)\n"
+            "[bad(n) -> result] = bad(n+1)\n",
+            "<3h-c4-bad-regression>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(5)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "3h C4: is_in(5, bad) == false (regression: cycle-3g C10 preserved post-Fix-B)");
+    }
+
+    // DESIRABLE D3: factorial is_in dispatch — STRUCTURALLY DEFERRED post-cycle-3h.
+    // Tracked as Future #94 (NEW PARKED). Forward direction (factorial(3) = 6)
+    // DOES work post-Fix-A; the reverse fails because factorial's body equation
+    // `result = n * prev if n >= 1` has the target `n` on the RHS alongside
+    // a formula-output `prev`. Strategy 2 emits the algebraic candidate
+    // `n = result / prev`, which recursively probes `prev` via the FORMULA_FWD
+    // call (`prev = factorial(...)`), which in turn needs `n` to fill its
+    // `n=n-1` binding — circular swallow leaves the binding blank, and the
+    // bare `resolve_memoized` chain blows formula_depth before Strategy 6
+    // ever fires. Fibonacci escapes this because its second equation
+    // `result = n` solves cleanly for `n` (no recursion), giving Strategy 2 a
+    // direct exit; factorial's `result = 1` lacks `n` entirely, so Strategy 2
+    // only ever has the trap candidate. The fix is structural — Strategy 2
+    // emission ordering or a depth-aware probe — and exceeds the cycle 3h
+    // scope. The forward path is asserted here as a sentinel for the
+    // partial victory; reverse is left for the follow-up.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "[factorial(n) -> result]\n"
+            "prev = factorial(result=?prev, n=n-1)\n"
+            "result = n * prev if n >= 1\n"
+            "result = 1 if n <= 0\n",
+            "<3h-d3-factorial-forward-sentinel>");
+        const auto& sub = *sys.sub_systems.at("@def:factorial");
+        const double r = sub.resolve("result", {{"n", 3.0}});
+        ASSERT(std::abs(r - 6.0) < 1e-9,
+               "3h D3 sentinel: forward factorial(3) = 6 (reverse direction parked as Future #94)");
+    }
+
     // ---- M3 C1-C9 / D1: NOT SHIPPED — scope-exceeding discovery ----------
+    // (Cycle-3g state — superseded by cycle 3h C1/C2/C5 above. Comment kept
+    // as historical context for why the cycle-3g BLOCKING tests deferred.)
     // The brief's primary cases (fibonacci is_in dispatch + forward fib(6))
     // cannot pass with the M1+M2+M3-X substrate as designed. STOPPED per
     // mid-GREEN protocol. Three obstacles discovered, all design-level:
@@ -16874,9 +17021,6 @@ void test_gen5_cycle3g_recursive_function_sections() {
     // way to short-circuit algebraic strategies on self-referential function-
     // section subs. Both are design decisions beyond this implementer's
     // mid-GREEN scope.
-    //
-    // See implementation-log.md for the full diagnostic and the working
-    // probe at /tmp/c1_full.cpp (forward fib(6)=8 trace).
 }
 
 void test_checked_type() {

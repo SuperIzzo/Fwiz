@@ -1137,6 +1137,12 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 body_lines.push_back(raw);
         }
         auto sub = std::make_shared<FormulaSystem>();
+        // gen-5 cycle 3h (2026-05-16, closes #92 dependency): propagate parent
+        // settings to the pre-cached sub. Without this, `numeric_mode=false` on
+        // the sub suppressed Strategy 6 during recursive FUNCTION_SECTION
+        // reverse-solve (the ExistenceChecker callback `is_in(N, fibonacci)`
+        // would never fire the numeric scan that proves N is in the sequence).
+        copy_metadata_to_sub(*sub);
         sub->load_lines(body_lines);
         // gen-5 cycle 3g (2026-05-16): enable recursive bodies. Lazy timing
         // (post-load_lines) avoids cycle-3d's load-time stack overflow —
@@ -3258,6 +3264,38 @@ private:
 
     // --- Sub-system loading ---
 
+    // ------------------------------------------------------------------------
+    // Settings-propagation helper (gen-5 cycle 3h, 2026-05-16, closes Future #83).
+    //
+    // Mirrors the parent's solver-affecting state into a freshly constructed
+    // sub-system: trace flag, numeric_mode, approximate_mode, custom_functions_
+    // table, type_map_ (cycle 3a), and set_definitions_ (cycle 3a M5, extended
+    // cycles 3b + 3d for USER_PREDICATE / FUNCTION_SECTION entries).
+    //
+    // Three call sites:
+    //   1. `load_sub_system` normal path (right after `make_shared<FormulaSystem>`)
+    //   2. `load_sub_system` auto-section path (re-constructs the sub when a
+    //      single named section is auto-selected)
+    //   3. `register_function_section` pre-cached sub (cycle 3h closes the gap
+    //      where the pre-cached sub did NOT inherit parent settings — leaving
+    //      `numeric_mode=false` on the sub even when the parent had it on,
+    //      which suppressed Strategy 6 numeric scan during recursive
+    //      FUNCTION_SECTION reverse-solve).
+    //
+    // USER_PREDICATE arena-lifetime invariant (cycle 3b) applies: the parent
+    // owns the sub via `sub_systems` shared_ptr, so the parent arena outlives
+    // any sub reference. See `load_sub_system`'s comment block for the
+    // PARKED Future #87 reopen trigger.
+    // ------------------------------------------------------------------------
+    void copy_metadata_to_sub(FormulaSystem& sub) const {
+        sub.trace = trace;
+        sub.numeric_mode = numeric_mode;
+        sub.approximate_mode = approximate_mode;
+        sub.custom_functions_ = custom_functions_;
+        sub.type_map_ = type_map_;
+        sub.set_definitions_ = set_definitions_;
+    }
+
     [[nodiscard]] const FormulaSystem& load_sub_system(const std::string& file_stem) const {
         // Split dotted names: "geometry.rectangle" → file="geometry", section="rectangle"
         std::string file_part = file_stem;
@@ -3324,12 +3362,7 @@ private:
         LoadGuard _guard{currently_loading, cache_key};
 
         auto sub = std::make_shared<FormulaSystem>();
-        sub->trace = trace;
-        sub->numeric_mode = numeric_mode;
-        sub->approximate_mode = approximate_mode;
-        sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
-        sub->type_map_ = type_map_;  // gen-5 cycle 3a: propagate type_map_ to sub-systems
-        sub->set_definitions_ = set_definitions_;  // gen-5 cycle 3a M5: propagate named-set registry
+        copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes Future #83) — see helper docstring
         // Cross-file lifetime of USER_PREDICATE entries (cycle 3b):
         // USER_PREDICATE SetDef carries a Condition with ExprPtrs pointing
         // into THIS (parent) system's arena. Parent owns the sub via
@@ -3371,17 +3404,7 @@ private:
             }
             if (!auto_section.empty()) {
                 sub = std::make_shared<FormulaSystem>();
-                sub->trace = trace;
-                sub->numeric_mode = numeric_mode;
-                sub->approximate_mode = approximate_mode;
-                sub->custom_functions_ = custom_functions_;
-                // gen-5 cycle 3a (D11): propagate type_map_ AND set_definitions_
-                // in BOTH branches — pre-existing auto-section gap closed in M1
-                // (type_map_) and M5 (set_definitions_). USER_PREDICATE arena-
-                // lifetime invariant from cycle 3b applies here too — see the
-                // matching note on the first propagation site above.
-                sub->type_map_ = type_map_;
-                sub->set_definitions_ = set_definitions_;
+                copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes Future #83) — see helper docstring
                 if (def_source)
                     sub->load_string(*def_source, "@def:" + file_part, auto_section);
                 else
@@ -3558,13 +3581,33 @@ private:
             }
 
         // Strategy 5: reverse formula call (target appears in a binding)
+        //
+        // gen-5 cycle 3h (2026-05-16, Future #92): exclude the self-circular
+        // case where `sub_var == target` AND the binding expression is
+        // compound (not a pure `Var(target)`). The compound case — e.g.
+        // `n = n-1` inside `[fibonacci(n)->result]` recursing on itself —
+        // produces a FORMULA_REV candidate that re-enters the same sub with
+        // the same target, blowing the formula-depth budget. The downstream
+        // `prepare_sub_bindings` skip-logic only handles pure `Var(target)`
+        // bindings (via `is_var(expr) && expr->name == skip_parent_var`);
+        // anything compound slips through, so this structural pre-filter is
+        // required. The pure-Var case `tpa_sq2(x)` (positional-arg sugar
+        // expands to binding `x=x`) is preserved — that path is the standard
+        // reverse-positional flow.
         for (auto& call : formula_calls)
-            for (auto& [sub_var, expr] : call.bindings)
-                if (contains_var(expr, target))
-                    if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
-                        target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
-                        &call, sub_var, nullptr, next_group++}))
-                        return;
+            for (auto& [sub_var, expr] : call.bindings) {
+                if (!contains_var(expr, target)) continue;
+                // Self-circular guard: skip the compound `sub_var == target`
+                // case (`n = n-1` inside a self-recursive section). The pure-Var
+                // case (`x = x` from positional-arg sugar) is kept — the
+                // downstream `prepare_sub_bindings` skip-logic absorbs it.
+                const bool pure_var_match = is_var(expr) && expr->name == target;
+                if (sub_var == target && !pure_var_match) continue;
+                if (handler(Candidate{CandidateType::FORMULA_REV, nullptr,
+                    target + " via " + call.file_stem + "(" + std::string(sub_var) + ")",
+                    &call, sub_var, nullptr, next_group++}))
+                    return;
+            }
 
         // Strategy 7: cross-equation variable elimination
         // For target T in equation E1 with unknown U, find E2 that can express U.
@@ -3654,9 +3697,23 @@ private:
         }
 
         // Strategy 6: numeric root-finding (--numeric only)
+        //
+        // gen-5 cycle 3h (2026-05-16, Future #92): condition-aware emission.
+        // An equation like `result = n if n <= 1` is structurally probeable
+        // for `n` (the condition constrains n's domain), but the original
+        // skip-predicate `lhs_var != target && !contains_var(rhs, target)`
+        // suppressed emission because `n` does not appear in the RHS.
+        // Extending the predicate to ALSO consult the condition closes the
+        // gap and unblocks recursive FUNCTION_SECTION reverse-solve (e.g.
+        // `is_in(N, fibonacci)` reaches the base case `result = n if n <= 1`
+        // when scanning small integer n).
         if (numeric_mode) {
             for (auto& eq : equations) {
-                if (eq.lhs_var != target && !contains_var(eq.rhs, target)) continue;
+                const bool target_in_cond = eq.condition
+                    && contains_var_in_condition(*eq.condition, target);
+                if (eq.lhs_var != target
+                        && !contains_var(eq.rhs, target)
+                        && !target_in_cond) continue;
                 auto combined = simplify(Expr::BinOpExpr(BinOp::SUB,
                     Expr::Var(eq.lhs_var), eq.rhs));
                 if (handler(Candidate{CandidateType::NUMERIC, combined,

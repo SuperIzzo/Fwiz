@@ -1860,6 +1860,22 @@ inline const SimplifyContext*& simplify_set_ctx_() {
 using ExistenceChecker = std::function<bool(const std::string& set_name, double value)>;
 inline ExistenceChecker& solve_existence_checker_();
 
+// True iff any clause's lhs or rhs subexpression contains `var`.
+// Used by Strategy 6 (numeric scan) in enumerate_candidates to emit
+// candidates for equations like `result = n if n <= 1` when solving for
+// `n` — the condition `n <= 1` contains the target, even though the RHS
+// (the literal `n`, or another expression not containing the target)
+// alone does not. Predicate clauses (`is_in`, `is_neg_num`) are walked
+// the same way — their FUNC_CALL lhs args carry the relevant vars.
+// gen-5 cycle 3h (2026-05-16, Future #92).
+[[nodiscard]] inline bool contains_var_in_condition(const Condition& cond,
+                                                    const std::string& var) {
+    return std::any_of(cond.clauses.begin(), cond.clauses.end(),
+        [&var](const CondClause& c) {
+            return contains_var(c.lhs, var) || contains_var(c.rhs, var);
+        });
+}
+
 // Check if a condition is satisfied given current bindings.
 // Unknown clauses (variables not in bindings, non-builtin) are treated as satisfied
 // for COMPARISON clauses (permissive-true). PREDICATE clauses use fail-safe
