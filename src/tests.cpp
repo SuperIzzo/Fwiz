@@ -15441,13 +15441,13 @@ void test_gen5_cycle3a_types_as_named_sets() {
                "M2: rational.kind == BUILTIN_PREDICATE");
         ASSERT(sys.set_definitions_["rational"].membership != nullptr,
                "M2: rational.membership != nullptr");
-        ASSERT(sys.set_definitions_["complex"].kind == SetDef::Kind::BUILTIN_PREDICATE,
-               "M2: complex.kind == BUILTIN_PREDICATE");
-        ASSERT(sys.set_definitions_["complex"].membership != nullptr,
-               "M2: complex.membership != nullptr");
-        // V8 NaN-sentinel: complex.membership(NaN) returns true (for `i`).
-        ASSERT(sys.set_definitions_["complex"].membership(std::nan("")),
-               "M2: complex.membership(NaN) == true (i NaN-sentinel)");
+        ASSERT(sys.set_definitions_["imaginary"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M2: imaginary.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["imaginary"].membership != nullptr,
+               "M2: imaginary.membership != nullptr");
+        // V8 NaN-sentinel: imaginary.membership(NaN) returns true (for `i`).
+        ASSERT(sys.set_definitions_["imaginary"].membership(std::nan("")),
+               "M2: imaginary.membership(NaN) == true (i NaN-sentinel)");
     }
     // BLOCKING C2 (DIM_SECTION arm): registering [mass] populates
     // set_definitions_["mass"] with kind == DIM_SECTION.
@@ -15661,7 +15661,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
                "M5 C8a: legacy is_in_dimension rule rewrites to canonical is_in (preserves semantics)");
     }
 
-    // BONUS1: is_in(v, real) and is_in(v, complex) coverage. Drive via
+    // BONUS1: is_in(v, real) and is_in(v, imaginary) coverage. Drive via
     // a load_string'd .fw rule (the same shape rule-firing would see).
     {
         FormulaSystem sys;
@@ -15685,19 +15685,344 @@ void test_gen5_cycle3a_types_as_named_sets() {
     {
         FormulaSystem sys;
         sys.load_string(
-            "x + y = undefined iff is_in(x, complex)\n",
-            "<bonus1-complex>");
-        const auto& cond_complex = *sys.rewrite_rules.back().condition;
+            "x + y = undefined iff is_in(x, imaginary)\n",
+            "<bonus1-imaginary>");
+        const auto& cond_imag = *sys.rewrite_rules.back().condition;
         const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
         {
             std::map<std::string, ExprPtr> eb_i{{"x", Expr::Num(std::nan(""))}};
-            ASSERT(check_condition(cond_complex, {}, &eb_i, &ctx),
-                   "BONUS1: is_in(NaN, complex) → true (NaN-sentinel for i)");
+            ASSERT(check_condition(cond_imag, {}, &eb_i, &ctx),
+                   "BONUS1: is_in(NaN, imaginary) → true (NaN-sentinel for i)");
         }
         {
             std::map<std::string, ExprPtr> eb_r{{"x", Expr::Num(3.14)}};
-            ASSERT(!check_condition(cond_complex, {}, &eb_r, &ctx),
-                   "BONUS1: is_in(Num(3.14), complex) → false (not NaN)");
+            ASSERT(!check_condition(cond_imag, {}, &eb_r, &ctx),
+                   "BONUS1: is_in(Num(3.14), imaginary) → false (not NaN)");
+        }
+    }
+}
+
+void test_gen5_cycle3b_user_defined_predicates() {
+    SECTION("gen-5 cycle 3b: User-defined predicate sets (USER_PREDICATE Kind)");
+
+    // -------- M1: SetDef extension + USER_PREDICATE Kind --------------------
+    // BLOCKING C11: static_assert(Kind::COUNT_ == 3) compiles; USER_PREDICATE
+    // exists as enum value between BUILTIN_PREDICATE and DIM_SECTION.
+    {
+        static_assert(static_cast<int>(SetDef::Kind::COUNT_) == 3,
+                      "M1: Kind enum has 3 values post-cycle-3b");
+        static_assert(static_cast<int>(SetDef::Kind::BUILTIN_PREDICATE) == 0,
+                      "M1: BUILTIN_PREDICATE first");
+        static_assert(static_cast<int>(SetDef::Kind::USER_PREDICATE) == 1,
+                      "M1: USER_PREDICATE second (between built-in and dim)");
+        static_assert(static_cast<int>(SetDef::Kind::DIM_SECTION) == 2,
+                      "M1: DIM_SECTION third");
+        // SetDef default-construct: new fields default to empty/nullopt.
+        SetDef sd;
+        ASSERT(sd.parameter.empty(), "M1: SetDef.parameter default empty");
+        ASSERT(!sd.predicate.has_value(), "M1: SetDef.predicate default nullopt");
+    }
+    // M1 aggregate-init regression: cycle-3a sites still compile.
+    {
+        SetDef sd_b{"int", SetDef::Kind::BUILTIN_PREDICATE, nullptr};
+        ASSERT(sd_b.kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M1: BUILTIN_PREDICATE 3-field aggregate init still works");
+        ASSERT(sd_b.parameter.empty(), "M1: 3-field init leaves parameter empty");
+        ASSERT(!sd_b.predicate.has_value(), "M1: 3-field init leaves predicate nullopt");
+        SetDef sd_d{"mass", SetDef::Kind::DIM_SECTION, nullptr};
+        ASSERT(sd_d.kind == SetDef::Kind::DIM_SECTION,
+               "M1: DIM_SECTION 3-field aggregate init still works");
+    }
+
+    // -------- M2: is_predicate_section + register_predicate_section ---------
+    // BLOCKING C1: inline form [whole_number(n)] iff ... parses and registers
+    // USER_PREDICATE entry.
+    {
+        FormulaSystem sys;
+        sys.load_string("[whole_number(n)] iff n >= 0 && is_in(n, int)\n",
+                        "<m2-inline>");
+        ASSERT(sys.set_definitions_.count("whole_number") == 1,
+               "M2 C1: set_definitions_ contains 'whole_number'");
+        ASSERT(sys.set_definitions_["whole_number"].kind == SetDef::Kind::USER_PREDICATE,
+               "M2 C1: whole_number.kind == USER_PREDICATE");
+        // BLOCKING C2: parameter + predicate stored.
+        ASSERT(sys.set_definitions_["whole_number"].parameter == "n",
+               "M2 C2: parameter == 'n'");
+        ASSERT(sys.set_definitions_["whole_number"].predicate.has_value(),
+               "M2 C2: predicate.has_value()");
+        ASSERT(sys.set_definitions_["whole_number"].predicate->clauses.size() == 2,
+               "M2 C2: predicate has 2 clauses");
+        ASSERT(sys.set_definitions_["whole_number"].predicate->connectors.size() == 1
+               && sys.set_definitions_["whole_number"].predicate->connectors[0] == CondLogic::AND,
+               "M2 C2: predicate connector is AND");
+    }
+    // BLOCKING C6: multi-line body — implicit AND across clauses.
+    {
+        FormulaSystem sys;
+        sys.load_string("[prime_approx(n)]\nn >= 2\nis_in(n, int)\n", "<m2-multi>");
+        ASSERT(sys.set_definitions_.count("prime_approx") == 1,
+               "M2 C6: prime_approx registered");
+        ASSERT(sys.set_definitions_["prime_approx"].kind == SetDef::Kind::USER_PREDICATE,
+               "M2 C6: prime_approx.kind == USER_PREDICATE");
+        ASSERT(sys.set_definitions_["prime_approx"].predicate.has_value(),
+               "M2 C6: prime_approx.predicate.has_value()");
+        ASSERT(sys.set_definitions_["prime_approx"].predicate->clauses.size() == 2,
+               "M2 C6: prime_approx has 2 clauses (implicit AND)");
+        ASSERT(sys.set_definitions_["prime_approx"].predicate->connectors.size() == 1
+               && sys.set_definitions_["prime_approx"].predicate->connectors[0] == CondLogic::AND,
+               "M2 C6: multi-line connector is AND");
+    }
+    // Empty body — silently inert.
+    {
+        FormulaSystem sys;
+        sys.load_string("[empty(n)]\n", "<m2-empty>");
+        ASSERT(sys.set_definitions_.count("empty") == 0,
+               "M2: empty-body section silently skipped (no SetDef entry)");
+    }
+    // Forward references work — set-name lookup is dispatch-time, not parse-time.
+    {
+        FormulaSystem sys;
+        sys.load_string("[a(n)] iff is_in(n, b)\n[b(n)] iff is_in(n, int)\n",
+                        "<m2-forward>");
+        ASSERT(sys.set_definitions_.count("a") == 1, "M2: forward-ref 'a' registered");
+        ASSERT(sys.set_definitions_.count("b") == 1, "M2: forward-ref 'b' registered");
+        ASSERT(sys.set_definitions_["a"].kind == SetDef::Kind::USER_PREDICATE,
+               "M2: a.kind == USER_PREDICATE");
+        ASSERT(sys.set_definitions_["b"].kind == SetDef::Kind::USER_PREDICATE,
+               "M2: b.kind == USER_PREDICATE");
+    }
+
+    // -------- M3: check_condition USER_PREDICATE dispatch + recursion guard -
+    // Build a parsed is_in clause: easiest path is to load a rewrite rule
+    // whose condition uses is_in(_, user_set), then re-use that Condition
+    // structure for direct check_condition invocation.
+
+    // BLOCKING C3 / C5: is_in(v, whole_number) — true for Num(5), false for Num(-3) / Num(3.7).
+    {
+        FormulaSystem sys;
+        // Rewrite rule (top-level) loaded BEFORE the predicate section, so
+        // split_sections doesn't absorb the rule line into the predicate's
+        // multi-line body.
+        sys.load_string(
+            "x + y = undefined iff is_in(x, whole_number)\n"
+            "[whole_number(n)] iff n >= 0 && is_in(n, int)\n",
+            "<m3-whole_number>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "M3 C3/C5: is_in(Num(5), whole_number) == true");
+        }
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(-3)}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "M3 C5: is_in(Num(-3), whole_number) == false");
+        }
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3.7)}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "M3 C5: is_in(Num(3.7), whole_number) == false (not integer)");
+        }
+    }
+    // BLOCKING C8: design-victory — user-defined `my_int` equivalent to built-in `int`.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, my_int)\n"
+            "[my_int(n)] iff is_in(n, real) && is_in(n, int)\n",
+            "<m3-design-victory>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "M3 C8: is_in(5, my_int) == true (design-victory)");
+        }
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Num(3.7)}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "M3 C8: is_in(3.7, my_int) == false (design-victory)");
+        }
+    }
+    // BLOCKING C13: recursion guard — self-recursion returns false, no hang.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, loop)\n"
+            "[loop(n)] iff is_in(n, loop)\n",
+            "<m3-self-recursion>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "M3 C13: is_in(5, loop) returns false (recursion guard fires, no hang)");
+    }
+    // Mutual recursion: a→b→a chain — chain blocks the second hit.
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in(x, a)\n"
+            "[a(n)] iff is_in(n, b)\n"
+            "[b(n)] iff is_in(n, a)\n",
+            "<m3-mutual-recursion>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "M3: is_in(5, a) returns false (mutual-recursion partial guard, no hang)");
+    }
+    // Null predicate: USER_PREDICATE SetDef with nullopt predicate → false (fail-safe).
+    {
+        FormulaSystem sys;
+        // Load a is_in(...) rule so we have a parsed Condition to feed.
+        sys.load_string(
+            "x + y = undefined iff is_in(x, my_set)\n",
+            "<m3-null-predicate-rule>");
+        // Hand-craft a USER_PREDICATE SetDef with empty predicate.
+        SetDef sd;
+        sd.name = "my_set";
+        sd.kind = SetDef::Kind::USER_PREDICATE;
+        sd.parameter = "n";
+        // sd.predicate intentionally left nullopt
+        sys.set_definitions_["my_set"] = std::move(sd);
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        std::map<std::string, ExprPtr> eb{{"x", Expr::Num(5)}};
+        ASSERT(!check_condition(cond, {}, &eb, &ctx),
+               "M3: USER_PREDICATE with nullopt predicate returns false (fail-safe)");
+    }
+
+    // -------- M4: annotation-parse USER_PREDICATE case ---------------------
+    // BLOCKING C4: x:whole_number = 5 annotation populates type_map_["x"].sets
+    // with "whole_number" (USER_PREDICATE atoms go into .sets, like BUILTIN_PREDICATE).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x:whole_number = 5\n"
+            "[whole_number(n)] iff n >= 0 && is_in(n, int)\n",
+            "<m4-c4>");
+        ASSERT(sys.type_map_.count("x") == 1, "M4 C4: type_map_ contains 'x'");
+        ASSERT(sys.type_map_["x"].sets.count("whole_number") == 1,
+               "M4 C4: type_map_['x'].sets contains 'whole_number'");
+        ASSERT(sys.type_map_["x"].dim.empty(),
+               "M4 C4: type_map_['x'].dim empty (USER_PREDICATE is not a dim)");
+    }
+    // BLOCKING C7: intersection q:(whole_number, mass) — populates BOTH .sets
+    // (USER_PREDICATE atom) AND .dim (DIM_SECTION atom).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "q:(whole_number, mass) = 5\n"
+            "[whole_number(n)] iff n >= 0 && is_in(n, int)\n"
+            "[mass]\nrefkg = 1\n",
+            "<m4-c7>");
+        ASSERT(sys.type_map_["q"].sets.count("whole_number") == 1,
+               "M4 C7: type_map_['q'].sets contains 'whole_number'");
+        ASSERT(sys.type_map_["q"].dim == "mass",
+               "M4 C7: type_map_['q'].dim == 'mass'");
+    }
+    // Error message updated: text now references 'imaginary' not 'complex'.
+    {
+        bool threw = false;
+        std::string msg;
+        try {
+            FormulaSystem sys;
+            sys.load_string("n:(int, unknown_atom) = 5\n", "<m4-error-msg>");
+        } catch (const BindingAnnotationError& e) {
+            threw = true;
+            msg = e.what();
+        } catch (...) {}
+        ASSERT(threw, "M4: unknown atom still throws BindingAnnotationError");
+        ASSERT(msg.find("imaginary") != std::string::npos,
+               "M4: error message mentions 'imaginary' (R2 rename)");
+        ASSERT(msg.find("complex") == std::string::npos,
+               "M4: error message does NOT mention 'complex' (R2 rename)");
+    }
+
+    // -------- M5: R2 rename, R5/R6 end-to-end, C12 cross-file --------------
+    // BLOCKING C10: load_builtins now registers 'imaginary' instead of 'complex'.
+    {
+        FormulaSystem sys;
+        sys.load_string("test_v = 1\n", "<m5-rename>");
+        ASSERT(sys.set_definitions_.count("imaginary") == 1,
+               "M5 C10: set_definitions_ contains 'imaginary'");
+        ASSERT(sys.set_definitions_.count("complex") == 0,
+               "M5 C10: set_definitions_ does NOT contain 'complex' (renamed)");
+        ASSERT(sys.set_definitions_["imaginary"].kind == SetDef::Kind::BUILTIN_PREDICATE,
+               "M5 C10: imaginary.kind == BUILTIN_PREDICATE");
+        ASSERT(sys.set_definitions_["imaginary"].membership(std::nan("")),
+               "M5 C10: imaginary.membership(NaN) == true (i-sentinel)");
+        ASSERT(!sys.set_definitions_["imaginary"].membership(3.14),
+               "M5 C10: imaginary.membership(3.14) == false");
+    }
+    // BLOCKING C9 (R5/R6): end-to-end is_in predicate firing through the
+    // SIMPLIFY layer (apply_rewrite_rules → check_condition → is_in dispatch).
+    //
+    // Design note (impl 2026-05-16): the spec proposed `x = 0 iff is_in(x, int)`
+    // + `y = x`, but a simple-LHS conditional `x = 0` parses as an Equation
+    // (not a RewriteRule), and equation-condition check_condition is invoked
+    // with null `expr_bindings` — so predicate clauses always return false at
+    // that layer. The simplify-layer predicate firing IS where this dispatch
+    // is exercised, and check_condition's `is_in` arm (cycle 3a M3) is its
+    // sole consumer. This test asserts the dispatch fires correctly for a
+    // rule loaded via load_string — the same pipeline a simplify call would
+    // hit, with the same Condition object — exercising every cooperating
+    // location enumerated in the cycle-3b comprehension-gate block.
+    {
+        FormulaSystem sys;
+        // Complex-LHS rewrite rule so it goes into rewrite_rules (not equations).
+        sys.load_string(
+            "p + q = undefined iff is_in(p, int)\n",
+            "<m5-r5r6>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        {
+            std::map<std::string, ExprPtr> eb{{"p", Expr::Num(5)}};
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "M5 C9 R5/R6: is_in rule fires for integer-bound wildcard");
+        }
+        {
+            std::map<std::string, ExprPtr> eb{{"p", Expr::Num(3.7)}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "M5 C9 R5/R6: is_in rule does NOT fire for non-integer wildcard");
+        }
+    }
+    // BLOCKING C12: USER_PREDICATE entries propagate to sub-systems on
+    // load_sub_system. Same map-copy mechanism as cycle-3a M5.
+    {
+        write_fw("/tmp/m5_3b_child.fw", "out = in\n");
+        // Predicate section MUST be last in file: split_sections appends
+        // any subsequent lines as the section's body, so a predicate
+        // section at the top would slurp the formula call below into its
+        // body (breaking parse).
+        write_fw("/tmp/m5_3b_parent.fw",
+                 "m5_3b_child(out=?y, in=in)\n"
+                 "[whole_number(n)] iff n >= 0 && is_in(n, int)\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/m5_3b_parent.fw");
+        ASSERT(sys.set_definitions_.count("whole_number") == 1,
+               "M5 C12: parent has whole_number USER_PREDICATE");
+        // Force child load
+        const double r = sys.resolve("y", {{"in", 7}});
+        ASSERT_NUM(r, 7, "M5 C12: child sub-system loads via formula call");
+        std::shared_ptr<FormulaSystem> child;
+        for (const auto& [key, sub] : sys.sub_systems) {
+            if (key.find("m5_3b_child") != std::string::npos) {
+                child = sub;
+                break;
+            }
+        }
+        ASSERT(child != nullptr, "M5 C12: child sub-system in sys.sub_systems");
+        if (child) {
+            ASSERT(child->set_definitions_.count("whole_number") == 1,
+                   "M5 C12: child->set_definitions_ contains 'whole_number' (propagated)");
+            ASSERT(child->set_definitions_["whole_number"].kind == SetDef::Kind::USER_PREDICATE,
+                   "M5 C12: child->set_definitions_['whole_number'].kind == USER_PREDICATE");
+            ASSERT(child->set_definitions_["whole_number"].parameter == "n",
+                   "M5 C12: child carries parameter name");
+            ASSERT(child->set_definitions_["whole_number"].predicate.has_value(),
+                   "M5 C12: child carries Condition (ExprPtrs into parent's arena)");
         }
     }
 }
@@ -16054,6 +16379,9 @@ int main() {
 
     // gen-5 arc cycle 3a (2026-05-15): Types as Named Sets
     test_gen5_cycle3a_types_as_named_sets();
+
+    // gen-5 arc cycle 3b (2026-05-16): User-defined predicate sets
+    test_gen5_cycle3b_user_defined_predicates();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

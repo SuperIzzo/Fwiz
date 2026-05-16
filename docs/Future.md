@@ -707,6 +707,8 @@ Four predicates have named consumers but were not shipped in #53 (which delivere
 
 **Reopen trigger (each remaining):** the named consumer cycle starts. The predicate machinery (encoding, `predicate_names()` extension, `check_condition` dispatch branch) is already in place — adding a new predicate is one dispatch line + tests.
 
+**V3 policy update (gen-5 cycle 3b, 2026-05-16)**: with `USER_PREDICATE` SetDef Kind shipping (cycle 3b — users can write `[name(arg)] iff condition` to declare their own predicate sets), **new dispatch arms in `check_condition` for predicate semantics require explicit justification against the SetDef alternative.** The SetDef route (`BUILTIN_PREDICATE` for C++-fast-path; `USER_PREDICATE` for `.fw`-extensible) handles any predicate whose semantics fit the membership-test shape. New C++ dispatch arms are reserved for predicates whose semantics fundamentally do NOT fit membership (e.g. `is_neg_num`'s literal-shape check — testing whether a binding is itself a Num node with negative value — which is structural, not value-membership).
+
 ## 67. CLI / `.fw` dispatch-path unification for `integral`/`diff` queries — DONE (2026-05-12)
 
 `parse_cli_query` now synthesises `<alias> = diff/integral(...)` equations into `CLIQuery::synthetic_equations` (string) and pushes the alias as a regular entry in `CLIQuery::queries`. `main.cpp` loads it via a single `sys.load_string` after the file/inline source; the standard query loop and post-load passes handle the rest. `CLIDiffQuery` / `CLIIntegralQuery` structs deleted; Pass 1.5 / Pass 1.6 dispatcher blocks (~50 LOC each) deleted. Net production LOC: -65 (-83 main.cpp, +18 system.h). Tests: 3340 → 3343 (+3 net).
@@ -846,7 +848,9 @@ EOF
 
 **Today**: `FormulaSystem` carries three parallel mutable maps for per-variable metadata: `solved_symbolic_` (post-solve ExprPtrs for `--steps`/`--calc` rendering), `aliases_` (file-defined constants for `--derive` output), and `type_map_` (replaces `dim_map_` from cycle 2 — upgraded to `BindingType{dim, sets}` value type in gen-5 cycle 3a). Each new code path that creates or modifies a binding must remember to update each parallel map. `solved_symbolic_` is the precedent and it works fine; `type_map_` joins it as the third; the system stays manageable.
 
-**Concern**: when a *fourth* parallel-map appears (e.g. for type categories, source provenance, simplification flags), the maintenance friction becomes a real cost. Each new binding-side metadata kind costs N call-site updates.
+**Important distinction (V2 — gen-5 cycle 3b, 2026-05-16)**: `set_definitions_` (the registry of `SetDef` entries keyed on set NAMES) is NOT a fourth parallel-binding-map and does NOT count toward this trigger. The trigger spirit is "binding-side metadata pile-up" — registries keyed on set-names / function-names / section-names are structurally distinct. `set_definitions_` lives on `FormulaSystem` but its key space (set names like `"int"`, `"mass"`, `"whole_number"`) does not overlap with binding names. Cycle 3b's USER_PREDICATE addition extends the registry's value type to carry `Condition` + `ExprPtr` arena handles, but does NOT introduce a fourth parallel-BINDING-map. The trigger count remains at 3.
+
+**Concern**: when a *fourth* parallel-binding-map appears (e.g. for type categories, source provenance, simplification flags), the maintenance friction becomes a real cost. Each new binding-side metadata kind costs N call-site updates.
 
 **The refactor**: collapse parallel maps into a single binding-representation:
 ```cpp
@@ -876,6 +880,68 @@ Single map, single update site per binding mutation.
 **Surfaced gen-5 cycle 3a (2026-05-15)** as a residual artifact. `NumberDomain` enum (or equivalent discriminator) is the last surviving remnant of the pre-cycle-3a three-way specialization (dim / domain / predicate). Now that `SetDef::Kind` unifies these under one mechanism (`BUILTIN_PREDICATE` / `DIM_SECTION` / future USER_PREDICATE / FUNCTION_SECTION), the old enum is redundant.
 
 **Reopen trigger:** gen-5 cycle 3c (dim algebra promotion) completes, OR `ValueSet` adopts `SetDef`-compatible domain semantics, making the enum's remaining consumers expressible as `SetDef` lookups.
+
+## 85. Predicate complexity profiling — PARKED
+
+**Surfaced gen-5 cycle 3b visionary (2026-05-16, V4)** as a non-blocking concern for user-defined predicate sets.
+
+**Today**: USER_PREDICATE evaluation goes through `check_condition` with the parameter bound and recursive Condition evaluation. Decidable terminating predicates work correctly regardless of how expensive their `iff` body is. The engine offers a deterministic result; speed is the stdlib-author's quality-of-implementation concern. The recursion guard (cycle 3b D7) catches infinite self-recursion + chains; expensive-but-terminating predicates (factorial-time membership tests, deep recursive enumerations) are NOT caught.
+
+**Concern**: an LLM-generated `.fw` file might include predicates like `[has_prime_factor(n)] iff <expensive iteration>` that slow `simplify()` measurably. Without profiling, this fails silently as "slow" rather than as "wrong."
+
+**Reopen trigger**: user reports a measurably slow `simplify()` pass traceable to USER_PREDICATE evaluation, OR a stdlib predicate exceeds 1ms per call in profiling, OR a benchmark cycle (LLM-ergonomics arc, queued) surfaces predicate-eval as a measured bottleneck.
+
+**Possible fixes**: (a) per-predicate-call timing in debug mode + warning if cumulative time per `simplify()` exceeds threshold; (b) memoization layer on USER_PREDICATE results; (c) stdlib author tooling (`fwiz --benchmark-predicates`).
+
+## 86. Mutual-recursion full handling for predicate sets — PARKED
+
+**Surfaced gen-5 cycle 3b (2026-05-16, D7 + V5)** as a known limitation of the cycle-3b recursion guard.
+
+**Today**: `static thread_local std::set<std::string> evaluating_predicates_` keyed on set name (NOT on parameter value). Self-recursion (`[foo(n)] iff is_in(n, foo)`) returns false (fail-safe). Mutual recursion (`[a(n)] iff is_in(n, b)` + `[b(n)] iff is_in(n, a)`) partially guarded — the deeper call returns false, propagates up; the user gets a false (wrong but consistent) result rather than a hang.
+
+**Concern**: a well-formed mutually-recursive definition (e.g. classical even/odd: `[even(n)] iff n = 0 || is_in(n-1, odd); [odd(n)] iff n = 0 ? false : is_in(n-1, even)`) returns wrong-but-fail-safe results. Users would expect either correctness or a clear "mutual recursion detected" diagnostic.
+
+**Reopen trigger**: user reports a benign mutual-recursion definition returning unexpected false (with concrete reproducer), OR gen-5 cycle 3d (function-section sets — `[fibonacci(n) -> result]`) enters planning. Recursive sets become genuinely valuable in 3d; that's the natural cycle to invest in full mutual-recursion handling.
+
+**Possible fixes**: (a) Tarjan-style cycle detection on the predicate dependency graph built at registration time; (b) thread-local set keyed on `(set_name, parameter_value)` tuple (allows different parameter values; blocks identical re-entry); (c) explicit user opt-in via `@recursive` section annotation that switches to a memoization-backed evaluator.
+
+## 87. Cross-system arena lifetime for USER_PREDICATE Conditions — PARKED
+
+**Surfaced gen-5 cycle 3b (2026-05-16, D11)** as a latent risk under future API changes.
+
+**Today**: USER_PREDICATE SetDef entries (cycle 3b) carry `Condition` objects with `ExprPtr` fields pointing into the PARENT system's `arena`. `load_sub_system` propagates `set_definitions_` (including USER_PREDICATE entries with their parent-arena ExprPtrs) to sub-systems. **Safe today** because: (a) parent owns sub via `sub_systems` shared_ptr; (b) `load_sub_system` returns `FormulaSystem&` (raw reference, NOT `shared_ptr`) — caller cannot extend sub > parent lifetime through the public API.
+
+**Concern**: any future change that allows sub-systems to outlive their parent breaks the assumption silently. Possible future changes: sub-system cache eviction; parallel sub-system execution with thread-local arena handoffs; an API that returns `std::shared_ptr<FormulaSystem>` (currently returns reference); detached sub-system clones for distributed solving.
+
+**Reopen trigger**: `load_sub_system` API changes to expose `shared_ptr<FormulaSystem>` (or equivalent ownership-extending shape), OR sub-system cache eviction is introduced, OR any path where sub > parent lifetime becomes reachable through the public API. **See also #82** — when binding-side metadata consolidation eventually fires, USER_PREDICATE's Condition+ExprPtr cross-system semantics must be preserved (Condition contents may need deep-copy into the sub's arena, or the SetDef may need explicit arena ownership tracking).
+
+**Possible fixes**: (a) deep-copy `Condition` ExprPtrs into sub's arena during propagation (cost: per-USER_PREDICATE arena alloc per sub load); (b) explicit arena-handle tracking on SetDef with refcounted parent-arena reference; (c) restrict USER_PREDICATE entries from cross-file propagation entirely (subs declare their own predicates).
+
+## 88. `is_in` predicate in equation-condition context — discoverable trap — PARKED
+
+**Surfaced gen-5 cycle 3b (2026-05-16, M5 implementer COLLECTED ISSUES + reviewer follow-up #4)** as a design-emergent constraint on where USER_PREDICATE-based rules can fire.
+
+**Today**: `is_in` (and any typed-binding predicate) requires complex-LHS rewrite-rule context to fire correctly. The `expr_bindings` parameter of `check_condition` carries pattern-match wildcards from `apply_rewrite_rules`; equation-condition `check_condition` invocations pass `expr_bindings = nullptr` (equations don't have wildcards — their conditions evaluate against the solver's `bindings` map directly).
+
+**Concrete impact**: stdlib authors writing dimensional-rejection rules using `is_in` predicates MUST use rewrite-rule shape, NOT equation-conditional shape:
+
+```fw
+# WORKS — complex-LHS rewrite rule, expr_bindings populated by pattern matcher
+x + y = undefined iff is_in(x, mass) && is_in(y, time)
+
+# SILENTLY FAILS — simple-LHS equation, expr_bindings is null at check_condition
+result = 0 if is_in(input, int)
+```
+
+The simple-LHS form parses, loads, and runs — but the `is_in` predicate clause always returns false (fail-safe on null `expr_bindings`), so the condition never fires. There is no compiler or runtime warning.
+
+**Concern**: this is a silent trap. The R5/R6 end-to-end test (cycle 3b M5) discovered this constraint during implementation; the implementer adapted the test to rewrite-rule shape. Stdlib authors and LLM-generated `.fw` files writing `var = expr if is_in(var, set)` will encounter the same silent failure with no diagnostic.
+
+**Reopen trigger**: first stdlib author or user reports confusion that `var = expr if is_in(...)` silently doesn't fire, OR cycle that ships dimensional-rejection stdlib rules using equation-conditional shape, OR LLM-benchmark arc (queued) surfaces this as a measured failure mode.
+
+**Possible fixes**: (a) parse-time warning when `is_in` (or any predicate clause) appears in an equation-condition context; (b) runtime warning at the first equation-condition `check_condition` call where a predicate clause is skipped due to null `expr_bindings`; (c) lift the equation-condition path to ALSO populate `expr_bindings` from the equation's variables (semantic change — predicates would fire in equation conditions too; needs design call on whether predicate semantics make sense for equations).
+
+**Documentation**: Language.md §17.4 "Context requirement" subsection (filed by cycle-3b doc-updater) captures the current constraint user-facing-ly. This Future.md entry tracks the resolution work.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 

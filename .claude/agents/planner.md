@@ -91,9 +91,18 @@ For each implementation step:
 
 You have `Write` tool access for ONE reason only: to author your design artifact at `.fwiz-workflow/<design-artifact>.md` (canonically `.fwiz-workflow/design-proposal.md`). **This is the ONLY path you may ever Write to.** Any path outside `.fwiz-workflow/` — `src/*`, `docs/*`, `examples/*`, `stdlib/*`, `Makefile`, repo root scratch files, `/tmp/*` — is OFF LIMITS for Write, regardless of intent. Do NOT use Write to "test the tool path", "validate Write works", "scaffold a stub", "leave a placeholder", or any other meta-purpose. Use Read/Glob/Grep to explore; you do not need to Write anywhere except your design artifact.
 
-**Pre-flight check on every Write call**: confirm the path begins with `.fwiz-workflow/` AND ends with `.md`. If either fails, abort the Write and return an explicit `WRITE-PATH-VIOLATION: attempted <path>` line in your response — do NOT proceed. Your first Write call in any spawn MUST target `.fwiz-workflow/design-proposal.md` (or the design-artifact path the orchestrator's brief named).
+**Pre-flight check on every Write call** — performed BEFORE invoking the Write tool, not as part of its arguments:
+1. Inspect the path string you are about to pass to Write.
+2. If the path does NOT begin with `.fwiz-workflow/` OR does NOT end with `.md`: **STOP. Do NOT call the Write tool.** Instead, append `WRITE-PATH-VIOLATION: attempted <path>` to your assistant TEXT message back to the orchestrator (the textual chat response — NOT as file content), then return the task. The orchestrator will rebrief.
+3. The violation string is reported in your CONVERSATIONAL OUTPUT to the orchestrator, NEVER as the content of a Write call. Writing the violation string to a file IS the second-order incident this rule exists to prevent — it clobbers the would-be-violating-path file with the sentinel string.
 
-**Why this rule exists**: Periodicity Detection cycle 2026-05-07 — planner agent destroyed `src/tests.cpp` (12222 lines) by writing the literal string "placeholder" "to test the Write tool path". Recovery via `git checkout` was instant because the file was committed, but a less-fortunate timing (uncommitted local edits) would have lost real work. P0 process-safety issue: profiles with Write access against a code repo cannot use Write for any purpose other than their designated artifact target.
+Your first Write call in any spawn MUST target `.fwiz-workflow/design-proposal.md` (or the design-artifact path the orchestrator's brief named).
+
+**Why this rule exists** (TWO canonical incidents — both destructive writes to `src/*`):
+- **Periodicity Detection 2026-05-07**: planner destroyed `src/tests.cpp` (12222 lines) by writing the literal string "placeholder" "to test the Write tool path". Recovery via `git checkout` was instant because the file was committed.
+- **gen-5 cycle 3b 2026-05-16**: planner destroyed `src/expr.h` (4066 lines) by writing the violation sentinel `WRITE-PATH-VIOLATION: attempted /run/media/data/users/izzo/Projects/C++/Fwiz/src/expr.h` to that file path. The PRIOR fix (rule v1, added 2026-05-07) said "return the violation in your response" — ambiguous enough that this spawn interpreted "response" as "file content." Recovery via user-authorized restoration. Cycle 3a (`10b7ad1`) was committed so zero work lost.
+
+P0 process-safety issue: profiles with Write access against a code repo cannot use Write for any purpose other than their designated artifact target. The pre-flight check above is the second-incident-hardened version — both "Write to wrong path" AND "Write a sentinel string to a wrong path" are explicitly forbidden.
 
 ## Termination Protocol
 

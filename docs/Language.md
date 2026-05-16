@@ -841,11 +841,19 @@ The simplifier applies the builtin rewrite rules `i * i = -1` and `i^2 = -1`. An
 
 ## 17. Dimension Annotations
 
-Since gen-3 cycle 2 (2026-05-15), fwiz supports optional dimension annotations on variables and named dimension sections that group unit bindings. Gen-5 cycle 3a (2026-05-15) extended the annotation system with a unified named-set registry and canonical `is_in` predicate.
+Since gen-3 cycle 2 (2026-05-15), fwiz supports optional dimension annotations on variables and named dimension sections that group unit bindings. Gen-5 cycle 3a (2026-05-15) extended the annotation system with a unified named-set registry and canonical `is_in` predicate. Gen-5 cycle 3b (2026-05-16) added user-defined predicate sets.
 
-### 17.1 Dimension Sections
+### 17.1 Section Flavors
 
-A section header with a bare name (no parentheses, no `->`) declares a **dimension category**:
+Three section header shapes serve distinct roles:
+
+| Syntax | Kind | Registered as |
+|--------|------|---------------|
+| `[name]` (no parens, no `->`) | Dimension section | `DIM_SECTION` in `set_definitions_` |
+| `[name(param)] iff ...` (parameter + body) | Predicate section | `USER_PREDICATE` in `set_definitions_` |
+| `[name(args) -> ret]` (args + return) | Formula section | sub-system in `custom_function_defs_` |
+
+**Dimension sections** declare a dimension category — all LHS names in the body are tagged with that dimension:
 
 ```
 [mass]
@@ -854,7 +862,7 @@ kg = 1000 * g
 lb = 453.592 * g
 ```
 
-Every variable bound inside the section (`g`, `kg`, `lb`) is automatically registered as having dimension `mass` in the system's `type_map_`. The section body uses ordinary equation and default syntax; numeric-RHS lines become defaults; equation-RHS lines become equations — same rules as the top level.
+Every variable bound inside the section (`g`, `kg`, `lb`) is automatically registered as having dimension `mass` in the system's `type_map_`. The section body uses ordinary equation and default syntax.
 
 Access values via dot-dispatch:
 
@@ -863,18 +871,35 @@ $ fwiz '([mass]\ng=1\nkg=1000*g)(mass.kg=?)'
 mass.kg = 1000
 ```
 
+**Predicate sections** (since gen-5 cycle 3b) declare a user-defined named set with a membership condition:
+
+```
+[whole_number(n)] iff n >= 0 && is_in(n, int)
+```
+
+The header parameter (`n`) is bound to the queried value at `is_in` call time. The body is a condition; multi-line bodies join as implicit AND:
+
+```
+[non_trivial(x)]
+iff x != 0
+iff x != 1
+```
+
+An empty body is silently inert (no set registered). Forward references between predicate sections work — both are registered before any `is_in` dispatch evaluates them.
+
 ### 17.2 Binding Annotations
 
 The `:` token annotates an individual binding with a type:
 
 ```
-m_obj:mass = 10 * kg      # atomic: m_obj tagged as dimension 'mass'
-n:(int, mass) = 5         # intersection: n gets dim=mass AND set membership int
+m_obj:mass = 10 * kg          # atomic: m_obj tagged as dimension 'mass'
+n:(int, mass) = 5             # intersection: n gets dim=mass AND set membership int
+q:(whole_number, mass) = 5    # intersection with user-defined predicate set
 ```
 
 After the annotation is stripped, the line is parsed as a normal equation or default. The annotation does NOT change the variable's numeric value — only its entry in `type_map_`.
 
-**Intersection classification (since gen-5 cycle 3a):** each atom in the intersection list is looked up in the `set_definitions_` registry. Atoms registered as `DIM_SECTION` (e.g. `mass`, `length`) populate `BindingType.dim`; atoms registered as `BUILTIN_PREDICATE` (e.g. `int`, `real`, `rational`, `complex`) populate `BindingType.sets`. An unknown atom raises `BindingAnnotationError` at parse time, naming the unknown atom and listing built-in alternatives.
+**Intersection classification:** each atom in the intersection list is looked up in the `set_definitions_` registry. `DIM_SECTION` atoms populate `BindingType.dim`; `BUILTIN_PREDICATE` and `USER_PREDICATE` atoms populate `BindingType.sets`. An unknown atom raises `BindingAnnotationError` at parse time, naming the unknown atom and listing built-in alternatives.
 
 Operators inside intersection parentheses (`*`, `/`, `^`) raise a `BindingAnnotationError`. Only bare identifiers separated by commas are accepted.
 
@@ -887,9 +912,11 @@ Four built-in named sets are available in any annotation or predicate condition:
 | `int` | value is an integer (finite, `is_integer_value(v)`) |
 | `real` | value is a finite real (non-NaN, non-inf) |
 | `rational` | currently equivalent to `real` |
-| `complex` | accepts NaN-sentinel (covers `i`-containing expressions) |
+| `imaginary` | accepts NaN-sentinel (covers `i`-containing expressions); renamed from `complex` in cycle 3b |
 
 These are the same names you use in intersection annotations (`n:(int, mass) = 5`) and in `is_in` rule predicates (`is_in(n, int)`).
+
+**User-defined sets** registered via predicate sections (§17.1) work identically: `is_in(v, whole_number)` dispatches through the same `SetDef::Kind` switch in `check_condition`. **Design invariant (AC8):** `[my_int(n)] iff is_in(n, real) && is_in(n, int)` is functionally equivalent to the built-in `int` set — built-ins are optimized C++ fast-paths of what users can express in `.fw`.
 
 ### 17.4 Dimension-Checking Rewrite Rules
 
@@ -901,6 +928,9 @@ x + y = undefined  iff is_in(x, mass) && is_in(y, time)
 
 # integer-only rule:
 floor(n) = n  iff is_in(n, int)
+
+# user-defined set in a rule:
+p + q = undefined  iff is_in(p, whole_number)
 ```
 
 **Legacy aliases** (accepted at rule-load time, rewritten to `is_in` internally):
@@ -909,10 +939,12 @@ floor(n) = n  iff is_in(n, int)
 
 Both legacy forms still work — the engine normalizes them at parse time. All predicates are fail-safe: if the variable is not annotated or not bound, the predicate returns false (rule does not fire). See §10.6 for the full predicate table.
 
+**Context requirement:** `is_in` predicates (including user-defined) can only fire from rewrite-rule conditions (complex LHS — where the pattern matcher provides wildcard bindings). Equation-level conditions (`var = expr if cond`) provide no wildcard bindings, so `is_in` always returns false there. Stdlib authors writing dimensional-rejection rules must use rewrite-rule shape.
+
 ### 17.5 Current Scope and Limitations
 
-- Atomic annotations, intersection annotations, and the four built-in named sets ship in cycle 3a.
+- Atomic annotations, intersection annotations, four built-in named sets, and user-defined predicate sets ship as of cycle 3b.
 - `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`) is deferred to cycle 3c (Future #7b FULL). Until then, `is_in(expr, mass)` only works on bare annotated Vars, not compound sub-expressions.
 - Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — Future #81.
-- User-defined predicate sets (`[whole_number(n)] iff n >= 0 && is_in(n, int)`) are planned for cycle 3b.
-- Stdlib `.fw` files do not yet wrap SI base units in dim sections — that is a natural cycle-3c follow-on.
+- Function-section sets (`x:fibonacci` triggers existential solve) are planned for cycle 3d.
+- Stdlib `.fw` files do not yet wrap SI base units in dim sections — a natural cycle-3c follow-on.

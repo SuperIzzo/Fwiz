@@ -2,6 +2,32 @@
 
 Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
 
+## Types as Named Sets — user-defined predicate sets (gen-5 cycle 3b) — ✅ SHIPPED (2026-05-16, ROADMAP gen-5)
+
+**Design victory (AC8):** `[my_int(n)] iff is_in(n, real) && is_in(n, int)` is functionally equivalent to the built-in `int` named set — users can write their own membership predicates from the same primitives that power the engine's built-ins. This validates the unification claim: built-ins are optimized cases, not magic.
+
+**What shipped (M1–M5):**
+- **M1 — SetDef extension + Kind enum:** `SetDef` gains `parameter` (string) + `predicate` (optional<Condition>) fields. `Kind` enum gains `USER_PREDICATE` between `BUILTIN_PREDICATE` and `DIM_SECTION` (now 3-valued, `COUNT_==3` static_assert bumped). Stub `USER_PREDICATE` case added to `check_condition` is_in switch and to the annotation-parse switch. `expr.h:1795` comment updated `complex` → `imaginary` (D8 prep). (`+27/-8` production lines.)
+- **M2 — `is_predicate_section` + `register_predicate_section` + two-pass load:** `is_predicate_section` (shape predicate) and `register_predicate_section` (body parsing — inline + multi-line unified path; strip leading `"iff "` on line 0; join non-blank lines with `" && "`; `parse_condition` once; `nullopt`-on-empty / catch-on-fail) added at `system.h:~947`. `load_with_sections` extended with a second pre-scan pass for predicate sections. Handles inline form (C1+C2), implicit-AND multi-line form (C6), empty-body silently-inert, and forward references between predicate sections. (`+66/-2` production lines.)
+- **M3 — `check_condition` USER_PREDICATE dispatch + recursion guard:** USER_PREDICATE case evaluates stored `Condition` with `sdef.parameter` bound to the queried ExprPtr. D6 insert-then-erase on caller's `bindings` map (via `const_cast` + RAII restore) injects parameter binding without signature change. Thread-local set-name-only recursion guard prevents stack overflow on self-referential predicates. Comprehension-gate comment block extended from 4-location to 7-location enumeration. (`+60/-8` production lines.)
+- **M4 — annotation-parse USER_PREDICATE behavior + error-message rename:** `is_in(v, whole_number)` in annotation intersection lists routes to `BindingType.sets` (mirror of BUILTIN_PREDICATE). Error message "complex" → "imaginary" (`system.h:2787`). (`+1/-1` production lines.)
+- **M5 — `complex` → `imaginary` rename + cross-file lifetime comment + end-to-end test:** `reg_builtin("complex", ...)` → `reg_builtin("imaginary", ...)` in `load_builtins`. 11 of 13 candidate sites renamed (2 regex-roundtrip test labels explicitly preserved per Final Design D8). Cross-file lifetime comment at auto-section branch (`system.h:3072-3074`) documents USER_PREDICATE Condition+ExprPtr arena-lifetime invariant. R5/R6 end-to-end tests exercise is_in dispatch through the full `apply_rewrite_rules → check_condition → USER_PREDICATE` path (adapted to rewrite-rule shape — see "Architecture-emergent item" below). (`+24/-10` production lines, `+14` tests.)
+
+**Architecture-emergent item (M5 COLLECTED ISSUES):** `is_in` predicate clauses cannot fire from equation-condition context (`var = expr if cond`) because that path provides null `expr_bindings`. Only rewrite-rule context (complex LHS — where the pattern matcher provides `expr_bindings`) supports USER_PREDICATE dispatch. Stdlib authors writing dimensional-rejection rules must use rewrite-rule shape (`x + y = undefined iff ...`), not equation-conditional shape.
+
+**Future.md outcomes:**
+- Future #82 "Today" paragraph updated: V2 registry-vs-per-binding distinction clarified.
+- Future #65 V3 policy appended: new dispatch arms in `check_condition` require SetDef alternative justification.
+- Future #85 NEW PARKED: predicate complexity profiling (V4).
+- Future #86 NEW PARKED: mutual-recursion full handling.
+- Future #87 NEW PARKED: cross-system arena lifetime for USER_PREDICATE Condition+ExprPtr handles.
+
+**Tests:** 3641 (cycle 3a close) → 3693 (+52 new). M1: +6; M2: +16; M3: +8; M4: +8; M5: +14.
+
+**Production LOC:** net +166 across `expr.h` (+121) and `system.h` (+45).
+
+---
+
 ## Types as Named Sets — type-axis unification substrate (gen-5 cycle 3a) — ✅ SHIPPED (2026-05-15, ROADMAP gen-5)
 
 **Substrate ship** — 5 milestones M1–M5 implementing the Types-as-Named-Sets unification. 3641/3641 tests passing; sanitize and analyze-fast clean.

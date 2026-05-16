@@ -417,8 +417,10 @@ public:
     using DimName = std::string;
     std::map<std::string, BindingType> type_map_;
     // Cycle 3a (gen-5, 2026-05-15): named-set registry. Built-ins
-    // (int/real/rational/complex) registered in load_builtins(); dim
+    // (int/real/rational/imaginary) registered in load_builtins(); dim
     // sections register their own SetDef in register_dim_section().
+    // Cycle 3b (2026-05-16): also holds USER_PREDICATE entries registered by
+    // register_predicate_section() from `[name(param)] iff ...` sections.
     // Read by check_condition's `is_in` predicate via SimplifyContext
     // thread-local (M3). Non-mutable — load-time-fixed, solver reads only.
     // See SetDef above for Kind dispatch contract.
@@ -635,7 +637,7 @@ public:
         // builtin constants. The deeper `flatten_additive` NaN-propagation bug
         // (Future.md #13c) remains; it is unreachable from user-facing input
         // *while `i` is the only NaN-bound constant*. A second NaN-valued
-        // builtin (e.g. complex infinity) would require fixing #13c first.
+        // builtin (e.g. imaginary infinity) would require fixing #13c first.
         if (std::isnan(it->second)) return false;
         if (defaults.count(name)) return false;
         return std::none_of(equations.begin(), equations.end(),
@@ -758,18 +760,24 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // as a user [name(n)] iff ... declaration; the C++ fast path is an
         // optimization. Cycle 3b (USER_PREDICATE) makes that equivalence
         // demonstrable.
-        // `complex` membership is the NaN-sentinel test — `i` binding (cycle 2
-        // invariant) carries NaN to mark "imaginary unit"; future complex-number
-        // values would need a richer Kind. Today: any NaN value is in `complex`.
+        // `imaginary` membership is the NaN-sentinel test — `i` binding
+        // (cycle 2 invariant) carries NaN to mark the imaginary unit; future
+        // full-complex-number values would need a richer Kind. Today: any NaN
+        // value is in `imaginary`. (Renamed from `complex` in cycle 3b per
+        // D8 R2: `complex` is the proper superset
+        // `is_in(n, real) || is_in(n, imaginary)`, parked as a future
+        // user-defined set once complex arithmetic ships.)
         // `rational`: cycle-3a fast path is integer-only; cycle 3b refines via
         // symbolic is_int_frac on the bound ExprPtr.
         auto reg_builtin = [this](std::string nm, bool (*pred)(double)) {
-            set_definitions_[nm] = SetDef{nm, SetDef::Kind::BUILTIN_PREDICATE, pred};
+            // Trailing parameter/predicate fields explicitly default — cycle
+            // 3b USER_PREDICATE-only; built-ins leave them empty/nullopt.
+            set_definitions_[nm] = SetDef{nm, SetDef::Kind::BUILTIN_PREDICATE, pred, {}, std::nullopt};
         };
         reg_builtin("int",      [](double v) { return is_integer_value(v); });
         reg_builtin("real",     [](double v) { return std::isfinite(v); });
         reg_builtin("rational", [](double v) { return is_integer_value(v); });
-        reg_builtin("complex",  [](double v) { return std::isnan(v); });
+        reg_builtin("imaginary", [](double v) { return std::isnan(v); });
     }
 
     // Group rewrite rules by LHS pattern and check exhaustiveness.
@@ -963,6 +971,63 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         return s.return_var.empty() && s.positional_args.empty();
     }
 
+    // ------------------------------------------------------------------------
+    // Predicate section registration (gen-5 cycle 3b, 2026-05-16).
+    //
+    // A `[name(param)]` Section with exactly one positional arg and no return
+    // variable is a *predicate section*. Its body declares membership
+    // conditions either inline (`[name(n)] iff <expr>`) or multi-line
+    // (one clause per body line; implicit AND across lines). The body is
+    // parsed once into a Condition; `set_definitions_[name]` is populated as
+    // `Kind::USER_PREDICATE` with the parameter name and stored predicate.
+    //
+    // Section disambiguation:
+    //   `[name]`           dim section       (args empty, no return)
+    //   `[name(arg)]`      predicate section (one arg, no return)  ← this
+    //   `[name(...) -> v]` formula section   (return non-empty)
+    // ------------------------------------------------------------------------
+    [[nodiscard]] static bool is_predicate_section(const Section& s) {
+        return s.positional_args.size() == 1
+            && s.return_var.empty()
+            && !s.lines.empty();
+    }
+
+    void register_predicate_section(const Section& s) {
+        assert(s.positional_args.size() == 1);
+        const std::string& param = s.positional_args[0];
+
+        // Unified inline-vs-multi-line body parsing:
+        //   inline:     s.lines[0] starts with "iff " → strip prefix on line 0
+        //   multi-line: no "iff " prefix on any line
+        // Join all non-blank lines with " && " (implicit AND across lines).
+        std::string joined;
+        for (size_t i = 0; i < s.lines.size(); i++) {
+            std::string ln = trim(s.lines[i]);
+            if (ln.empty()) continue;
+            if (i == 0 && ln.size() >= 4 && ln.substr(0, 4) == "iff ") {
+                ln = trim(ln.substr(4));
+            }
+            if (ln.empty()) continue;
+            if (!joined.empty()) joined += " && ";
+            joined += ln;
+        }
+        if (joined.empty()) return; // empty body — silently inert
+
+        std::optional<Condition> cond_opt;
+        try {
+            cond_opt = parse_condition(joined);
+        // NOLINTNEXTLINE(bugprone-empty-catch) — malformed predicate body → silently skip (consistent with parse_line best-effort posture)
+        } catch (const std::runtime_error&) { return; }
+        if (!cond_opt) return; // parse returned nullopt
+
+        SetDef sd;
+        sd.name = s.name;
+        sd.kind = SetDef::Kind::USER_PREDICATE;
+        sd.parameter = param;
+        sd.predicate = std::move(*cond_opt);
+        set_definitions_[s.name] = std::move(sd);
+    }
+
     void register_dim_section(const Section& s) {
         // D1 edge case: bare `[name] @extern foo` is classified as a dim
         // section but @extern is meaningless here (no return_var to bridge).
@@ -984,7 +1049,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             type_map_[name].dim = s.name;
         // Cycle 3a (gen-5): dim section also registers a SetDef so that
         // `is_in(v, mass)` can dispatch via DIM_SECTION Kind.
-        set_definitions_[s.name] = SetDef{s.name, SetDef::Kind::DIM_SECTION, nullptr};
+        // Trailing fields explicitly default for cppcheck-clean compile.
+        set_definitions_[s.name] = SetDef{s.name, SetDef::Kind::DIM_SECTION, nullptr, {}, std::nullopt};
         // Serialize the section body into `custom_function_defs_` so
         // load_sub_system's dispatcher routes dotted lookups (`mass.kg`)
         // through the @def: cache-key path (matches D6 / Issue-R2 resolution).
@@ -1003,9 +1069,18 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // sections BEFORE top-level/section load so type_map_ is populated
         // before any equation that references a dim-section variable is
         // parsed.
+        // Pass 1: dim sections (cycle 3a) — type_map_ populated before any
+        // annotation parse references them.
         for (const auto& s : sections_)
             if (!s.name.empty() && is_dimension_section(s))
                 register_dim_section(s);
+        // Pass 2: predicate sections (cycle 3b) — USER_PREDICATE entries.
+        // Set-name lookup inside predicate Conditions is dispatch-time, so
+        // forward references between predicate sections (a refers to b
+        // before b is registered in this loop) work transparently.
+        for (const auto& s : sections_)
+            if (!s.name.empty() && is_predicate_section(s))
+                register_predicate_section(s);
         if (sections_.size() <= 1 && section.empty())
             load_lines(all_lines);
         else
@@ -2784,7 +2859,7 @@ private:
                         throw BindingAnnotationError(
                             "binding annotation: unknown set name '" + a
                             + "' — register a dim section like [" + a
-                            + "] or use a built-in set: int, real, rational, complex");
+                            + "] or use a built-in set: int, real, rational, imaginary");
                     }
                     switch (sit->second.kind) {
                         case SetDef::Kind::DIM_SECTION:
@@ -2794,6 +2869,13 @@ private:
                             type_map_[lhs_name].dim = a;
                             break;
                         case SetDef::Kind::BUILTIN_PREDICATE:
+                            type_map_[lhs_name].sets.insert(a);
+                            break;
+                        case SetDef::Kind::USER_PREDICATE:
+                            // Cycle 3b: user-defined predicate sets behave
+                            // identically to BUILTIN_PREDICATE for annotation
+                            // — go into `.sets`. Dispatch difference lives in
+                            // check_condition.
                             type_map_[lhs_name].sets.insert(a);
                             break;
                         case SetDef::Kind::COUNT_:
@@ -2940,6 +3022,16 @@ private:
         sub->custom_functions_ = custom_functions_;  // propagate to sub-systems
         sub->type_map_ = type_map_;  // gen-5 cycle 3a: propagate type_map_ to sub-systems
         sub->set_definitions_ = set_definitions_;  // gen-5 cycle 3a M5: propagate named-set registry
+        // Cross-file lifetime of USER_PREDICATE entries (cycle 3b):
+        // USER_PREDICATE SetDef carries a Condition with ExprPtrs pointing
+        // into THIS (parent) system's arena. Parent owns the sub via
+        // `sub_systems` shared_ptr, so the parent arena outlives any sub
+        // reference. `load_sub_system` returns `FormulaSystem&` (not
+        // `shared_ptr<FormulaSystem>`) — the API does not let the caller
+        // extend a sub beyond parent lifetime, so the borrow is safe.
+        // PARKED Future #87: if the API ever exposes shared_ptr<FormulaSystem>
+        // or sub-system cache eviction lands, USER_PREDICATE entries must
+        // either be re-bound to sub's arena or deep-copied.
 
         // Try loading from file first; fall back to embedded definition
         if (!def_source) {
@@ -2977,7 +3069,9 @@ private:
                 sub->custom_functions_ = custom_functions_;
                 // gen-5 cycle 3a (D11): propagate type_map_ AND set_definitions_
                 // in BOTH branches — pre-existing auto-section gap closed in M1
-                // (type_map_) and M5 (set_definitions_).
+                // (type_map_) and M5 (set_definitions_). USER_PREDICATE arena-
+                // lifetime invariant from cycle 3b applies here too — see the
+                // matching note on the first propagation site above.
                 sub->type_map_ = type_map_;
                 sub->set_definitions_ = set_definitions_;
                 if (def_source)

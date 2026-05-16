@@ -1792,13 +1792,13 @@ struct Condition {
 //   only the value type widens. The `using DimName = std::string` typedef
 //   on FormulaSystem is the cycle-3c promotion hook.
 // `sets` holds BUILTIN_PREDICATE and (cycle 3b) USER_PREDICATE memberships
-//   by set name: "int", "real", "complex", "rational", and user-defined.
+//   by set name: "int", "real", "imaginary", "rational", and user-defined.
 //
 // Lives in expr.h (M3) so check_condition's is_in dispatch can see the full
 // shape; FormulaSystem owns the per-system map<string, BindingType> instance.
 struct BindingType {
     std::string dim;               // DimName = std::string in cycle 3a
-    std::set<std::string> sets;    // membership: {"int"}, {"complex"}, ...
+    std::set<std::string> sets;    // membership: {"int"}, {"imaginary"}, ...
 };
 
 // Named-set registry value type (gen-5 cycle 3a, 2026-05-15).
@@ -1811,11 +1811,23 @@ struct BindingType {
 // needs.
 struct SetDef {
     std::string name;
-    enum class Kind { BUILTIN_PREDICATE, DIM_SECTION, COUNT_ };
-    static_assert(static_cast<int>(Kind::COUNT_) == 2,
-                  "SetDef::Kind: cycle 3b/3d each bump this and update check_condition dispatch");
+    // Enum order: BUILTIN_PREDICATE=0, USER_PREDICATE=1, DIM_SECTION=2 — matches
+    // registration order (built-ins first via load_builtins(); then
+    // user-defined via register_predicate_section(); then dim sections via
+    // register_dim_section() in the pre-scan loop). Cycle 3d adds
+    // FUNCTION_SECTION as the next value.
+    enum class Kind { BUILTIN_PREDICATE, USER_PREDICATE, DIM_SECTION, COUNT_ };
+    static_assert(static_cast<int>(Kind::COUNT_) == 3,
+                  "SetDef::Kind: cycle 3b added USER_PREDICATE; update check_condition "
+                  "dispatch switch (expr.h) AND annotation-parse switch (system.h)");
     Kind kind = Kind::BUILTIN_PREDICATE;
     bool (*membership)(double v) = nullptr;  // BUILTIN_PREDICATE only
+    // USER_PREDICATE fields (cycle 3b, 2026-05-16). Empty/nullopt for other Kinds.
+    // `parameter` is the formal parameter name from `[name(param)]` header.
+    // `predicate` is the parsed iff-body Condition — evaluated with `parameter`
+    // temporarily bound to the queried expression's numeric value.
+    std::string parameter;
+    std::optional<Condition> predicate;
 };
 
 // Solver context bundle (gen-5 cycle 3a) — replaces the cycle-2
@@ -1854,20 +1866,31 @@ inline const SimplifyContext*& simplify_set_ctx_() {
             const std::string& name = c.lhs->name;
             if (!expr_bindings) return false;
             // is_in(v, set_name) — unified named-set membership predicate
-            // (gen-5 cycle 3a). 4 cooperating locations:
+            // (gen-5 cycle 3a, extended cycle 3b). 7 cooperating locations:
             //   1. Parse-time rewrite (system.h::parse_condition):
             //      is_int(n) → is_in(n, int) and is_in_dimension(n, m) →
             //      is_in(n, m). is_predicate_clause and this dispatcher only
             //      recognize is_in (and is_neg_num, the literal-shape
             //      predicate that does not fit the membership pattern).
-            //   2. Registry populated (system.h::load_builtins for built-ins,
-            //      system.h::register_dim_section for DIM_SECTION).
-            //   3. Transport (this file): const SimplifyContext* via
+            //   2. Registry populated: system.h::load_builtins (built-ins),
+            //      system.h::register_dim_section (DIM_SECTION), and
+            //      system.h::register_predicate_section (USER_PREDICATE —
+            //      cycle 3b).
+            //   3. Section disambiguation (system.h): is_dimension_section
+            //      vs is_predicate_section by section header shape.
+            //   4. Two-pass load_with_sections (system.h): dim sections
+            //      first, predicate sections second — atom availability
+            //      ordering.
+            //   5. Transport (this file): const SimplifyContext* via
             //      thread-local simplify_set_ctx_(), set by RewriteRulesGuard
             //      (3 sites in system.h).
-            //   4. Dispatch (this block): kind-based — BUILTIN_PREDICATE
+            //   6. Dispatch (this block): kind-based — BUILTIN_PREDICATE
             //      projects via evaluate(); DIM_SECTION compares
-            //      type_map[var].dim to set_name.
+            //      type_map[var].dim to set_name; USER_PREDICATE evaluates
+            //      stored Condition with parameter bound (cycle 3b).
+            //   7. Recursion guard: thread-local evaluating_predicates_
+            //      keyed on set_name; blocks self-recursion AND chains
+            //      (fail-safe for 3b).
             if (name == "is_in") {
                 if (c.lhs->args.size() != 2) return false;
                 if (!is_var(c.lhs->args[0]) || !is_var(c.lhs->args[1])) return false;
@@ -1888,12 +1911,67 @@ inline const SimplifyContext*& simplify_set_ctx_() {
                         //
                         // value_or_nan() — not value() — is the deliberate
                         // boundary escape here. NaN is meaningful for the
-                        // `complex` built-in (cycle 2 invariant: the `i`
-                        // binding uses NaN as a complex-unit sentinel), and
-                        // the membership predicate may legitimately want to
-                        // accept NaN. The membership fn itself decides.
+                        // `imaginary` built-in (cycle 2 invariant: the `i`
+                        // binding uses NaN as an imaginary-unit sentinel),
+                        // and the membership predicate may legitimately want
+                        // to accept NaN. The membership fn itself decides.
                         auto val = evaluate(*bind_it->second);
                         return sdef.membership && sdef.membership(val.value_or_nan());
+                    }
+                    case SetDef::Kind::USER_PREDICATE: {
+                        // Cycle 3b: USER_PREDICATE dispatch. Project the
+                        // bound expression to double via evaluate(), insert
+                        // the predicate's formal parameter into the caller's
+                        // `bindings` map with RAII restoration, and
+                        // recursively evaluate the stored Condition.
+                        if (!sdef.predicate.has_value() || sdef.parameter.empty())
+                            return false;
+                        auto val = evaluate(*bind_it->second);
+                        if (!val) return false;
+                        // Recursion guard — thread-local set keyed on set
+                        // name only. Conservative: blocks `foo(1) → foo(2)`
+                        // chains too. Fail-safe for cycle 3b; full
+                        // value-aware guard parked (Future #86).
+                        static thread_local std::set<std::string> evaluating_predicates_;
+                        if (evaluating_predicates_.count(set_name)) return false;
+                        evaluating_predicates_.insert(set_name);
+                        struct PredGuard {
+                            std::set<std::string>& s;
+                            std::string k;
+                            ~PredGuard() { s.erase(k); }
+                        } _pg{evaluating_predicates_, set_name};
+                        // D6 SIMPLIFY: insert-then-erase on caller's
+                        // bindings map with RAII restoration (saves a full
+                        // map copy per dispatch). `const_cast` is safe here:
+                        // no call site stores a truly-const bindings map
+                        // (grep-verified 2026-05-16). If a future caller
+                        // does, drop `const` from the signature instead.
+                        auto& mut_bindings =
+                            const_cast<std::map<std::string, double>&>(bindings);
+                        // val verified non-empty above (`if (!val) return false`);
+                        // use .value() per the convention (.value_or_nan() is the
+                        // boundary-escape for genuinely-might-be-NaN cases).
+                        const double v = val.value();
+                        auto [it, inserted] = mut_bindings.try_emplace(sdef.parameter, v);
+                        double old_val = 0.0;
+                        if (!inserted) { old_val = it->second; it->second = v; }
+                        struct BindingRestore {
+                            std::map<std::string, double>& m;
+                            std::string k;
+                            double v;
+                            bool restore;
+                            ~BindingRestore() {
+                                if (restore) m[k] = v;
+                                else m.erase(k);
+                            }
+                        } _br{mut_bindings, sdef.parameter, old_val, !inserted};
+                        // Build a fresh expr_bindings binding parameter →
+                        // bound ExprPtr, so a nested `is_in(param, ...)`
+                        // inside the predicate body finds the queried expr.
+                        std::map<std::string, ExprPtr> pred_eb;
+                        pred_eb[sdef.parameter] = bind_it->second;
+                        return check_condition(sdef.predicate.value(),
+                                               bindings, &pred_eb, set_ctx);
                     }
                     case SetDef::Kind::DIM_SECTION: {
                         if (!is_var(bind_it->second)) return false;
