@@ -575,7 +575,13 @@ public:
                 // user-facing fatal conditions whose diagnostic is the entire
                 // point. See parser.h RaggedMatrixError / BindingAnnotationError
                 // for the convention.
-                trace.step("  warning: skipping line " + std::to_string(line_num) + ": " + e.what());
+                //
+                // gen-5 cycle 3i (Fix W): include the line content alongside
+                // the line number so `--steps` traces let users/LLMs see what
+                // was discarded (Future #95 surface-gap PARKED — the named-arg
+                // call to an unknown formula section is one common cause).
+                trace.step("  warning: skipping line " + std::to_string(line_num)
+                           + " '" + line + "': " + e.what());
             }
         }
     }
@@ -1143,26 +1149,51 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // reverse-solve (the ExistenceChecker callback `is_in(N, fibonacci)`
         // would never fire the numeric scan that proves N is in the sequence).
         copy_metadata_to_sub(*sub);
-        sub->load_lines(body_lines);
-        // gen-5 cycle 3g (2026-05-16): enable recursive bodies. Lazy timing
-        // (post-load_lines) avoids cycle-3d's load-time stack overflow —
-        // load_lines doesn't call load_sub_system, so the body's recursive
-        // FUNC_CALLs stay unresolved at parse time and resolve via
-        // load_sub_system's self_name_ short-circuit at solve time.
-        sub->self_name_ = s.name;
-        // Populate sub.sections_ with this section so extract_positional_calls
-        // can find positional metadata when reverse-resolving cross-section
-        // calls (e.g. inside the body, references to OTHER function sections
-        // need the sections_ table to bind positional args correctly).
-        sub->sections_.push_back(s);
-        // Serialize the full header (with arg + return_var) and body into
-        // custom_function_defs_ so a later load_sub_system call finds the
-        // inline definition.
+        // Serialize the full header (with arg + return_var) and body into the
+        // sub's custom_function_defs_ so a later load_sub_system call on the
+        // sub finds the inline definition (defensive — self_name_ short-circuit
+        // primarily fires first, but matches what load_with_sections would
+        // have populated on a normally-loaded sub).
         std::ostringstream oss;
         oss << "[" << s.name << "(" << s.positional_args[0]
             << ") -> " << s.return_var << "]\n";
         for (const auto& line : s.lines) oss << line << "\n";
+        sub->custom_function_defs_[s.name] = oss.str();
+        // gen-5 cycle 3i: enable extract_formula_calls' named-arg branch to
+        // find return_var DURING sub->load_lines below. self_name_ +
+        // sections_.push_back must happen pre-load_lines so the in-body
+        // call site `fibonacci(n=n-1)` resolves via the self-reference
+        // short-circuit at parse time (load_sub_system returns *sub directly,
+        // then return_var is read from sub.sections_[0]).
+        //
+        // Cycle-3g comment (preserved for context): lazy post-load_lines
+        // timing was originally chosen to avoid cycle-3d's load-time stack
+        // overflow. That overflow lived in the PARENT system's
+        // resolve_positional_calls running inside load_with_sections, not in
+        // the sub's load_lines — load_lines → parse_line → extract_formula_calls
+        // → self->load_sub_system on the SUB hits the self_name_ short-circuit
+        // and returns immediately (no recursion). The cycle-3d guard remains
+        // load-bearing in load_with_sections; this pre-cache path is safe.
+        sub->self_name_ = s.name;
+        // Populate sub.sections_ with this section so extract_positional_calls
+        // and extract_formula_calls' named-arg branch can find positional
+        // metadata / return_var when reverse-resolving cross-section calls.
+        sub->sections_.push_back(s);
+        sub->load_lines(body_lines);
+        // Parent's custom_function_defs_ entry — needs to be after load_lines
+        // only by convention (the actual data is identical to sub's copy
+        // above). Keeping the pair adjacent preserves the historical comment
+        // attribution.
         custom_function_defs_[s.name] = oss.str();
+        // gen-5 cycle 3i (Fix Z, closes Future #91 positional-body gap):
+        // resolve_positional_calls converts direct-body positional recursive
+        // forms like `result = fibonacci(n-1) + fibonacci(n-2)` into
+        // FormulaCall entries at load time. The normal load path runs this
+        // from load_with_sections (line ~1236); the pre-cache path silently
+        // skipped it. Same shape of substrate gap as cycle 3h Fix A's
+        // copy_metadata_to_sub — see Future #96 PARKED for the consolidation
+        // trigger (third such pass = extract finalize_sub_after_load_lines).
+        sub->resolve_positional_calls();
         // Pre-cache the parsed sub so load_sub_system's first lookup returns
         // it immediately.
         //
@@ -2813,21 +2844,95 @@ public:
             }
         }
 
-        if (call.query_var.empty())
-            throw std::runtime_error("Formula call '" + call.file_stem + "' has no query variable (use var=?)");
+        // gen-5 cycle 3i (Fix Y, closes Future #91): no-`?` call sites are now
+        // legal — extract_formula_calls' unified outer loop dispatches the
+        // named-arg-only flavor (`func(a=expr, b=expr)` in arithmetic context)
+        // separately. parse_call_args returns the populated bindings; the
+        // caller assigns a synthetic output_var and looks up the sub's
+        // return_var for the query_var. Hard throw on empty query_var was
+        // structurally a duplication smell — the caller now handles both
+        // flavors. See extract_formula_calls' main loop below.
+        return call;
+    }
 
+    // Scan tok[from, to) for EQUALS at paren/bracket depth == 0 relative to
+    // `from`. Bracket-symmetric (LBRACKET/RBRACKET tracked alongside paren) so
+    // a binding like `f(v=[1, 2, 3])` does not see the `[` as opening a depth
+    // level that would mask its inner contents. Mirrors the depth-tracking
+    // pattern used by parse_call_args' binding sub-loop (system.h:2791-2798).
+    [[nodiscard]] static bool has_named_eq_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
+        int pd = 0;
+        // justified: token-cursor with paren-depth state — std::any_of would not carry the depth across iterations
+        for (size_t k = from; k < to; k++) {
+            // cppcheck-suppress useStlAlgorithm
+            if (tok[k].type == TokenType::LPAREN) pd++;
+            else if (tok[k].type == TokenType::RPAREN) pd--;
+            else if (tok[k].type == TokenType::LBRACKET) pd++;
+            else if (tok[k].type == TokenType::RBRACKET) pd--;
+            else if (tok[k].type == TokenType::EQUALS && pd == 0) return true;
+        }
+        return false;
+    }
+
+    // Try to extract a named-arg-only formula call at tok[name_pos..rparen_pos].
+    // Returns std::nullopt to signal "fall through — let the parser handle the
+    // tokens as written"; returns the constructed FormulaCall otherwise. Hoisted
+    // out of `extract_formula_calls`'s main loop to keep that loop's stack frame
+    // small — the named-arg branch allocates a try/catch + std::string locals
+    // that would otherwise live in the loop's frame even on the common non-entry
+    // path. parse_line is called once per equation but the binary's TEST mode
+    // runs ~thousands of equations through this routine; trimming the loop frame
+    // matters under -fsanitize=address where each frame inflates 4×.
+    [[nodiscard]] static std::optional<FormulaCall>
+    try_extract_named_call(const std::vector<Token>& tok, size_t name_pos, size_t rparen_pos,
+                           FormulaSystem& self) {
+        const std::string& name = tok[name_pos].text;
+        if (builtin_functions().count(name) || self.custom_functions_.count(name))
+            return std::nullopt;
+
+        std::string return_var;
+        try {
+            auto& sub = self.load_sub_system(name);
+            for (const auto& sec : sub.sections_) {
+                // cppcheck-suppress useStlAlgorithm
+                if (!sec.return_var.empty()) { return_var = sec.return_var; break; }
+            }
+        } catch (const std::runtime_error&) {
+            return std::nullopt;
+        }
+        if (return_var.empty()) return std::nullopt;
+
+        // gen-5 cycle 3i (reviewer Issue 1): parse_call_args can throw via Parser
+        // on lexer-ambiguous shapes like `f(a==0)` where the leading `=` of `==`
+        // is consumed as a binding separator and the inner Parser sees an
+        // unexpected `=`. Treat any parse failure as a fall-through (returns
+        // nullopt so the outer loop pushes tokens verbatim and the parser will
+        // throw with Fix W's enhanced warning). Mirrors the load_sub_system catch
+        // above — `try_extract_named_call`'s contract is "nullopt on any reason
+        // to fall through; never throw."
+        FormulaCall call;
+        try {
+            call = parse_call_args(tok, name_pos, rparen_pos);
+        } catch (const std::runtime_error&) {
+            return std::nullopt;
+        }
+        call.query_var = return_var;
+        call.output_var = "_fc" + std::to_string(self.next_call_id_++);
         return call;
     }
 
     static std::pair<std::vector<Token>, std::vector<FormulaCall>>
-    extract_formula_calls(const std::vector<Token>& tok) {
-        // Quick check: any QUESTION inside parens?
+    extract_formula_calls(const std::vector<Token>& tok, FormulaSystem* self = nullptr) {
+        // Quick check: any QUESTION inside parens? Or (gen-5 cycle 3i, Fix Y) any
+        // EQUALS at paren-depth 1 when we have a `self` to dispatch the named-arg
+        // branch through. CLI path (`self == nullptr`) keeps the `?`-only contract.
         int paren_depth = 0;
         bool has_call = false;
         for (const auto& t : tok) {
             if (t.type == TokenType::LPAREN) paren_depth++;
             else if (t.type == TokenType::RPAREN) paren_depth--;
             else if (t.type == TokenType::QUESTION && paren_depth > 0) { has_call = true; break; }
+            else if (self != nullptr && t.type == TokenType::EQUALS && paren_depth > 0) { has_call = true; break; }
         }
         if (!has_call) return {tok, {}};
 
@@ -2858,6 +2963,22 @@ public:
                     result.push_back(Token{TokenType::IDENT, call.output_var, 0});
                     i = rparen + 1;
                     continue;
+                }
+                // gen-5 cycle 3i (Fix Y, closes Future #91): no-? named-arg form.
+                // Dispatch via try_extract_named_call which handles
+                // builtin/custom_functions_ skip, load_sub_system try/catch
+                // fallback, return_var lookup, and synthetic output_var
+                // generation. Falls through (push token as-is) on any rejection
+                // so the parser can try its luck (and Fix W's enhanced warning
+                // will name the line if the parser also fails).
+                if (rparen != std::string::npos && self != nullptr
+                    && has_named_eq_in_range(tok, i + 2, rparen)) {
+                    if (auto opt_call = try_extract_named_call(tok, i, rparen, *self)) {
+                        calls.push_back(*opt_call);
+                        result.push_back(Token{TokenType::IDENT, opt_call->output_var, 0});
+                        i = rparen + 1;
+                        continue;
+                    }
                 }
             }
             result.push_back(tok[i]);
@@ -3083,8 +3204,11 @@ private:
         auto tok = Lexer(eq_part).tokenize();
         if (tok.size() < 2) return;
 
-        // Extract formula calls before expression parsing
-        auto [mod_tok, calls] = extract_formula_calls(tok);
+        // Extract formula calls before expression parsing. Pass `this` so the
+        // named-arg flavor (cycle 3i, Future #91 — `func(name=expr)` in
+        // arithmetic position with no `?`) fires; CLI consumer at
+        // parse_cli_query passes nullptr and gets `?`-only behavior.
+        auto [mod_tok, calls] = extract_formula_calls(tok, this);
         // not std::transform: move-append into a different container; std::move_iterator is less readable here
         // cppcheck-suppress useStlAlgorithm
         for (auto& c : calls) formula_calls.push_back(std::move(c));

@@ -977,25 +977,37 @@ prev2 = fibonacci(result=?prev2, n=n-2)
 result = prev1 + prev2 if n >= 2
 result = n if n <= 1
 ```
-Direct-body form (`result = fibonacci(n=n-1) + fibonacci(n=n-2)`) remains a PARSE ERROR — tracked by Future #91 (ergonomic completion, not load-bearing for the existential semantics).
+Direct-body form (`result = fibonacci(n=n-1) + fibonacci(n=n-2)`) was a PARSE ERROR at cycle 3h close; **superseded by cycle 3i (2026-05-17)** — both named-arg and positional direct-body forms now work (see Future #91 DONE). The helper-equation workaround above is no longer canonical; both forms are equivalent.
 
 **Scope limit known at close (Future #94 NEW PARKED)**: `is_in(6, factorial)` is structurally blocked by a separate solver-strategy-ordering issue (factorial's first body equation has `n` on the RHS alongside a formula-output, triggering an algebraic Strategy 2 candidate that blows the depth budget before Strategy 6 fires). Forward `factorial(3) = 6` works; reverse parks. Sentinel test asserts the forward direction.
 
 **Cycle 3g substrate that made cycle 3h possible**: M1 self_name_ field (enables forward recursive lookup), M2 try_formula resolve_memoized switch (prevents O(2^n) budget exhaustion on forward eval), M3-X currently_inverting guard (prevents the inverter cycle that self_name_ inadvertently exposed). These remain in place; cycle 3h fixes are layered on top.
 
-## 91. Named-arg syntax in arithmetic expressions (`func(arg=value)` inside `+`/`-`/`*`/`/`) — PARKED
+## 91. Named-arg syntax in arithmetic expressions (`func(arg=value)` inside `+`/`-`/`*`/`/`) — DONE (gen-5 cycle 3i 2026-05-17)
 
-**Surfaced gen-5 cycle 3g (2026-05-16, implementer architecture-emergent #2)** during M3 fibonacci test attempt.
+**Surfaced gen-5 cycle 3g (2026-05-16, implementer architecture-emergent #2)** during M3 fibonacci test attempt; closed in cycle 3i via two coordinated fixes plus a trace-quality improvement.
 
-**Today**: the parser accepts `func(arg=value)` (named-arg form) ONLY when the call appears as a top-level binding RHS or returns via `?`-query. Inside arithmetic expressions (e.g. `result = func(arg=value) + 1`), the parser hits the `=` token unexpectedly and fails.
+**Cycle 3i close (2026-05-17)**:
 
-**Concrete failure case**: the design's suggested fibonacci body line `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2` cannot be loaded. Workaround: split into helper equations.
+1. **Fix Y — UNIFIED `extract_formula_calls`**: rather than spawn a parallel `extract_named_calls_no_query` function (planner's original proposal), the cycle 3i critic+visionary trio recommended unifying the two extraction paths. `extract_formula_calls` is now a non-static member that accepts an optional `FormulaSystem* self`; when provided, it handles BOTH `?`-form calls (existing path, unchanged) AND no-`?` named-arg calls (new path). The named-arg dispatch is hoisted into a `try_extract_named_call` helper for stack-frame economy. `parse_call_args` hard throw on empty `query_var` removed — callers now decide which flavor they got. **Net delta**: +30 LOC across helpers + main loop, vs the planner's +95 LOC duplicate path. Replaced an asymmetric pair (`extract_query_calls` and a would-be `extract_value_calls`) with one general primitive.
+2. **Fix Z — `register_function_section` calls `resolve_positional_calls` on the pre-cached sub**: closes the parallel positional-form gap. Pre-cycle-3i, direct-body positional recursion like `result = fibonacci(n-1) + fibonacci(n-2)` parsed cleanly but never extracted the recursive calls into `FormulaCall` entries — solver then NaN'd. Same shape of substrate gap as cycle 3h Fix A (`copy_metadata_to_sub`) — see Future #96 PARKED for the consolidation trigger.
+3. **Fix W — `load_lines` parse-error trace warning includes line content**: previously the catch emitted only "warning: skipping line ..." without the offending text; LLM consumers reading `--steps` output had no signal about which line vanished. Now: "warning: skipping malformed line in <source>: <line>: <parser-error>". Trace-only (not stderr) per visionary's LLM-consumer-debuggability rubric.
 
-**Why this matters**: recursive sequence definitions (fibonacci, factorial, primes, anything with `func(...) op func(...)` body pattern) cannot use the natural body shape. Each recurrence requires N helper equations.
+**Direct body forms now both work** (cycle-3g's helper-equation pattern is no longer canonical — both are equivalent):
 
-**Reopen trigger** (updated cycle 3h 2026-05-16): now load-bearing for #90 ergonomic completion. Future #90 closed with the helper-equation body as the canonical form; #91 is what would let users write the direct body form `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2`. Also: (a) stdlib author writes a recurrence and reports the parse error as surprising; (b) LLM benchmark surfaces it.
+```fw
+[fibonacci(n) -> result]
+result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2     # named-arg form (Fix Y)
+result = n if n <= 1
 
-**Possible fixes**: (a) lift named-arg parsing into expression context (`primary()` recognizes `IDENT LPAREN IDENT EQUALS ...` as named-arg call); (b) require positional-arg form in expressions (`fibonacci(n-1)` instead of `fibonacci(n=n-1)`) — this works today IF positional args are recognized for the existing function-call; need to verify; (c) document the helper-equation workaround as the canonical pattern.
+[fibonacci(n) -> result]
+result = fibonacci(n-1) + fibonacci(n-2) if n >= 2          # positional form (Fix Z)
+result = n if n <= 1
+```
+
+**Tests**: 3i C1/C2 BLOCKING (is_in reverse for named-arg + positional forms), C3/C4 BLOCKING (forward eval for both forms), D1 DESIRABLE (multi-function arithmetic: `f(x=1) + g(y=2)`). All pass.
+
+**Followups filed**: Future #95 (silent fall-through surface), Future #96 (substrate consolidation when third post-load pass is added).
 
 ## 92. Solver strategy ordering for self-referential FUNCTION_SECTION subs — DONE (gen-5 cycle 3h 2026-05-16)
 
@@ -1028,6 +1040,28 @@ Direct-body form (`result = fibonacci(n=n-1) + fibonacci(n=n-2)`) remains a PARS
 **Possible fixes**: (a) detect Strategy 2 candidates that require resolving a free variable equal to the formula's positional arg and demote them; (b) catch depth-budget exhaustion inside try_formula and continue to next candidate instead of propagating; (c) make Strategy 6 fire BEFORE Strategy 2 for self-referential FUNCTION_SECTION subs (the design path originally considered for #92, deferred because A+B+C closed fibonacci without it).
 
 **Reopen trigger**: (a) user reports `is_in(<value>, <recursive_function_section>)` returns false for a function whose body lacks a base case directly solvable for the parameter; (b) cycle that broadens recursive-sequence support beyond fibonacci-shape.
+
+## 95. Silent parse-error discard surface — `--steps` warning vs. stderr promotion — PARKED
+
+**Surfaced gen-5 cycle 3i (2026-05-17)** as a follow-up to Fix W's trace-warning addition.
+
+**Today**: `load_lines` per-line resilience swallows `runtime_error` from parser/extractor failures and emits a trace.step warning (post-Fix-W: with the offending line + parser error). The warning is visible via `--steps` but NOT via stderr — silently-discarded equations appear only as "Cannot solve for X" downstream with no surface hint that a body line was dropped.
+
+**Why parked, not promoted now**: stdlib loading involves intentional silent skips (dimension sections, predicate sections that the loader doesn't recognize until pass 2). Promoting to stderr would punish the common case with noise. Trace level is the right default; promotion is a per-line judgment that needs evidence.
+
+**Reopen trigger**: (a) stdlib author or LLM consumer reports the silent discard as surprising in a real debugging session; (b) a single test reproducer shows the discard cost wall-clock minutes of confusion that an stderr line would have prevented; (c) `--strict` mode is added (would promote ALL parser warnings to errors).
+
+**Possible fixes**: (a) promote the trace warning to a single stderr line per discarded equation (gated by `--strict` or `FWIZ_VERBOSE_PARSER`); (b) accumulate discards into a single summary line per load (`warning: N equations discarded in <source>`); (c) leave as trace-only.
+
+## 96. `register_function_section` post-load pass consolidation — extract `finalize_sub_after_load_lines(sub)` helper — PARKED
+
+**Surfaced gen-5 cycle 3i (2026-05-17)** via critic analysis of Fix Z as a second patch to the same substrate gap.
+
+**Today**: `register_function_section` (system.h:~1140) now contains TWO patches across two cycles to bring the pre-cached FUNCTION_SECTION sub up to parity with a normally-loaded sub: cycle 3h Fix A (`copy_metadata_to_sub`), cycle 3i Fix Z (`resolve_positional_calls`). The normal path runs these (plus `compute_rewrite_groups`, `resolve_diff_in_equations`, `resolve_integral_in_equations`) from `load_with_sections` (system.h:~1236) after a sub's `load_lines` completes. The pre-cache path silently bypasses all of them; each new post-load pass needs to be manually mirrored.
+
+**Why parked, not refactored now**: two patches is "queue it"; three is "ship it" per demand-pull abstraction. Reworking the post-load substrate now would couple a clean 2-LOC fix (Fix Z) to a multi-touchpoint refactor needing its own design round. The substrate shape isn't yet observed enough to design well.
+
+**Reopen trigger**: a THIRD post-load pass is added in `load_with_sections` that must also fire in `register_function_section`'s pre-cache path. Concretely: `git log -p src/system.h | grep -B 2 'finalize\|post-load\|load_with_sections' | grep '+' | grep -v '^+++ '` should reveal the next addition. When it does, extract `void finalize_sub_after_load_lines(FormulaSystem& sub)` from the inline block at `load_with_sections:~1236` and call it from both `load_with_sections` and `register_function_section`. Current count: 2 sites.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 

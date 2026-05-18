@@ -16970,9 +16970,120 @@ void test_gen5_cycle3g_recursive_function_sections() {
                "3h D3 sentinel: forward factorial(3) = 6 (reverse direction parked as Future #94)");
     }
 
-    // ---- M3 C1-C9 / D1: NOT SHIPPED — scope-exceeding discovery ----------
-    // (Cycle-3g state — superseded by cycle 3h C1/C2/C5 above. Comment kept
-    // as historical context for why the cycle-3g BLOCKING tests deferred.)
+    // ---- Cycle 3i: Fix Y (named-arg arithmetic) + Fix Z (positional in body) ----
+    // Fix Y: extract_formula_calls UNIFIED to handle both `?`-form and the
+    //        named-arg-no-`?` form. `func(name=expr)` in arithmetic position
+    //        now lowers to FormulaCall + Var(_fc<id>) via the same primitive
+    //        the `?`-form has always used. Closes Future #91 ergonomic gap.
+    // Fix Z: resolve_positional_calls() added to register_function_section
+    //        (system.h ~line 1167) so positional FUNC_CALL nodes in section
+    //        bodies (e.g. `fibonacci(n-1)`) resolve at load time. The normal
+    //        load path runs this from load_with_sections; the pre-cache path
+    //        had silently skipped it (sibling gap of cycle 3h Fix A).
+    // Both ship together — the direct fibonacci body (named-arg or positional)
+    // now reverse-solves under is_in dispatch AND forward-solves cleanly.
+
+    // BLOCKING C1: is_in(8, fibonacci) → true via DIRECT named-arg body (Fix Y).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, fibonacci)\n"
+            "[fibonacci(n) -> result]\n"
+            "result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3i-c1-fibonacci-named>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(8)}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "3i C1: is_in(8, fibonacci) == true via DIRECT named-arg body (Fix Y)");
+    }
+
+    // BLOCKING C2: is_in(8, fibonacci) → true via DIRECT positional body (Fix Z).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "p + q = undefined iff is_in(p, fibonacci)\n"
+            "[fibonacci(n) -> result]\n"
+            "result = fibonacci(n-1) + fibonacci(n-2) if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3i-c2-fibonacci-positional>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        const SimplifyContext ctx{&sys.type_map_, &sys.set_definitions_};
+        const FormulaSystem::ExistenceCheckerGuard ec_guard(
+            [&sys](const std::string& set_name, double v) -> bool {
+                return sys.exists_for_function_section(set_name, v);
+            });
+        std::map<std::string, ExprPtr> eb{{"p", Expr::Num(8)}};
+        ASSERT(check_condition(cond, {}, &eb, &ctx),
+               "3i C2: is_in(8, fibonacci) == true via DIRECT positional body (Fix Z)");
+    }
+
+    // BLOCKING C3: forward fibonacci(6) → 8 via DIRECT named-arg body (Fix Y).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "[fibonacci(n) -> result]\n"
+            "result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3i-c3-fibonacci-named-fwd>");
+        const auto& sub = *sys.sub_systems.at("@def:fibonacci");
+        const double r = sub.resolve("result", {{"n", 6.0}});
+        ASSERT(std::abs(r - 8.0) < 1e-9,
+               "3i C3: fibonacci(6) = 8 via DIRECT named-arg body (Fix Y)");
+    }
+
+    // BLOCKING C4: forward fibonacci(6) → 8 via DIRECT positional body (Fix Z).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string(
+            "[fibonacci(n) -> result]\n"
+            "result = fibonacci(n-1) + fibonacci(n-2) if n >= 2\n"
+            "result = n if n <= 1\n",
+            "<3i-c4-fibonacci-positional-fwd>");
+        const auto& sub = *sys.sub_systems.at("@def:fibonacci");
+        const double r = sub.resolve("result", {{"n", 6.0}});
+        ASSERT(std::abs(r - 8.0) < 1e-9,
+               "3i C4: fibonacci(6) = 8 via DIRECT positional body (Fix Z)");
+    }
+
+    // DESIRABLE D1: two DIFFERENT named-arg calls in one arithmetic expression.
+    // Verifies Fix Y's named-arg flavor handles multiple distinct function
+    // names per equation, not just self-recursive cases.
+    //   double_it(n) = 2*n, increment(n) = n+1.
+    //   combined = double_it(n=3) + increment(n=4) = 6 + 5 = 11.
+    // Top-level equation BEFORE section headers — split_sections puts any
+    // line after a section header into that section, so a free top-level
+    // equation must come first. (Pre-existing language quirk; not Fix Y
+    // specific.)
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "combined = double_it(n=3) + increment(n=4)\n"
+            "[double_it(n) -> result] = 2 * n\n"
+            "[increment(n) -> result] = n + 1\n",
+            "<3i-d1-two-named-calls>");
+        const double r = sys.resolve("combined", {});
+        ASSERT(std::abs(r - 11.0) < 1e-9,
+               "3i D1: combined = double_it(n=3) + increment(n=4) = 6+5 = 11 (Fix Y multi-func)");
+    }
+
+    // ---- M3 C1-C9 / D1: NOT SHIPPED — historical context for cycle-3g state ----
+    // Cycle 3i ships the direct-body forms via Fix Y (named-arg in arithmetic)
+    // + Fix Z (positional-in-section-body). The comment block below describes
+    // why these tests deferred from cycle 3g (substrate not yet in place) and
+    // is kept as historical context for the cycle-3g → cycle-3h → cycle-3i arc.
+    // (Cycle-3g state — superseded by cycle 3h C1/C2/C5 and cycle 3i C1-C4
+    // above. Comment kept as historical context for why the cycle-3g
+    // BLOCKING tests deferred.)
     // The brief's primary cases (fibonacci is_in dispatch + forward fib(6))
     // cannot pass with the M1+M2+M3-X substrate as designed. STOPPED per
     // mid-GREEN protocol. Three obstacles discovered, all design-level:

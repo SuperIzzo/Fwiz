@@ -98,6 +98,8 @@ Expression bindings: `factorial(result=?prev, n=n-1)` — `n-1` evaluated in par
 
 Positional arguments: `sin(3)` maps to `sin(x=3, result=?)` using `[sin(x) -> result]` header metadata.
 
+**Direct-body recursive forms** (since gen-5 cycle 3i, 2026-05-17): both `result = fibonacci(n=n-1) + fibonacci(n=n-2) if n >= 2` (named-arg) and `result = fibonacci(n-1) + fibonacci(n-2) if n >= 2` (positional) parse and solve correctly inside function-section bodies. Pre-cycle-3i required a helper-equation workaround for both shapes. Engine: `extract_formula_calls` (system.h) is now unified for both `?`-form and no-`?` named-arg form (a non-static member accepting `FormulaSystem* self`); `register_function_section` calls `resolve_positional_calls` on the pre-cached sub to mirror `load_with_sections`'s post-load passes (Future #96 PARKED tracks consolidation when a third such pass is added).
+
 ### Sections and function definitions
 ```
 [square(x) -> result] = x^2                    # single-line with = sugar
