@@ -5562,6 +5562,37 @@ void test_recursion_depth_guard() {
             "mutual recursion: depth guard surfaces");
     }
 
+    // Future #98 (cycle 3k) — sibling-leak regression guard for the RAII
+    // visited-erase. `solve_recursive`/`try_resolve` now thread `visited` by
+    // reference (frame-shrink under ASan) with a destructor that erases the
+    // target on BOTH normal return and exception unwind. The unwind erase is
+    // load-bearing: try_resolve's catch (system.h:~4594) returns false and the
+    // candidate-enumeration loop then re-attempts the NEXT sibling candidate
+    // against the SAME (by-reference) visited set. If a failed sibling left its
+    // chain vars in `visited`, a later sibling that legitimately re-needs one of
+    // them would see a false-positive "Circular dependency". This system forces
+    // exactly that ordering: candidate-1 for `result` routes through `loopx`
+    // (a genuine circular pair loopx<->loopy that throws), candidate-2 resolves
+    // `result` directly. With a correct RAII erase the second candidate
+    // resolves; a naive end-of-function erase (skipped on the throw) would
+    // regress this to a false circular error. Passes under both the prior
+    // by-value semantics and the by-reference+RAII form — its job is to LOCK
+    // the invariant against a future regression of the erase.
+    {
+        write_fw("/tmp/trdg_sibling98.fw",
+            "result = loopx + 1\n"   // candidate-1: fails (circular through loopx)
+            "result = base + 100\n"  // candidate-2: must still resolve
+            "loopx = loopy\n"
+            "loopy = loopx\n"        // loopx<->loopy: genuine circular pair
+            "base = 5\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/trdg_sibling98.fw");
+        double r = sys.resolve("result", {});
+        ASSERT_NUM(r, 105,
+            "sibling-leak guard (#98): candidate-2 resolves after candidate-1's "
+            "circular sibling throws (RAII visited erase on unwind)");
+    }
+
     // Normal formula calls should still work (not falsely triggered)
     {
         write_fw("/tmp/trdg_rect.fw", "area = width * height\n");

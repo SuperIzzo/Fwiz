@@ -1631,7 +1631,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                     try {
                         auto b2 = bindings;
                         DeadEndSet de;
-                        const double val = solve_recursive(v, b2, {target}, 0, de);
+                        std::set<std::string> v0{target};
+                        const double val = solve_recursive(v, b2, v0, 0, de);
                         resolved = substitute(resolved, v, Expr::Num(val));
                     } catch (const std::runtime_error&) { return; }
                 }
@@ -2433,7 +2434,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             });
         if (auto it = prepared.find(target); it != prepared.end()) return it->second;
         DeadEndSet dead_ends; // Part A: per-top-level-query dead-end set
-        return solve_recursive(target, prepared, {}, 0, dead_ends);
+        std::set<std::string> v0;
+        return solve_recursive(target, prepared, v0, 0, dead_ends);
     }
 
     [[nodiscard]] ValueSet resolve_all(const std::string& target,
@@ -4160,7 +4162,7 @@ private:
             if (auto pit = prepared.find(target); pit != prepared.end())
                 result = pit->second;
             else {
-                std::set<std::string> const visited;
+                std::set<std::string> visited;
                 result = solve_recursive(target, prepared, visited, 0, *dead_ends);
             }
         } else {
@@ -4233,7 +4235,10 @@ private:
                     continue;
                 }
                 try {
-                    const auto& visited_copy = visited;
+                    // Deliberate copy (not a reference): this numeric-probe side
+                    // channel needs visit-isolation from the parent path, so it must
+                    // NOT share solve_recursive's by-ref visited set (cycle 3k).
+                    std::set<std::string> visited_copy = visited;
                     const double val = solve_recursive(v, bindings, visited_copy, depth + 1, dead_ends);
                     expr = substitute(expr, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
@@ -4362,7 +4367,7 @@ private:
 
     [[nodiscard]] double solve_recursive(const std::string& target,
                            std::map<std::string, double>& bindings,
-                           std::set<std::string> visited, int depth,
+                           std::set<std::string>& visited, int depth,
                            DeadEndSet& dead_ends) const {
         if (auto it = bindings.find(target); it != bindings.end()) {
             trace.calc("known: " + target + " = " + fmt_trace(it->second, nullptr, target), depth + 1);
@@ -4383,6 +4388,16 @@ private:
         if (dead_ends.count(dead_key))
             throw std::runtime_error("Cannot solve for '" + target + "'");
         visited.insert(target);
+        // RAII: erase `target` on BOTH normal return and exception unwind so the
+        // by-reference `visited` always reflects the path-from-root, matching the
+        // prior by-value isolation. Load-bearing for the catch-and-retry path in
+        // try_resolve (see Future #98 sibling-leak regression test). Placed after
+        // the early-throws above so cycle-detected / dead-end pre-insert exits are
+        // not covered (target was not inserted on those paths).
+        struct VisitedGuard {
+            std::set<std::string>& s; const std::string& t;
+            ~VisitedGuard() { s.erase(t); }
+        } const visited_guard{visited, target};
 
         bool found_eq = false;
         bool had_nan_inf = false;
@@ -4560,7 +4575,7 @@ private:
 
     [[nodiscard]] bool try_resolve(const ExprPtr& expr, const std::string& target,
                      std::map<std::string, double>& bindings,
-                     std::set<std::string> visited, int depth, // NOLINT(performance-unnecessary-value-param) — intentional copy per branch
+                     std::set<std::string>& visited, int depth,
                      bool& had_nan_inf, std::set<std::string>& missing,
                      DeadEndSet& dead_ends) const {
         enforce_solve_budget(); // Part C: insurance — should never trip given Part A

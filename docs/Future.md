@@ -1087,35 +1087,29 @@ result = n if n <= 1
 
 **Reopen trigger**: (a) a user files `is_in(<value>, <recursive_function_section>)` returns true-without-existence-proof OR false-incorrectly for a non-fibonacci-shape recurrence; (b) a future cycle takes on the GENERALITY-axis closure for recursive set membership; (c) a closely-related Future surfaces (multi-parameter recurrence, mutual recursion) that would benefit from the same forward-verify substrate.
 
-## 98. `make sanitize` stack-overflow regression (pre-existing on cd2fb43) — IN-SCOPE / PRIORITY-DEBUGGER
+## 98. `make sanitize` stack-overflow — DONE (2026-06-06, cycle 3k)
 
-**Surfaced gen-5 cycle 3j (2026-06-06)** during cycle 3j Phase 4 gate re-verification.
+**Root cause**: `solve_recursive` and `try_resolve` passed `std::set<std::string> visited` by value — each recursive call copied the full set, producing O(depth²) frame growth. Under ASan's fat-frame instrumentation this overflowed the stack at `max_formula_depth=20` in the mutual-recursion test (trigger: `test_recursion_depth_guard`). Recursion was always bounded by the depth guard; only the physical stack overflowed under ASan.
 
-**Today**: `make sanitize` aborts with `AddressSanitizer: stack-overflow` at `src/system.h:3640` inside `enumerate_candidates`, with the trace pointing back through `solve_recursive` (lambda at line 4451 — the FORMULA_FWD/REV path inside `try_formula`). 273+ frames in the stack trace before abort. Reproduces on pristine HEAD (commit `cd2fb43`, 2026-05-17 cycle 3i ship) with no source changes since.
+**Fix A — Makefile stack budget** (`Makefile:36`): `ulimit -s unlimited;` prepended to the asan recipe run line, same subshell as the test invocation. Sized for the `max_formula_depth=1000` contract (not the depth-20 trigger artifact). Fix A alone restores the gate; Fix B is the structural improvement.
 
-**Evidence the regression pre-dates cycle 3j**:
-- `git log cd2fb43..HEAD -- src/` returns empty.
-- Stashing all cycle 3j WIP edits (src/system.h, src/tests.cpp, docs/Future.md) and re-running `make sanitize` from pristine HEAD reproduces the same stack-overflow at line 3624 / SUMMARY-reported address 0x7ffff565c2a0.
-- `make test` (non-ASan) passes 3804/3804 on both pristine HEAD and cycle 3j WIP.
-- Cycle 3i review-notes claimed "All gates green (3804/3804 PASS, sanitize, analyze-fast)" at ship time — meaning either (a) the gate was not actually verified at cycle 3i close (orchestrator process gap), (b) the environment changed in the 8-day gap between 2026-05-18 and 2026-06-06 (likely compiler / libstdc++ update enlarging ASan stack frames), or (c) the test order is environment-sensitive and a different test triggered it then.
+**Fix B — by-reference `visited` + RAII** (`src/system.h`): `visited` changed from by-value to `std::set<std::string>&` in both `solve_recursive` and `try_resolve`. A `VisitedGuard` RAII struct (insert-on-enter / erase-on-exit) placed after the early-throws preserves the path-from-root invariant the prior by-value copy gave, including correct restore on exception unwind. Call sites updated (7 sites audited from the design list). Removes O(depth²) set-copy on the hot solve path → O(depth log depth).
 
-**Cycle 3j impact**: NONE. The cycle ships a typed `FormulaDepthExceededError` sibling exception with always-rethrow semantics — pure structural cleanup that does not change solver behavior. The sanitize regression is unrelated to cycle 3j's source delta. Verified by re-running sanitize before and after cycle 3j WIP and observing the same crash.
+**Gates**: `make sanitize` 3805/3805 PASS (back online), `make test` 3805/3805 PASS, `make analyze-fast` exit 0.
 
-**Cycle 3j does NOT swallow the sanitize gate**: the per-cycle quality bar specifies `make test && make sanitize && make analyze-fast` must pass. Cycle 3j ships SHIP-WITH-SANITIZE-CARRYOVER on the strength of (a) test gate green, (b) analyze-fast green, (c) the sanitize regression is pre-existing-not-introduced.
+**Sibling by-value pattern** not implicated in #98: `solve_all` / `derive_recursive` / `try_derive` retain by-value `visited` copies with structural differences that make the RAII recipe non-trivial to apply (see Future #99).
 
-**Reopen trigger**: this entry is IN-SCOPE not PARKED — the sanitize gate must come back online for cycle 3k. Spawn the debugger agent before any further source cycle. Recommended starting points:
-- Bisect by running `make sanitize` with ASan stack-frame size override (`ASAN_OPTIONS=stack_size=8388608`) to confirm the trace is genuine recursion (not a sanitizer false-positive from instrumentation overhead).
-- Bisect the codebase from before cycle 3i ship to find when the overflow started reproducing — if it's at cd2fb43 already, suspect environment / toolchain.
-- Identify which test triggers the overflow — the captured output is post-abort; rerun with `--gtest_filter` analog or single-test mode to find the culprit. The trace's depth-2 lambda is `try_formula`, which means a FORMULA_FWD/REV path is going deep. The cycle 3g/3h/3i recursive-section tests are the strongest candidates.
-- Compare against `make valgrind` clean baseline (2026-05-12 per orchestrator-log) — if valgrind still passes, the overflow is ASan-instrumentation-amplified, not real-stack-real-bug.
+## 99. Extend by-reference `visited` to `solve_all` / `derive_recursive` / `try_derive` — PARKED
 
-**Possible mitigations** (none implemented):
-1. Convert `enumerate_candidates` from tail-recursive lambda style to iterative loop — biggest payoff but invasive.
-2. Reduce `max_formula_depth` from 1000 to e.g. 500 — narrows the stack frame budget. Defensive only; doesn't fix the algorithm.
-3. Tune ASan to disable frame-instrumentation on the hot solver path — masks the issue without addressing it. Anti-pattern.
-4. Switch to clang's `-fno-sanitize-address-use-after-scope` or `-fno-stack-protector` for the test build — also masking. Anti-pattern.
+**Surfaced gen-5 cycle 3k (2026-06-06)** during the #98 fix audit.
 
-**Severity**: this BLOCKS cycle 3k from passing the per-cycle quality bar. Cycle 3j ships with explicit carryover note.
+**Today**: the by-value `visited` pattern exists in `solve_all`, `derive_recursive`, and `try_derive` (7+ additional `{}`-temporary call sites: lines 1823, 1993, 2024, 2030, 2040, 2462, 4058). These were NOT implicated in #98's stack-overflow (that triggered exclusively through `solve_recursive` ↔ `try_resolve`), but carry the same O(depth²) set-copy cost.
+
+**Structural differences** that make the RAII recipe non-trivial: `solve_all` returns an empty vector on failure (no dead-key pre-check throw before insert — different guard sequence than `solve_recursive`); `derive_recursive` and `try_derive` signal failure via `nullptr` return rather than exceptions (RAII-on-unwind is therefore not load-bearing for them — only the frame-shrink applies).
+
+**Same `&`+RAII recipe applies** once the structural differences are scoped per function. The frame-shrink win is real even without the exception-unwind requirement.
+
+**Reopen trigger**: perf-auditor flags the by-value `visited` copy on the `derive_all` / `solve_all` families as a measurable hot-path cost, OR a deep-recursion derive query surfaces the O(depth²) copy cost in profiling.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 

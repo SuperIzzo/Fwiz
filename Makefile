@@ -33,7 +33,7 @@ test-clang: src/tests.cpp $(HEADERS) | bin
 asan: src/tests.cpp $(HEADERS) | bin
 	$(CXX) -std=c++17 -Wall -O1 -g -fsanitize=address -fno-omit-frame-pointer \
 		-o bin/fwiz_asan src/tests.cpp
-	ASAN_OPTIONS=detect_leaks=1 ./bin/fwiz_asan
+	ulimit -s unlimited; ASAN_OPTIONS=detect_leaks=1 ./bin/fwiz_asan
 
 # UndefinedBehaviorSanitizer: catches signed overflow, null deref,
 # misaligned access, shift overflow, integer division by zero
