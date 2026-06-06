@@ -81,6 +81,19 @@ struct CrossFileResolutionCycleError : std::exception {
     [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
 };
 
+// Thrown when `formula_depth_` reaches `max_formula_depth`. Replaces the
+// stringly-typed `msg.find("depth") != std::string::npos` substring match
+// pre-cycle-3j at the two depth-aware catch sites in solve_recursive
+// (try_formula at ~4455, try_resolve at ~4577) — those sites need to detect
+// depth exhaustion to propagate it (rather than swallowing as a normal solve
+// failure). Behaviorally equivalent to the pre-cycle-3j substring match;
+// purely a structural-legibility cleanup. Derives from std::runtime_error
+// so callers that catch runtime_error still see the signal at outer layers.
+struct FormulaDepthExceededError : std::runtime_error {
+    FormulaDepthExceededError()
+        : std::runtime_error("Maximum formula call depth exceeded (possible infinite recursion)") {}
+};
+
 // ============================================================================
 //  CSE (common subexpression elimination) for --derive output (Option C)
 // ============================================================================
@@ -4385,7 +4398,7 @@ private:
                                const std::string& skip_var = "") -> bool {
             found_eq = true;
             if (formula_depth_ >= max_formula_depth)
-                throw std::runtime_error("Maximum formula call depth exceeded (possible infinite recursion)");
+                throw FormulaDepthExceededError();
             trace.step("formula call: " + call.file_stem + "(" + resolve_var + ")", depth + 1);
             try {
                 formula_depth_++;
@@ -4452,10 +4465,10 @@ private:
                 trace.step("  result: " + target + " = " + fmt_trace(result, sub_sym), depth + 1);
                 bindings[target] = result;
                 return true;
+            } catch (const FormulaDepthExceededError&) {
+                throw; // propagate depth guard (was stringly-typed `msg.find("depth")` pre-cycle-3j)
             } catch (const std::runtime_error& e) {
-                const std::string msg = e.what();
-                if (msg.find("depth") != std::string::npos) throw; // propagate depth guard
-                trace.step("  failed: " + msg, depth + 2);
+                trace.step("  failed: " + std::string(e.what()), depth + 2);
                 return false;
             }
         };
@@ -4575,8 +4588,10 @@ private:
                     trace.calc("substitute " + v + " = " + fmt_trace(val, nullptr, v), depth + 2);
                     resolved = substitute(resolved, v, Expr::Num(val));
                 } catch (const SolveBudgetExceededError&) { throw; }
-                catch (const std::runtime_error& e) {
-                    if (std::string(e.what()).find("depth") != std::string::npos) throw;
+                catch (const FormulaDepthExceededError&) {
+                    throw; // propagate depth guard (was stringly-typed `msg.find("depth")` pre-cycle-3j)
+                }
+                catch (const std::runtime_error&) {
                     missing.insert(v);
                     return false;
                 }

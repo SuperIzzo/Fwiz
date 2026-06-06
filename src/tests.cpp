@@ -5557,8 +5557,9 @@ void test_recursion_depth_guard() {
         sys.load_file("/tmp/trdg_a2.fw");
         auto msg = get_error([&]() { (void)sys.resolve("result", {{"n", 5}}); });
         ASSERT(!msg.empty(), "mutual recursion: throws");
-        ASSERT(msg.find("depth") != std::string::npos || msg.find("recursion") != std::string::npos,
-            "mutual recursion: mentions depth/recursion");
+        ASSERT(msg.find("depth") != std::string::npos
+                || msg.find("recursion") != std::string::npos,
+            "mutual recursion: depth guard surfaces");
     }
 
     // Normal formula calls should still work (not falsely triggered)
@@ -16969,6 +16970,18 @@ void test_gen5_cycle3g_recursive_function_sections() {
         ASSERT(std::abs(r - 6.0) < 1e-9,
                "3h D3 sentinel: forward factorial(3) = 6 (reverse direction parked as Future #94)");
     }
+
+    // Cycle 3j: typed FormulaDepthExceededError replaces stringly-typed depth
+    // re-throws at try_formula/try_resolve catch sites (sibling-exception
+    // family; structural legibility for LLM consumers). Pure refactor —
+    // always-rethrow semantics, zero behavioral change. The cycle attempted
+    // to also close Future #94 via a depth=0 swallow that lets Strategy 6
+    // (NUMERIC system-probe) get a turn — but the dry-run rule fired mid-
+    // implementation: the design's predicted execution path is NOT what fires
+    // in practice. The visited-set Circular guard intercepts at depth ~2,
+    // `check_condition` defaults unbound-clause to TRUE, Strategy 2 silently
+    // returns a coincidental wrong answer. Tracked at Future #97 with four
+    // candidate structural fixes. Future #94 remains PARKED.
 
     // ---- Cycle 3i: Fix Y (named-arg arithmetic) + Fix Z (positional in body) ----
     // Fix Y: extract_formula_calls UNIFIED to handle both `?`-form and the

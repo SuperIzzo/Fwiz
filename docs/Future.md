@@ -1033,13 +1033,15 @@ result = n if n <= 1
 
 **Surfaced gen-5 cycle 3h (2026-05-16)** during cycle 3h D3 attempt (`is_in(6, factorial)`).
 
-**Today**: fibonacci's reverse-solve works because its base-case equation `result = n if n <= 1` is directly solvable for `n` (Strategy 2 emits `n = result` with no recursion needed). Factorial's analogous base case is `result = 1 if n <= 0` — `n` does not appear in this equation at all. The only Strategy 2 candidate is from `result = n * prev if n >= 1`, which solves to `n = result / prev`; resolving `prev` recursively probes the FORMULA_FWD on `prev = factorial(...)`, which needs `n` to fill the `n=n-1` binding (circular, swallowed), leaving the binding blank, recursing into the function depth budget. Strategy 6 never gets a chance because the algebraic path blows the depth limit first.
+**Today**: fibonacci's reverse-solve works because its base-case equation `result = n if n <= 1` is directly solvable for `n` (Strategy 2 emits `n = result` with no recursion needed). Factorial's analogous base case is `result = 1 if n <= 0` — `n` does not appear in this equation at all. The only Strategy 2 candidate is from `result = n * prev if n >= 1`, which solves to `n = result / prev`; resolving `prev` recursively probes the FORMULA_FWD on `prev = factorial(...)`.
+
+**Cycle 3j discovery (2026-05-26)**: cycle 3j attempted closure via a depth-swallow at depth=0 (let Strategy 6 NUMERIC fire after Strategy 2 EXPR depth-exhausts). The fix was implemented cleanly as the typed `FormulaDepthExceededError` sibling exception — but the negative-case tests (`is_in(4, factorial) == false`, `is_in(7, factorial) == false`) FAILED, and the positive cases passed for the WRONG reason. The deeper structural blocker was discovered: the visited-set Circular guard fires before depth exhaustion, the `runtime_error` is silently caught in `prepare_sub_bindings`, `sub_binds` becomes empty, `sub.resolve("result", {})` succeeds via the base-case `result = 1 if n <= 0` because `check_condition` (`expr.h:~2104`) defaults clauses with unbound variables to TRUE, and Strategy 2 then computes `n = result / prev = X / 1 = X` — a coincidental wrong answer that round-trips false but is non-throwing. `exists_for_function_section` returns `true` for ALL inputs that survive the EXPR path. **Strategy 6 NUMERIC never gets a turn because Strategy 2 "succeeds".** See Future #97 for the deeper structural issue and cycle 3j's four candidate fixes.
 
 **Cycle 3h sentinel test**: forward `factorial(3) = 6` is asserted as confirmation that Fix A's settings propagation reaches the sub correctly; the reverse direction is documented in the test comment as the structural blocker.
 
-**Possible fixes**: (a) detect Strategy 2 candidates that require resolving a free variable equal to the formula's positional arg and demote them; (b) catch depth-budget exhaustion inside try_formula and continue to next candidate instead of propagating; (c) make Strategy 6 fire BEFORE Strategy 2 for self-referential FUNCTION_SECTION subs (the design path originally considered for #92, deferred because A+B+C closed fibonacci without it).
+**Possible fixes (cycle 3h original)**: (a) detect Strategy 2 candidates that require resolving a free variable equal to the formula's positional arg and demote them; (b) catch depth-budget exhaustion inside try_formula and continue to next candidate instead of propagating — **superseded by cycle 3j's typed exception, but does NOT close #94 because the actual blocker is the Circular-guard interception, not depth exhaustion**; (c) make Strategy 6 fire BEFORE Strategy 2 for self-referential FUNCTION_SECTION subs (the design path originally considered for #92, deferred because A+B+C closed fibonacci without it).
 
-**Reopen trigger**: (a) user reports `is_in(<value>, <recursive_function_section>)` returns false for a function whose body lacks a base case directly solvable for the parameter; (b) cycle that broadens recursive-sequence support beyond fibonacci-shape.
+**Reopen trigger**: (a) user reports `is_in(<value>, <recursive_function_section>)` returns true-without-existence-proof or false-incorrectly for a function whose body lacks a base case directly solvable for the parameter; (b) cycle that broadens recursive-sequence support beyond fibonacci-shape; (c) Future #97 ships a structural fix that makes the API-boundary forward-verify reliable.
 
 ## 95. Silent parse-error discard surface — `--steps` warning vs. stderr promotion — PARKED
 
@@ -1062,6 +1064,58 @@ result = n if n <= 1
 **Why parked, not refactored now**: two patches is "queue it"; three is "ship it" per demand-pull abstraction. Reworking the post-load substrate now would couple a clean 2-LOC fix (Fix Z) to a multi-touchpoint refactor needing its own design round. The substrate shape isn't yet observed enough to design well.
 
 **Reopen trigger**: a THIRD post-load pass is added in `load_with_sections` that must also fire in `register_function_section`'s pre-cache path. Concretely: `git log -p src/system.h | grep -B 2 'finalize\|post-load\|load_with_sections' | grep '+' | grep -v '^+++ '` should reveal the next addition. When it does, extract `void finalize_sub_after_load_lines(FormulaSystem& sub)` from the inline block at `load_with_sections:~1236` and call it from both `load_with_sections` and `register_function_section`. Current count: 2 sites.
+
+## 97. `exists_for_function_section` returns wrong-answer-coincidence for non-fibonacci-shape recurrences — PARKED
+
+**Surfaced gen-5 cycle 3j (2026-05-26)** mid-implementation via the dry-run rule. The cycle attempted to close Future #94 via a typed `FormulaDepthExceededError` sibling exception with depth=0 swallow semantics; the fix was implemented cleanly but failed to close #94 because the actual blocker is structurally distinct from depth exhaustion.
+
+**Today**: `exists_for_function_section(name, X)` calls `sub.resolve("n", {result: X})` and returns `true` iff the resolve does not throw. For factorial, triangular, pow2, fib3, and any other recurrence whose base case does NOT contain the parameter (`result = 1 if n <= 0` instead of `result = n if n <= 0`), Strategy 2 EXPR emits `n = result/prev` (or analogous), descends to resolve `prev`, hits the visited-set Circular guard at depth ~2 (the `runtime_error` thrown at `solve_recursive:~4380`), and `prepare_sub_bindings` silently catches it. `sub_binds` becomes empty. `sub.resolve("result", {})` then succeeds via the base-case clause because `check_condition` (`expr.h:~2104`) defaults clauses with unbound variables to TRUE — picks `result = 1 if n <= 0`, returns 1. Strategy 2 then computes `n = X / 1 = X`. Wrong answer; non-throwing. `exists_for_function_section` returns `true` for ALL inputs that survive this path.
+
+**Cycle 3j typed-exception refactor (shipped)**: replaces `msg.find("depth") != std::string::npos` stringly-typed match at `try_formula:~4455` and `try_resolve:~4577` with a typed catch on `FormulaDepthExceededError` (sibling, derives from `runtime_error`). Net structural-legibility improvement. Does NOT close #94, but does NOT regress either: the failure mode is unchanged at the API surface (cycle 3h's D3 sentinel `forward factorial(3) = 6` still passes; reverse-solve is still parked).
+
+**Four candidate fixes** (from cycle 3j implementer log AE-1, none implemented):
+
+1. **Forward-verify at API boundary**: `exists_for_function_section` runs `sub.resolve("n", {result: X})` to get candidate `n_val`, then runs `sub.resolve("result", {n: n_val})` to verify it matches `X`. ~5 LOC at one site. RISK: rejects the wrong-coincidence answer cleanly but does NOT find the right answer for positive cases — Strategy 6 NUMERIC still doesn't fire. Would need to be combined with retry-on-verify-fail (try alternate strategy candidates) or with Fix (4).
+
+2. **Tighten `check_condition` unknown-clause default**: clauses with unbound variables should NOT default to TRUE. Currently `clause_result = !val.has_value() || val.value();` at `expr.h:~2104`. RISK: this default is load-bearing for piecewise functions evaluated at parse-time / partial-binding; broad-impact change requiring its own design round.
+
+3. **Tighten `prepare_sub_bindings` empty-binding response**: when both the binding expression AND the bridge are unresolvable, refuse to invoke the sub at all. RISK: same as (2) — many legitimate FORMULA_FWD calls deliberately under-bind during exploration.
+
+4. **Strategy 6 NUMERIC before Strategy 2 EXPR for FUNCTION_SECTION queries**: re-order candidate emission so NUMERIC fires first when the target is the section's parameter and the binding is the return_var (a known integer-image existential query). Most direct. RISK: candidate ordering is global; re-ordering for one shape may slow others — requires careful test corpus audit.
+
+**Most likely path** (per cycle 3j orchestrator + implementer notes): combine **(1) + (4)** — Strategy 6 fires first for the existential-query shape; forward-verify at the API boundary as a defense in depth. ~30-50 LOC across `exists_for_function_section` + `enumerate_candidates` strategy ordering.
+
+**Reopen trigger**: (a) a user files `is_in(<value>, <recursive_function_section>)` returns true-without-existence-proof OR false-incorrectly for a non-fibonacci-shape recurrence; (b) a future cycle takes on the GENERALITY-axis closure for recursive set membership; (c) a closely-related Future surfaces (multi-parameter recurrence, mutual recursion) that would benefit from the same forward-verify substrate.
+
+## 98. `make sanitize` stack-overflow regression (pre-existing on cd2fb43) — IN-SCOPE / PRIORITY-DEBUGGER
+
+**Surfaced gen-5 cycle 3j (2026-06-06)** during cycle 3j Phase 4 gate re-verification.
+
+**Today**: `make sanitize` aborts with `AddressSanitizer: stack-overflow` at `src/system.h:3640` inside `enumerate_candidates`, with the trace pointing back through `solve_recursive` (lambda at line 4451 — the FORMULA_FWD/REV path inside `try_formula`). 273+ frames in the stack trace before abort. Reproduces on pristine HEAD (commit `cd2fb43`, 2026-05-17 cycle 3i ship) with no source changes since.
+
+**Evidence the regression pre-dates cycle 3j**:
+- `git log cd2fb43..HEAD -- src/` returns empty.
+- Stashing all cycle 3j WIP edits (src/system.h, src/tests.cpp, docs/Future.md) and re-running `make sanitize` from pristine HEAD reproduces the same stack-overflow at line 3624 / SUMMARY-reported address 0x7ffff565c2a0.
+- `make test` (non-ASan) passes 3804/3804 on both pristine HEAD and cycle 3j WIP.
+- Cycle 3i review-notes claimed "All gates green (3804/3804 PASS, sanitize, analyze-fast)" at ship time — meaning either (a) the gate was not actually verified at cycle 3i close (orchestrator process gap), (b) the environment changed in the 8-day gap between 2026-05-18 and 2026-06-06 (likely compiler / libstdc++ update enlarging ASan stack frames), or (c) the test order is environment-sensitive and a different test triggered it then.
+
+**Cycle 3j impact**: NONE. The cycle ships a typed `FormulaDepthExceededError` sibling exception with always-rethrow semantics — pure structural cleanup that does not change solver behavior. The sanitize regression is unrelated to cycle 3j's source delta. Verified by re-running sanitize before and after cycle 3j WIP and observing the same crash.
+
+**Cycle 3j does NOT swallow the sanitize gate**: the per-cycle quality bar specifies `make test && make sanitize && make analyze-fast` must pass. Cycle 3j ships SHIP-WITH-SANITIZE-CARRYOVER on the strength of (a) test gate green, (b) analyze-fast green, (c) the sanitize regression is pre-existing-not-introduced.
+
+**Reopen trigger**: this entry is IN-SCOPE not PARKED — the sanitize gate must come back online for cycle 3k. Spawn the debugger agent before any further source cycle. Recommended starting points:
+- Bisect by running `make sanitize` with ASan stack-frame size override (`ASAN_OPTIONS=stack_size=8388608`) to confirm the trace is genuine recursion (not a sanitizer false-positive from instrumentation overhead).
+- Bisect the codebase from before cycle 3i ship to find when the overflow started reproducing — if it's at cd2fb43 already, suspect environment / toolchain.
+- Identify which test triggers the overflow — the captured output is post-abort; rerun with `--gtest_filter` analog or single-test mode to find the culprit. The trace's depth-2 lambda is `try_formula`, which means a FORMULA_FWD/REV path is going deep. The cycle 3g/3h/3i recursive-section tests are the strongest candidates.
+- Compare against `make valgrind` clean baseline (2026-05-12 per orchestrator-log) — if valgrind still passes, the overflow is ASan-instrumentation-amplified, not real-stack-real-bug.
+
+**Possible mitigations** (none implemented):
+1. Convert `enumerate_candidates` from tail-recursive lambda style to iterative loop — biggest payoff but invasive.
+2. Reduce `max_formula_depth` from 1000 to e.g. 500 — narrows the stack frame budget. Defensive only; doesn't fix the algorithm.
+3. Tune ASan to disable frame-instrumentation on the hot solver path — masks the issue without addressing it. Anti-pattern.
+4. Switch to clang's `-fno-sanitize-address-use-after-scope` or `-fno-stack-protector` for the test build — also masking. Anti-pattern.
+
+**Severity**: this BLOCKS cycle 3k from passing the per-cycle quality bar. Cycle 3j ships with explicit carryover note.
 
 ## 81. Named compound-dimension aliases (`[speed] := length/time`) — PARKED
 
