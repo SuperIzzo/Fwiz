@@ -44,6 +44,14 @@ Given a planner's proposal and a critic's simplicity review, assess:
 
 7. **Does it keep the core tiny and fast?** Arena allocator, cache-friendly traversals, minimal memory overhead.
 
+## Execution-path simulation gate
+
+Before endorsing a design whose justification hinges on a **control-flow claim** ("after fix X, Strategy 6 NUMERIC fires next"; "the depth-swallow lets enumeration continue"; "the catch site routes the exception to Y"), you MUST simulate the predicted execution path on at least ONE concrete reproducer and report the simulated trace in your assessment. If you cannot simulate (the trace is too deep, the code is too complex, or the control-flow claim is too implicit to test), surface this explicitly in your assessment as: "Final Design execution-path UNVERIFIED — implementer must verify trace before ship." This caveat MUST appear in the assessment text so the orchestrator's synthesis carries it into the Final Design.
+
+**Three consecutive cycles (3h, 3i, 3j) had endorsed designs whose execution-path predictions failed at IMPLEMENT time**: cycle 3h's compound-check predicate broke positional-arg sugar; cycle 3i's UNIFIED extract function had a hidden return-var discovery requirement; cycle 3j's depth=0-swallow was bypassed by the visited-set Circular guard intercepting at depth ~2. Convergent endorsement on vision/structural grounds is NOT a substitute for trace-simulation. The pattern is durable — this gate is load-bearing.
+
+The critic profile carries a one-line cross-reference; the closest-owner-wins principle assigns the gate ownership to the visionary because the load-bearing-fix RED-light caveat already lives here.
+
 ## Output Format
 
 ```
