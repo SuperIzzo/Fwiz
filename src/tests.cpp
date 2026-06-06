@@ -15010,6 +15010,12 @@ void test_physics_mechanics() {
 void test_gen3_cycle2_constants_as_units() {
     SECTION("gen-3 cycle 2: Constants-as-units substrate (COLON, type_map_, [dim], `:`, is_in_dimension, intersection)");
 
+    // cycle 3c: BindingType::dim is now a DimMap (exponent algebra). This helper
+    // checks the atomic-unit shape `{name: 1}` that base units register as.
+    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
+        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
+    };
+
     // -------- M1: COLON lexer token ----------------------------------------
     // BLOCKING criterion 3 — `:` tokenizes as TokenType::COLON.
     {
@@ -15043,9 +15049,9 @@ void test_gen3_cycle2_constants_as_units() {
     {
         FormulaSystem sys;
         ASSERT(sys.type_map_.empty(), "fresh sys: type_map_ empty");
-        // DimName typedef sanity: assignable from string literal, comparable.
-        sys.type_map_["test_var"].dim = "mass";
-        ASSERT(sys.type_map_["test_var"].dim == "mass", "type_map_['test_var'].dim == 'mass'");
+        // DimMap sanity (cycle 3c): assignable from unit-vector, comparable.
+        sys.type_map_["test_var"].dim = DimMap{{"mass", 1}};
+        ASSERT(dim_is(sys.type_map_["test_var"].dim, "mass"), "type_map_['test_var'].dim == {mass:1}");
         ASSERT(sys.type_map_.size() == 1, "type_map_ size 1 after one insert");
     }
 
@@ -15057,11 +15063,11 @@ void test_gen3_cycle2_constants_as_units() {
         sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m4-test1>");
         ASSERT(sys.type_map_.count("g") == 1,
                "[mass]: type_map_ contains 'g'");
-        ASSERT(sys.type_map_["g"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["g"].dim, "mass"),
                "[mass]: type_map_['g'].dim == 'mass'");
         ASSERT(sys.type_map_.count("kg") == 1,
                "[mass]: type_map_ contains 'kg'");
-        ASSERT(sys.type_map_["kg"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["kg"].dim, "mass"),
                "[mass]: type_map_['kg'].dim == 'mass'");
     }
 
@@ -15086,7 +15092,7 @@ void test_gen3_cycle2_constants_as_units() {
             "[mass]\ng = 1\nkg = 1000 * g\n",
             "<m4-vec-collision>");
         // dim section side
-        ASSERT(sys.type_map_["g"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["g"].dim, "mass"),
                "vec+dim: type_map_['g'].dim still 'mass'");
         // vec side: M equation's RHS is FUNC_CALL("vec", [3 args]).
         ExprPtr m_rhs = nullptr;
@@ -15118,7 +15124,7 @@ void test_gen3_cycle2_constants_as_units() {
             "<m3-test1>");
         ASSERT(sys.type_map_.count("m_obj") == 1,
                "m_obj:mass: type_map_ contains 'm_obj'");
-        ASSERT(sys.type_map_["m_obj"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["m_obj"].dim, "mass"),
                "m_obj:mass: type_map_['m_obj'].dim == 'mass'");
         // RHS still resolves through normal equation path.
         ASSERT_NUM(sys.resolve("m_obj", {}), 10,
@@ -15140,7 +15146,7 @@ void test_gen3_cycle2_constants_as_units() {
             "x:length = 5\n"
             "[length]\nrefm = 1\n",
             "<m3-test2>");
-        ASSERT(sys.type_map_["x"].dim == "length",
+        ASSERT(dim_is(sys.type_map_["x"].dim, "length"),
                "x:length: type_map_['x'].dim == 'length' (with [length] section)");
         ASSERT_NUM(sys.resolve("probe_x", {}), 5,
                    "x:length = 5: probe_x = x resolves to 5");
@@ -15183,8 +15189,8 @@ void test_gen3_cycle2_constants_as_units() {
             "<m5-dispatch>");
         const auto& cond = *sys.rewrite_rules.back().condition;
         std::map<std::string, BindingType> type_map;
-        type_map["m_a"].dim = "mass";
-        type_map["t_a"].dim = "time";
+        type_map["m_a"].dim = DimMap{{"mass", 1}};
+        type_map["t_a"].dim = DimMap{{"time", 1}};
         std::map<std::string, SetDef> set_defs;
         set_defs["mass"] = SetDef{"mass", SetDef::Kind::DIM_SECTION, nullptr};
         set_defs["time"] = SetDef{"time", SetDef::Kind::DIM_SECTION, nullptr};
@@ -15215,6 +15221,173 @@ void test_gen3_cycle2_constants_as_units() {
         }
     }
 
+    // ======== cycle 3c: dim algebra promotion (Future #7b FULL) =============
+    // compute_dim folds expression trees into DimMap exponent algebra.
+    {
+        ExprArena arena; ExprArena::Scope sc(arena);
+        std::map<std::string, BindingType> tm;
+        tm["kg"].dim = DimMap{{"mass", 1}};
+        tm["m"].dim  = DimMap{{"length", 1}};
+        tm["s"].dim  = DimMap{{"time", 1}};
+
+        // B1 — MUL: kg*m → {mass:1, length:1}
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::MUL, Expr::Var("kg"), Expr::Var("m"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value(), "3c B1: compute_dim(kg*m) has value");
+            ASSERT(*d == (DimMap{{"mass", 1}, {"length", 1}}),
+                   "3c B1: kg*m → {mass:1, length:1}");
+        }
+        // B2 — POW integer: m^2 → {length:2}
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::POW, Expr::Var("m"), Expr::Num(2));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"length", 2}}),
+                   "3c B2: m^2 → {length:2}");
+        }
+        // B3 — DIV: m/s → {length:1, time:-1}
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::DIV, Expr::Var("m"), Expr::Var("s"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"length", 1}, {"time", -1}}),
+                   "3c B3: m/s → {length:1, time:-1}");
+        }
+        // B4 — ADD mismatch: kg + s → nullopt (the BLOCKING detection sentinel)
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::ADD, Expr::Var("kg"), Expr::Var("s"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(!d.has_value(), "3c B4: kg+s (mass+time) → nullopt (mismatch)");
+        }
+        // B4b — ADD match: kg + kg → {mass:1}
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::ADD, Expr::Var("kg"), Expr::Var("kg"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"mass", 1}}),
+                   "3c B4b: kg+kg → {mass:1} (matching dims OK)");
+        }
+        // B5 — sqrt callback: sqrt(m^2) → {length:1}
+        {
+            const auto* e = Expr::Call("sqrt",
+                {Expr::BinOpExpr(BinOp::POW, Expr::Var("m"), Expr::Num(2))});
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"length", 1}}),
+                   "3c B5: sqrt(m^2) → {length:1} (dim_propagate)");
+        }
+        // B5b — abs passthrough: abs(kg) → {mass:1}
+        {
+            const auto* e = Expr::Call("abs", {Expr::Var("kg")});
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"mass", 1}}),
+                   "3c B5b: abs(kg) → {mass:1} (passthrough)");
+        }
+        // B6 — dimensionless factor: 3.14 * kg → {mass:1}
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::MUL, Expr::Num(3.14), Expr::Var("kg"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && *d == (DimMap{{"mass", 1}}),
+                   "3c B6: 3.14*kg → {mass:1} (Num dimensionless)");
+        }
+        // B7 — POW non-integer exponent → dimensionless (critic cut #4)
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::POW, Expr::Var("m"), Expr::Num(0.5));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && d->empty(),
+                   "3c B7: m^0.5 → {} (non-integer exponent dimensionless)");
+        }
+        // B8 — unregistered var → {}
+        {
+            auto d = compute_dim(*Expr::Var("xyzzy"), tm);
+            ASSERT(d.has_value() && d->empty(), "3c B8: unregistered var → {}");
+        }
+        // B9 — DIV cancellation: kg/kg → {} (zero-clean)
+        {
+            const auto* e = Expr::BinOpExpr(BinOp::DIV, Expr::Var("kg"), Expr::Var("kg"));
+            auto d = compute_dim(*e, tm);
+            ASSERT(d.has_value() && d->empty(), "3c B9: kg/kg → {} (cancellation)");
+        }
+    }
+
+    // 3c DimMap helper unit tests.
+    {
+        ASSERT((dim_merge_add(DimMap{{"mass", 1}}, DimMap{{"length", 1}})
+                == DimMap{{"mass", 1}, {"length", 1}}), "3c: dim_merge_add");
+        ASSERT((dim_merge_sub(DimMap{{"mass", 1}, {"length", 1}}, DimMap{{"length", 1}})
+                == DimMap{{"mass", 1}}), "3c: dim_merge_sub");
+        ASSERT((dim_scale(DimMap{{"length", 2}}, 2) == DimMap{{"length", 4}}),
+               "3c: dim_scale");
+        ASSERT((dim_merge_sub(DimMap{{"mass", 1}}, DimMap{{"mass", 1}}) == DimMap{}),
+               "3c: dim_merge_sub cancels to {}");
+        ASSERT((dim_scale(DimMap{{"mass", 3}}, 0) == DimMap{}),
+               "3c: dim_scale by 0 → {} (general loop + zero_clean)");
+    }
+
+    // 3c sqrt/abs dim_propagate callback unit tests.
+    {
+        ASSERT((sqrt_dim_propagate(DimMap{{"length", 2}}) == std::optional<DimMap>(DimMap{{"length", 1}})),
+               "3c: sqrt_dim_propagate({length:2}) → {length:1}");
+        ASSERT(sqrt_dim_propagate(std::nullopt) == std::nullopt,
+               "3c: sqrt_dim_propagate(nullopt) → nullopt (propagate sentinel)");
+        ASSERT((sqrt_dim_propagate(DimMap{{"mass", 1}}) == std::optional<DimMap>(DimMap{})),
+               "3c: sqrt_dim_propagate({mass:1}) → {} (odd exponent)");
+        ASSERT((abs_dim_propagate(DimMap{{"mass", 1}}) == std::optional<DimMap>(DimMap{{"mass", 1}})),
+               "3c: abs_dim_propagate({mass:1}) → {mass:1}");
+        ASSERT(abs_dim_propagate(std::nullopt) == std::nullopt,
+               "3c: abs_dim_propagate(nullopt) → nullopt");
+    }
+
+    // 3c LOAD-BEARING R1 test: compound-expression membership via DIM_SECTION
+    // arm. `is_in(MUL(kg, m), mass)` must return FALSE — kg*m is {mass:1,
+    // length:1}, NOT the atomic {mass:1}. This exercises the compound branch
+    // of check_condition's DIM_SECTION arm (distinct from the bare-Var path).
+    {
+        FormulaSystem sys;
+        sys.load_string(
+            "x + y = undefined iff is_in_dimension(x, mass)\n"
+            "[mass]\nrefkg = 1\n"
+            "[length]\nrefm = 1\n",
+            "<3c-compound-dispatch>");
+        const auto& cond = *sys.rewrite_rules.back().condition;
+        std::map<std::string, BindingType> type_map;
+        type_map["kg"].dim = DimMap{{"mass", 1}};
+        type_map["m"].dim  = DimMap{{"length", 1}};
+        std::map<std::string, SetDef> set_defs;
+        set_defs["mass"]   = SetDef{"mass", SetDef::Kind::DIM_SECTION, nullptr};
+        set_defs["length"] = SetDef{"length", SetDef::Kind::DIM_SECTION, nullptr};
+        const SimplifyContext ctx{&type_map, &set_defs};
+        // x bound to MUL(kg, m) → {mass:1, length:1} ≠ {mass:1} → false.
+        {
+            std::map<std::string, ExprPtr> eb{
+                {"x", Expr::BinOpExpr(BinOp::MUL, Expr::Var("kg"), Expr::Var("m"))}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "3c R1 compound: is_in(kg*m, mass) → false (compound ≠ atomic)");
+        }
+        // LOAD-BEARING RED→GREEN: a compound expr whose dim EQUALS the atomic
+        // target. kg*2 → {mass:1} (Num dimensionless) == {mass:1} → TRUE. With
+        // the is_var guard present this is WRONGLY false (guard rejects MUL);
+        // after the guard lift it is correctly true. This is the assertion that
+        // distinguishes guard-present (RED) from guard-lifted (GREEN).
+        {
+            std::map<std::string, ExprPtr> eb{
+                {"x", Expr::BinOpExpr(BinOp::MUL, Expr::Var("kg"), Expr::Num(2))}};
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "3c R1 compound-match: is_in(kg*2, mass) → true (compound dim == atomic)");
+        }
+        // REGRESSION: bare Var kg → {mass:1} == {mass:1} → true (map-equality).
+        {
+            std::map<std::string, ExprPtr> eb{{"x", Expr::Var("kg")}};
+            ASSERT(check_condition(cond, {}, &eb, &ctx),
+                   "3c R1 regression: is_in(kg, mass) → true (bare-Var map-equality)");
+        }
+        // Mismatch sentinel through DIM_SECTION arm: is_in(kg+s, mass) → false.
+        {
+            type_map["s"].dim = DimMap{{"time", 1}};
+            std::map<std::string, ExprPtr> eb{
+                {"x", Expr::BinOpExpr(BinOp::ADD, Expr::Var("kg"), Expr::Var("s"))}};
+            ASSERT(!check_condition(cond, {}, &eb, &ctx),
+                   "3c R1 mismatch: is_in(kg+s, mass) → false (compute_dim nullopt)");
+        }
+    }
+
     // -------- M6: Intersection annotation + is_int predicate ----------------
     // BLOCKING criterion 7 (gen-5 cycle 3a, updated from cycle-2 framing):
     //   - `n:(int, mass) = 5` parses (intersection grammar).
@@ -15235,7 +15408,7 @@ void test_gen3_cycle2_constants_as_units() {
             "<m6-intersection-parse>");
         ASSERT(sys.type_map_.count("n") == 1,
                "n:(int, mass): type_map_ contains 'n'");
-        ASSERT(sys.type_map_["n"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["n"].dim, "mass"),
                "n:(int, mass): type_map_['n'].dim == 'mass' (DIM_SECTION classification)");
         ASSERT(sys.type_map_["n"].sets.count("int") == 1,
                "n:(int, mass): type_map_['n'].sets contains 'int' (BUILTIN_PREDICATE classification)");
@@ -15393,14 +15566,14 @@ void test_gen3_cycle2_constants_as_units() {
             // Parent's dim entries propagated to child via `sub->type_map_ = type_map_`:
             ASSERT(child->type_map_.count("g") == 1,
                    "m-cross: child->type_map_ contains 'g' (propagated)");
-            ASSERT(child->type_map_["g"].dim == "mass",
+            ASSERT(dim_is(child->type_map_["g"].dim, "mass"),
                    "m-cross: child->type_map_['g'].dim == 'mass' (propagated)");
             ASSERT(child->type_map_.count("kg") == 1,
                    "m-cross: child->type_map_ contains 'kg' (propagated)");
             // Child's own annotation (registered by child-side parse_line):
             ASSERT(child->type_map_.count("m_obj") == 1,
                    "m-cross: child->type_map_ contains 'm_obj' (child-side)");
-            ASSERT(child->type_map_["m_obj"].dim == "mass",
+            ASSERT(dim_is(child->type_map_["m_obj"].dim, "mass"),
                    "m-cross: child->type_map_['m_obj'].dim == 'mass'");
         }
     }
@@ -15412,6 +15585,11 @@ void test_gen3_cycle2_constants_as_units() {
 // `.fwiz-workflow/design-proposal.md` Final Design.
 void test_gen5_cycle3a_types_as_named_sets() {
     SECTION("gen-5 cycle 3a: Types as Named Sets (BindingType, type_map_, SetDef, is_in)");
+
+    // cycle 3c: BindingType::dim is a DimMap — atomic-unit shape is {name: 1}.
+    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
+        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
+    };
 
     // -------- M1: BindingType struct + type_map_ replaces dim_map_ ----------
     // BLOCKING criterion C1: `BindingType` and `type_map_` exist; `.dim` field
@@ -15430,13 +15608,13 @@ void test_gen5_cycle3a_types_as_named_sets() {
         sys.load_string("[mass]\ng = 1\nkg = 1000 * g\n", "<m1-mass>");
         ASSERT(sys.type_map_.count("g") == 1,
                "[mass]: type_map_ contains 'g'");
-        ASSERT(sys.type_map_["g"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["g"].dim, "mass"),
                "[mass]: type_map_['g'].dim == 'mass'");
         ASSERT(sys.type_map_["g"].sets.empty(),
                "[mass]: type_map_['g'].sets empty (no sets atoms)");
         ASSERT(sys.type_map_.count("kg") == 1,
                "[mass]: type_map_ contains 'kg'");
-        ASSERT(sys.type_map_["kg"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["kg"].dim, "mass"),
                "[mass]: type_map_['kg'].dim == 'mass'");
     }
     // m_obj:mass = 10*kg with [mass] section: type_map_ populated via
@@ -15450,7 +15628,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
             "<m1-anno>");
         ASSERT(sys.type_map_.count("m_obj") == 1,
                "m_obj:mass: type_map_ contains 'm_obj'");
-        ASSERT(sys.type_map_["m_obj"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["m_obj"].dim, "mass"),
                "m_obj:mass: type_map_['m_obj'].dim == 'mass'");
         ASSERT_NUM(sys.resolve("m_obj", {}), 10,
                    "m_obj:mass = 10*kg, kg=1: resolves to 10");
@@ -15579,7 +15757,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
                         "<m4-intersection>");
         ASSERT(sys.type_map_.count("n") == 1,
                "M4 C5: type_map_ contains 'n'");
-        ASSERT(sys.type_map_["n"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["n"].dim, "mass"),
                "M4 C5: type_map_['n'].dim == 'mass' (DIM_SECTION atom)");
         ASSERT(sys.type_map_["n"].sets.size() == 1,
                "M4 C5: type_map_['n'].sets has 1 entry");
@@ -15591,7 +15769,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
         FormulaSystem sys;
         sys.load_string("n:(mass, int) = 5\n[mass]\nrefkg = 1\n",
                         "<m4-intersection-reordered>");
-        ASSERT(sys.type_map_["n"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["n"].dim, "mass"),
                "M4 C5: ordering doesn't matter — dim still 'mass'");
         ASSERT(sys.type_map_["n"].sets.count("int") == 1,
                "M4 C5: ordering doesn't matter — sets still contains 'int'");
@@ -15673,7 +15851,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
             // type_map_ propagation (from M1):
             ASSERT(child->type_map_.count("refkg") == 1,
                    "M5 C6: child->type_map_ contains 'refkg' (propagated)");
-            ASSERT(child->type_map_["refkg"].dim == "mass",
+            ASSERT(dim_is(child->type_map_["refkg"].dim, "mass"),
                    "M5 C6: child->type_map_['refkg'].dim == 'mass'");
             // set_definitions_ propagation (M5):
             ASSERT(child->set_definitions_.count("mass") == 1,
@@ -15688,7 +15866,7 @@ void test_gen5_cycle3a_types_as_named_sets() {
             // succeeded BECAUSE 'mass' was already in the propagated registry:
             ASSERT(child->type_map_.count("m_obj") == 1,
                    "M5 C6: child->type_map_ contains 'm_obj'");
-            ASSERT(child->type_map_["m_obj"].dim == "mass",
+            ASSERT(dim_is(child->type_map_["m_obj"].dim, "mass"),
                    "M5 C6: child->type_map_['m_obj'].dim == 'mass'");
         }
     }
@@ -15758,6 +15936,11 @@ void test_gen5_cycle3a_types_as_named_sets() {
 
 void test_gen5_cycle3b_user_defined_predicates() {
     SECTION("gen-5 cycle 3b: User-defined predicate sets (USER_PREDICATE Kind)");
+
+    // cycle 3c: BindingType::dim is a DimMap — atomic-unit shape is {name: 1}.
+    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
+        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
+    };
 
     // -------- M1: SetDef extension + USER_PREDICATE Kind --------------------
     // BLOCKING C11: static_assert(Kind::COUNT_ == 3) compiles; USER_PREDICATE
@@ -15973,7 +16156,7 @@ void test_gen5_cycle3b_user_defined_predicates() {
             "<m4-c7>");
         ASSERT(sys.type_map_["q"].sets.count("whole_number") == 1,
                "M4 C7: type_map_['q'].sets contains 'whole_number'");
-        ASSERT(sys.type_map_["q"].dim == "mass",
+        ASSERT(dim_is(sys.type_map_["q"].dim, "mass"),
                "M4 C7: type_map_['q'].dim == 'mass'");
     }
     // Error message updated: text now references 'imaginary' not 'complex'.

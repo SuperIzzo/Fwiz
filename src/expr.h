@@ -1785,21 +1785,56 @@ struct Condition {
     }
 };
 
-// Per-binding type record (gen-5 cycle 3a, 2026-05-15).
-// `dim` holds the atomic dimension name from DIM_SECTION annotation,
-//   empty if none declared. Promoted to map<DimName,int> exponent algebra
-//   in cycle 3c (Future #7b FULL) — field name and access pattern unchanged;
-//   only the value type widens. The `using DimName = std::string` typedef
-//   on FormulaSystem is the cycle-3c promotion hook.
+// Dimension exponent algebra (gen-5 cycle 3c, Future #7b FULL).
+// A DimMap maps an atomic dimension name to its integer exponent:
+//   {} = dimensionless; {"mass":1} = mass; {"length":1,"time":-2} = accel.
+// Zero-exponent entries are dropped (dim_zero_clean) so map-equality is the
+// canonical "same dimension" test. compute_dim folds expressions into DimMaps.
+using DimMap = std::map<std::string, int>;
+
+// Per-binding type record (gen-5 cycle 3a, 2026-05-15; dim promoted cycle 3c).
+// `dim` is the binding's dimension as an exponent map (DimMap). Empty if no
+//   DIM_SECTION annotation. A base unit registers as a unit-vector ({name:1});
+//   compute_dim composes these through MUL/DIV/POW/sqrt arithmetic.
 // `sets` holds BUILTIN_PREDICATE and (cycle 3b) USER_PREDICATE memberships
 //   by set name: "int", "real", "imaginary", "rational", and user-defined.
 //
 // Lives in expr.h (M3) so check_condition's is_in dispatch can see the full
 // shape; FormulaSystem owns the per-system map<string, BindingType> instance.
 struct BindingType {
-    std::string dim;               // DimName = std::string in cycle 3a
+    DimMap dim;                    // exponent algebra (cycle 3c); empty = dimensionless
     std::set<std::string> sets;    // membership: {"int"}, {"imaginary"}, ...
 };
+
+// ---- DimMap arithmetic (gen-5 cycle 3c, Future #7b FULL) ----
+// Drop zero-exponent entries so map-equality is the canonical dimension test
+// (e.g. {mass:1,mass:-1} cancels to {} = dimensionless after a divide).
+inline DimMap dim_zero_clean(DimMap m) {
+    for (auto it = m.begin(); it != m.end(); )
+        it = (it->second == 0) ? m.erase(it) : std::next(it);
+    return m;
+}
+// MUL: add exponent maps (m^a * m^b = m^(a+b)).
+inline DimMap dim_merge_add(DimMap a, const DimMap& b) {
+    for (const auto& [k, v] : b) a[k] += v;
+    return dim_zero_clean(std::move(a));
+}
+// DIV: subtract exponent maps (m^a / m^b = m^(a-b)).
+inline DimMap dim_merge_sub(DimMap a, const DimMap& b) {
+    for (const auto& [k, v] : b) a[k] -= v;
+    return dim_zero_clean(std::move(a));
+}
+// POW: scale exponents by an integer factor ((m^a)^n = m^(a*n)).
+// factor==0 is handled by the general loop (all exponents → 0 → cleaned to {}).
+inline DimMap dim_scale(DimMap m, int factor) {
+    for (auto& [k, v] : m) v *= factor;
+    return dim_zero_clean(std::move(m));
+}
+// Forward declaration: compute_dim is defined after builtin_meta() (its
+// FUNC_CALL branch reads the registry), but check_condition's DIM_SECTION arm
+// (above the registry) calls it.
+[[nodiscard]] inline std::optional<DimMap>
+compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map);
 
 // Named-set registry value type (gen-5 cycle 3a, 2026-05-15).
 // `kind` selects the dispatch path used by `check_condition`'s `is_in`
@@ -2026,10 +2061,16 @@ inline ExistenceChecker& solve_existence_checker_();
                                                bindings, &pred_eb, set_ctx);
                     }
                     case SetDef::Kind::DIM_SECTION: {
-                        if (!is_var(bind_it->second)) return false;
-                        auto tm_it = set_ctx->type_map->find(bind_it->second->name);
-                        if (tm_it == set_ctx->type_map->end()) return false;
-                        return tm_it->second.dim == set_name;
+                        // cycle 3c: lifted the is_var guard — compute_dim folds
+                        // arbitrary expressions (MUL/DIV/POW/sqrt) into a DimMap.
+                        // Bare Var is the common path; compound exprs are the new
+                        // path. nullopt (ADD/SUB mismatch) → false (fail-safe).
+                        // Atomic membership: target set_name "mass" is the unit
+                        // vector {mass:1}; named compound-dim aliases are #81.
+                        if (!set_ctx->type_map) return false;
+                        auto computed = compute_dim(*bind_it->second, *set_ctx->type_map);
+                        if (!computed) return false;
+                        return *computed == DimMap{{set_name, 1}};
                     }
                     case SetDef::Kind::FUNCTION_SECTION: {
                         // Cycle 3d: existential-solve dispatch via the
@@ -2887,6 +2928,16 @@ struct BuiltinMeta {
     // (`try_u_sub_integrate`) handles it. nullptr signals "no table entry —
     // try IBP or fall through to unevaluated."
     ExprPtr (*integrate)(const std::string& var);
+
+    // Dimension propagation callback (gen-5 cycle 3c, Future #7b FULL).
+    // Nullable: nullptr = "treat this FUNC_CALL result as dimensionless" — the
+    // safe default for transcendental builtins (trig/log/exp) whose argument is
+    // required to be dimensionless anyway. Contract: `arg` is the computed dim
+    // of the first argument (nullopt = upstream mismatch sentinel). Returns
+    // nullopt to propagate that sentinel; {} for dimensionless output; a
+    // non-empty DimMap for dimension-transforming builtins (sqrt halves, abs
+    // passes through). Read only by compute_dim's FUNC_CALL branch.
+    std::optional<DimMap> (*dim_propagate)(const std::optional<DimMap>& arg) = nullptr;
 };
 
 // ---- Per-builtin diff helpers (chain rule applied at caller) ----
@@ -2938,20 +2989,118 @@ inline ExprPtr tan_integrate(const std::string& var) {
     return Expr::Neg(Expr::Call("log", {Expr::Call("cos", {Expr::Var(var)})}));
 }
 
+// ---- Per-builtin dimension-propagation helpers (gen-5 cycle 3c) ----
+inline std::optional<DimMap> sqrt_dim_propagate(const std::optional<DimMap>& arg) {
+    if (!arg) return std::nullopt;     // propagate upstream mismatch sentinel
+    DimMap result;
+    for (const auto& [k, v] : *arg) {
+        if (v % 2 != 0) return DimMap{};  // odd exponent: not a clean root → dimensionless
+        result[k] = v / 2;
+    }
+    return result;
+}
+inline std::optional<DimMap> abs_dim_propagate(const std::optional<DimMap>& arg) {
+    return arg;                        // abs: identity on dimension (and on sentinel)
+}
+
 inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
     // static const: std::map runtime-init, not constexpr-able in C++17
     static const std::map<std::string, BuiltinMeta> registry = {
-        {"sin",  {sin_diff,  sin_integrate}},
-        {"cos",  {cos_diff,  cos_integrate}},
-        {"tan",  {tan_diff,  tan_integrate}},
-        {"asin", {asin_diff, nullptr}},   // antiderivative needs IBP
-        {"acos", {acos_diff, nullptr}},   // antiderivative needs IBP
-        {"atan", {atan_diff, nullptr}},   // antiderivative needs IBP
-        {"log",  {log_diff,  nullptr}},   // antiderivative needs IBP (x*log(x) - x)
-        {"sqrt", {sqrt_diff, nullptr}},   // FUNC_CALL("sqrt") path: antiderivative not in table — write x^(1/2) for the power-rule path.
-        {"abs",  {abs_diff,  nullptr}},   // deferred (x*abs(x)/2; sign-discontinuous)
+        {"sin",  {sin_diff,  sin_integrate, nullptr}},
+        {"cos",  {cos_diff,  cos_integrate, nullptr}},
+        {"tan",  {tan_diff,  tan_integrate, nullptr}},
+        {"asin", {asin_diff, nullptr, nullptr}},   // antiderivative needs IBP
+        {"acos", {acos_diff, nullptr, nullptr}},   // antiderivative needs IBP
+        {"atan", {atan_diff, nullptr, nullptr}},   // antiderivative needs IBP
+        {"log",  {log_diff,  nullptr, nullptr}},   // antiderivative needs IBP (x*log(x) - x)
+        {"sqrt", {sqrt_diff, nullptr, sqrt_dim_propagate}},  // dim: halve exponents
+        {"abs",  {abs_diff,  nullptr, abs_dim_propagate}},   // dim: passthrough; antideriv deferred
     };
     return registry;
+}
+
+// ============================================================================
+//  Dimension propagation (gen-5 cycle 3c, Future #7b FULL)
+// ============================================================================
+//
+// compute_dim folds an expression tree into a DimMap exponent algebra, given a
+// type_map of per-variable dimensions. It is a bespoke fold (not tree_map):
+// the accumulator is a DimMap, not an ExprPtr, and ADD/SUB needs to compare
+// sibling shapes. Returns:
+//   - {}      for dimensionless nodes (Num, unbound Var, symbolic-exponent
+//             POW, transcendental FUNC_CALL).
+//   - {d:n}   for dimensioned nodes, composed through MUL/DIV/POW/sqrt.
+//   - nullopt as a sentinel when an ADD/SUB node has dimensionally-mismatched
+//             operands (kg + s) — the one BLOCKING invariant of #7b FULL.
+//             Consumed ONLY by check_condition's DIM_SECTION arm (→ false).
+// Per critic cut: no cerr warning here (simplifier hot loop would spam it);
+// the nullopt sentinel IS the detection.
+[[nodiscard]] inline std::optional<DimMap>
+compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map) {
+    switch (e.type) {
+        case ExprType::NUM:
+            return DimMap{};
+        case ExprType::VAR: {
+            auto it = type_map.find(e.name);
+            return it == type_map.end() ? DimMap{} : it->second.dim;
+        }
+        case ExprType::UNARY_NEG:
+            return e.child ? compute_dim(*e.child, type_map) : DimMap{};
+        case ExprType::BINOP: {
+            switch (e.op) {
+                case BinOp::MUL: {
+                    auto a = compute_dim(*e.left, type_map);
+                    auto b = compute_dim(*e.right, type_map);
+                    if (!a || !b) return std::nullopt;
+                    return dim_merge_add(*a, *b);
+                }
+                case BinOp::DIV: {
+                    auto a = compute_dim(*e.left, type_map);
+                    auto b = compute_dim(*e.right, type_map);
+                    if (!a || !b) return std::nullopt;
+                    return dim_merge_sub(*a, *b);
+                }
+                case BinOp::POW: {
+                    // Integer-exponent only (critic cut #4): non-integer or
+                    // symbolic exponents → dimensionless. sqrt routes through
+                    // dim_propagate, not POW, so m^(1/2) is intentionally {}.
+                    if (!is_num(e.right)) return DimMap{};
+                    const double n = e.right->num;
+                    // is_integer_value bounds at < 1e15 (safely inside INT_MAX),
+                    // so the narrowing cast below cannot overflow (UB guard).
+                    if (!is_integer_value(n)) return DimMap{};
+                    const int ni = static_cast<int>(n);
+                    auto a = compute_dim(*e.left, type_map);
+                    if (!a) return std::nullopt;
+                    return dim_scale(*a, ni);
+                }
+                case BinOp::ADD:
+                case BinOp::SUB: {
+                    auto a = compute_dim(*e.left, type_map);
+                    auto b = compute_dim(*e.right, type_map);
+                    if (!a || !b) return std::nullopt;        // propagate sentinel
+                    if (*a == *b) return *a;                   // matching dims OK
+                    return std::nullopt;                       // mismatch sentinel
+                }
+                case BinOp::COUNT_:
+                    assert(false && "BinOp::COUNT_ unreachable in compute_dim");
+                    return DimMap{};
+            }
+            return DimMap{}; // exhaustive switch fall-through guard
+        }
+        case ExprType::FUNC_CALL: {
+            const auto& reg = builtin_meta();
+            auto mit = reg.find(e.name);
+            if (mit == reg.end() || mit->second.dim_propagate == nullptr || e.args.empty())
+                return DimMap{};  // unknown/no-callback/no-arg builtin → dimensionless
+            auto arg = compute_dim(*e.args[0], type_map);
+            return mit->second.dim_propagate(arg);
+        }
+        case ExprType::COUNT_:
+            assert(false && "ExprType::COUNT_ unreachable in compute_dim");
+            return DimMap{};
+    }
+    return DimMap{}; // exhaustive switch fall-through guard
 }
 
 // ============================================================================

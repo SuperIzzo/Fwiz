@@ -435,9 +435,8 @@ public:
     // atoms. Populated by (a) `[mass]`-style dim section scan and (b)
     // `var:type = expr` annotation parse (atomic OR intersection form).
     // Propagated to sub-systems on load_sub_system. Read by `check_condition`'s
-    // `is_in` predicate path (see expr.h). `DimName` typedef is the
-    // cycle-3c promotion hook (string → map<string,int> exponent algebra).
-    using DimName = std::string;
+    // `is_in` predicate path (see expr.h). The `.dim` field is a DimMap
+    // exponent algebra (gen-5 cycle 3c, Future #7b FULL) — see expr.h.
     std::map<std::string, BindingType> type_map_;
     // Cycle 3a (gen-5, 2026-05-15): named-set registry. Built-ins
     // (int/real/rational/imaginary) registered in load_builtins(); dim
@@ -1096,9 +1095,9 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // (RHS pure number → goes into `defaults`, not `equations`), while
         // `kg = 1000 * g` parses as an equation. Both are dim-typed.
         for (const auto& eq : sub->equations)
-            type_map_[eq.lhs_var].dim = s.name;
+            type_map_[eq.lhs_var].dim = DimMap{{s.name, 1}};
         for (const auto& [name, _value] : sub->defaults)
-            type_map_[name].dim = s.name;
+            type_map_[name].dim = DimMap{{s.name, 1}};
         // Cycle 3a (gen-5): dim section also registers a SetDef so that
         // `is_in(v, mass)` can dispatch via DIM_SECTION Kind.
         // Trailing fields explicitly default for cppcheck-clean compile.
@@ -3305,7 +3304,7 @@ private:
                             // Last DIM_SECTION atom wins on overwrite — multi-
                             // dim intersections are structurally ambiguous user
                             // input; cleanest semantics is "last one wins".
-                            type_map_[lhs_name].dim = a;
+                            type_map_[lhs_name].dim = DimMap{{a, 1}};
                             break;
                         // BUILTIN_PREDICATE + USER_PREDICATE (cycle 3b) +
                         // FUNCTION_SECTION (cycle 3d) all share the same
