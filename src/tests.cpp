@@ -74,6 +74,11 @@ double ev_nan(const std::string& s) {
     return evaluate(simplify(parse(s))).value_or_nan();
 }
 
+// True iff the dimension map is exactly {name:1} — used by the dim/type tests.
+bool dim_is(const DimMap& dm, const std::string& name) {
+    return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
+}
+
 // ---- Lexer tests ----
 
 void test_lexer() {
@@ -15010,12 +15015,6 @@ void test_physics_mechanics() {
 void test_gen3_cycle2_constants_as_units() {
     SECTION("gen-3 cycle 2: Constants-as-units substrate (COLON, type_map_, [dim], `:`, is_in_dimension, intersection)");
 
-    // cycle 3c: BindingType::dim is now a DimMap (exponent algebra). This helper
-    // checks the atomic-unit shape `{name: 1}` that base units register as.
-    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
-        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
-    };
-
     // -------- M1: COLON lexer token ----------------------------------------
     // BLOCKING criterion 3 — `:` tokenizes as TokenType::COLON.
     {
@@ -15586,11 +15585,6 @@ void test_gen3_cycle2_constants_as_units() {
 void test_gen5_cycle3a_types_as_named_sets() {
     SECTION("gen-5 cycle 3a: Types as Named Sets (BindingType, type_map_, SetDef, is_in)");
 
-    // cycle 3c: BindingType::dim is a DimMap — atomic-unit shape is {name: 1}.
-    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
-        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
-    };
-
     // -------- M1: BindingType struct + type_map_ replaces dim_map_ ----------
     // BLOCKING criterion C1: `BindingType` and `type_map_` exist; `.dim` field
     // holds the dim-section name. `dim_map_` is replaced (not paralleled).
@@ -15936,11 +15930,6 @@ void test_gen5_cycle3a_types_as_named_sets() {
 
 void test_gen5_cycle3b_user_defined_predicates() {
     SECTION("gen-5 cycle 3b: User-defined predicate sets (USER_PREDICATE Kind)");
-
-    // cycle 3c: BindingType::dim is a DimMap — atomic-unit shape is {name: 1}.
-    auto dim_is = [](const DimMap& dm, const std::string& name) -> bool {
-        return dm.size() == 1 && dm.count(name) != 0 && dm.at(name) == 1;
-    };
 
     // -------- M1: SetDef extension + USER_PREDICATE Kind --------------------
     // BLOCKING C11: static_assert(Kind::COUNT_ == 3) compiles; USER_PREDICATE
@@ -16837,18 +16826,18 @@ void test_gen5_cycle3f_infix_in() {
         ASSERT(ok_stdlib, "C10: stdlib/stdlib.fw loads cleanly (no `in` collision)");
     }
     {
-        for (const std::string& name : {
+        for (const char* name : {
                  "geometry.fw", "physics.fw", "rectangle.fw", "triangle.fw",
                  "derivatives.fw", "factorial.fw"
              }) {
             bool ok = true;
             try {
                 FormulaSystem sys;
-                sys.load_file("/run/media/data/users/izzo/Projects/C++/Fwiz/examples/" + name);
+                sys.load_file(std::string("/run/media/data/users/izzo/Projects/C++/Fwiz/examples/") + name);
             } catch (const std::exception&) {
                 ok = false;
             }
-            ASSERT(ok, "C10: examples/" + name + " loads cleanly (no `in` collision)");
+            ASSERT(ok, std::string("C10: examples/") + name + " loads cleanly (no `in` collision)");
         }
     }
 

@@ -126,8 +126,6 @@ template<class Range, class Sep, class Fn>
 //  ValueSet — unified representation for conditions, ranges, and solutions
 // ============================================================================
 
-enum class NumberDomain : uint8_t { REAL, INTEGER, RATIONAL, COMPLEX, COUNT_ };
-
 struct Interval {
     double low = 0, high = 0;
     bool low_inclusive = false, high_inclusive = false;
@@ -176,7 +174,6 @@ class ValueSet {
     std::vector<Interval> intervals_;
     std::vector<double> discrete_;
     std::vector<PeriodicFamily> periodic_;
-    NumberDomain domain_ = NumberDomain::REAL;
 
 public:
     // Constructors
@@ -282,7 +279,6 @@ public:
     [[nodiscard]] const std::vector<double>& discrete() const { return discrete_; }
     [[nodiscard]] const std::vector<PeriodicFamily>& periodic() const { return periodic_; }
     [[nodiscard]] bool has_periodic() const { return !periodic_.empty(); }
-    [[nodiscard]] NumberDomain domain() const { return domain_; }
 
     // Set operations
     [[nodiscard]] ValueSet intersect(const ValueSet& other) const {

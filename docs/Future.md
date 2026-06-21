@@ -875,13 +875,11 @@ Single map, single update site per binding mutation.
 
 **Cycle 3h close (2026-05-16)**: `copy_metadata_to_sub(FormulaSystem& sub) const` extracted as a private member just above `load_sub_system`. Three call sites converted to single-line invocations: `load_sub_system` normal path, `load_sub_system` auto-section path, AND `register_function_section` (NEW call site — the pre-cached sub was previously NOT inheriting parent settings, suppressing numeric_mode on recursive FUNCTION_SECTION subs; this gap was the load-bearing piece for Fix A in the #92 close). Net LOC: -4 (12 inline lines deleted, 8 lines added across helper + docstring). Reopen-trigger comment moved into the helper docstring.
 
-## 84. `NumberDomain` enum deletion — PARKED
+## 84. `NumberDomain` enum deletion — DONE (gen-5 cleanup cycle, 2026-06-21)
 
-**Surfaced gen-5 cycle 3a (2026-05-15)** as a residual artifact. `NumberDomain` enum (or equivalent discriminator) is the last surviving remnant of the pre-cycle-3a three-way specialization (dim / domain / predicate). Now that `SetDef::Kind` unifies these under one mechanism (`BUILTIN_PREDICATE` / `DIM_SECTION` / future USER_PREDICATE / FUNCTION_SECTION), the old enum is redundant.
+**Surfaced gen-5 cycle 3a (2026-05-15)** as a residual artifact. `NumberDomain` enum (or equivalent discriminator) was the last surviving remnant of the pre-cycle-3a three-way specialization (dim / domain / predicate).
 
-**Reopen trigger:** gen-5 cycle 3c (dim algebra promotion) completes, OR `ValueSet` adopts `SetDef`-compatible domain semantics, making the enum's remaining consumers expressible as `SetDef` lookups.
-
-**Trigger status (2026-06-06, cycle 3c):** FIRED — cycle 3c has shipped the type-axis substrate (`DimMap` algebra, `compute_dim`, `BuiltinMeta.dim_propagate`). `NumberDomain` is now a dead remnant; its consumers can express their semantics via `SetDef` lookups. Ready to action in a future cleanup cycle; NOT acted on in cycle 3c (deletion out of scope).
+**Actioned cleanup cycle (2026-06-21):** Confirmed zero consumers via grep (only the three declaration sites in `src/expr.h`). Deleted: the `NumberDomain : uint8_t { REAL, INTEGER, RATIONAL, COMPLEX, COUNT_ }` enum, the `domain_` field on `ValueSet`, and the `domain()` getter. Suite stayed 3831/3831 green. Net -3 LOC.
 
 ## 85. Predicate complexity profiling — PARKED
 
@@ -1811,6 +1809,27 @@ Without comment or git-blame archaeology, the floor-grader read cannot disambigu
 3. Implementer touches `extract_positional_calls` for any reason; apply the cheap fix as part of that change.
 
 **Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Likely in-scope as cheap hygiene.
+
+## #R16. Refactor: `expr.h` missing top-of-file SECTION table — `nuanced-refactor-candidate` (sharpens #R13)
+
+**From:** Cycle targeted-sweep-3c-3k blind-spot critic (2026-06-21, file-scope ANALYZE). Floor (Haiku + Gemma) **PASSED** the comprehension gate on all four file-explainer axes (purpose / components / relationships / pattern) for src/expr.h (4383 LOC, 2909 comment-stripped). This is NOT a gate failure.
+
+However, **both floor graders independently flagged the same structural gap unprompted**: the file has rich per-section `// ====` dividers but no top-of-file navigational table-of-contents. Haiku verbatim: *"No explicit section delimiters or table of contents, but function clustering is logical ... first-time readers may need to skip around."* Gemma tagged the structure "Monolithic Mixed-Concerns." Two-grader corroboration on an otherwise-clean read.
+
+**Distinction from #R13 (load-bearing):** #R13 was a genuine *gate failure* — 2026-05-10 Gemma scored the Pattern axis `vague-but-correct/vague` (wall-of-code). This cycle's read is `match/specific` on every axis — the file is now read *accurately* by both graders. #R13's reopen-trigger #1 (re-run scores wall-of-code by either floor grader) therefore **did NOT fire**. This entry is the *interim sharpening* #R13 itself names: "Section dividers in expr.h itself ... is the cheaper interim test before any extraction." Per-section dividers shipped (the #R13 interim); the top-of-file map is the remaining cheap structural win.
+
+**Diagnosis:** **structure** (navigation), not size or cohesion. The graders followed the file — the cost is *finding* a concern in 4383 lines, not *understanding* it once found. The per-section `// ====` boxes answer "what is this region?" once you are in it; a top-of-file table answers "where do I go?" before you start.
+
+**Proposed (low-priority, single-pass, zero code moves):** Add a `FILE MAP` table-of-contents comment immediately after the includes/constants block (after expr.h:36), listing each major concern → approximate start line: `Checked<T>/Expr AST/ExprArena`, `ValueSet/Interval/PeriodicFamily`, `Condition/check_condition`, `simplify/flatten/rewrite`, `symbolic_diff/integrate/IBP`, `compute_dim`, numeric solvers, vec/mat builtins. This is the convention newly adopted in Code-Style.md §File-organisation rules ("files exceeding ~1500 LOC must carry a top-of-file SECTION table").
+
+**Pattern coverage:** expr.h is the only >1500-LOC file flagged this cycle for the missing-table issue specifically. system.h (~3580 LOC) is a parallel candidate (it has intra-class dividers per the adopted intra-class rule but should be checked for a top-of-file table next file-scope sweep). The adopted Code-Style rule applies codebase-wide — any current or future file crossing ~1500 LOC.
+
+**Reopen trigger:** Either of:
+1. Implementer touches the head of expr.h (includes, top constants, or any §-divider region) for any reason — add the FILE MAP as part of that change (cheap, co-located).
+2. A future file-scope sweep re-flags expr.h navigation, OR flags a second >1500-LOC file (e.g. system.h) for the same missing-table reason. At N≥2 sites the cheap interim should be applied across all flagged files in one pass.
+3. #R13's split path activates (any of its three triggers) — at that point the FILE MAP becomes part of the split's per-file headers and #R16 folds into #R13.
+
+**Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Cheap hygiene that directly implements a newly-adopted Code-Style rule.
 
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 

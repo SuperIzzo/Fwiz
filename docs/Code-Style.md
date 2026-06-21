@@ -277,9 +277,36 @@ File-scope rules. Appended by the blind-spot critic when file-scope tests reveal
 
 Examples of rules that would live here once empirically derived:
 
-- "Files > 1500 lines must declare a `// SECTION:` header table at the top, mirroring logical structure."
 - "A header file mixing AST type definitions with solver-strategy implementations should be split."
 - "Files with unrelated top-level concerns (parser + solver + formatter in one file) violate file-cohesion."
+
+### Rule (adopted): files exceeding ~1500 LOC must carry a top-of-file SECTION table mapping concern → line range
+
+**Convention:** a source file longer than ~1500 LOC must declare, immediately after the includes / top-level constants, a navigational table-of-contents comment that lists each major concern and the approximate line where it begins. Per-section dividers (`// ====` boxes preceding each region) are necessary but NOT sufficient — a reader entering a 4000-LOC file needs a single up-front map to locate a concern without scrolling the whole file. The table mirrors the logical structure; it does not move code.
+
+Example shape:
+
+```cpp
+// ============================================================================
+//  FILE MAP (src/expr.h)
+//    Checked<T> / Expr AST / ExprArena .......... ~38
+//    ValueSet / Interval / PeriodicFamily ....... ~460
+//    Condition / CondClause / check_condition ... ~...
+//    simplify / flatten / rewrite ............... ~1143
+//    symbolic_diff / symbolic_integrate / IBP ... ~...
+//    compute_dim (dimension algebra) ............ ~3035
+//    numeric solvers (newton / bisection / scan)  ~...
+//    vec/mat builtins ........................... ~...
+// ============================================================================
+```
+
+**Anti-pattern:** a 4000+ LOC header with rich per-section `// ====` dividers but no up-front table. A `file-explainer` reads each section accurately yet explicitly notes "no table of contents — a first-time reader must skip around." Section dividers answer "what is this region?" once you are already in it; the table answers "where do I go?" before you start.
+
+**Reason:** files in this codebase grow monotonically (header-only design + interleaved feature areas). Once a file passes ~1500 LOC the per-section dividers are too far apart to scan as a unit. The top-of-file table restores single-glance navigability without a split — the cheapest structural intervention, and the correct interim before any file-split refactor (cf. #R13 expr.h split candidate).
+
+**Status:** **adopted** — Cycle targeted-sweep-3c-3k file-scope ANALYZE. Both floor graders (Haiku + Gemma) read src/expr.h (4383 LOC) cleanly on all four file-explainer axes yet **both independently flagged the missing top-of-file navigational table** (Haiku verbatim: "No explicit section delimiters or table of contents, but function clustering is logical"; Gemma: "Monolithic Mixed-Concerns"). Two-grader corroboration on a file that otherwise PASSED the gate = the empirical derivation that promotes this from the long-standing example list to an adopted rule. The complementary "non-contiguous milestone surfaces require cross-reference comments" rule (above) and the "intra-class section dividers" rule (below) cover region-pairing and class-internal grouping respectively; this rule covers file-level entry navigation.
+
+**Origin:** Cycle targeted-sweep-3c-3k (2026-06-21) — file-explainer scored src/expr.h match/specific on all four axes; both floor graders flagged the absent top-of-file SECTION table. Tracked as nuanced-refactor-candidate Future.md #R16.
 
 ### Rule (provisional): non-contiguous milestone surfaces in a >2000-line file require cross-reference comments at each end
 
