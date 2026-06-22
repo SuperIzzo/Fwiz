@@ -138,7 +138,8 @@ void test_lexer() {
     }
     {
         bool threw = false;
-        try { Lexer("@").tokenize(); } catch (...) { threw = true; }
+        // `@` is now AT (gen-6 cycle 1); use `$` which remains unmapped.
+        try { Lexer("$").tokenize(); } catch (...) { threw = true; }
         ASSERT(threw, "unexpected character throws");
     }
 }
@@ -1469,7 +1470,8 @@ void test_lexer_garbage() {
     // grammar (`var:type = expr`). See test_gen3_cycle2_constants_as_units.
     expect_throw("x & y", "ampersand");
     expect_throw("x | y", "pipe");
-    expect_throw("x @ y", "at sign");
+    // `@` is a valid token since gen-6 cycle 1 (range-step marker `[lo..hi @ step]`).
+    // See test_bounded_aggregation_step_a for positive coverage.
     expect_throw("x $ y", "dollar");
     expect_throw("x ~ y", "tilde");
     expect_throw("x ` y", "backtick");
@@ -16598,11 +16600,11 @@ void test_gen5_cycle3f_infix_in() {
         ASSERT(tokens[3].type == TokenType::END, "C1: tokens[3] is END");
     }
 
-    // ---- C2: TokenType::COUNT_ is 17 (compile-time, but cross-check at runtime) ----
+    // ---- C2: TokenType::COUNT_ cross-check at runtime ----
     {
         // static_assert lives in lexer.h; runtime mirror for visibility.
-        ASSERT(static_cast<int>(TokenType::COUNT_) == 17,
-               "C2: TokenType::COUNT_ == 17 (IN added in cycle 3f)");
+        ASSERT(static_cast<int>(TokenType::COUNT_) == 19,
+               "C2: TokenType::COUNT_ == 19 (DOTDOT + AT added in gen-6 cycle 1)");
     }
 
     // ---- C3: `in` in expression context raises parse error ----
@@ -17350,6 +17352,118 @@ void test_gen5_cycle3g_recursive_function_sections() {
     // mid-GREEN scope.
 }
 
+// gen-6 cycle 1 Step A: bounded aggregation (sum/product over discrete range).
+// De-risk spike — pure numeric bounds, single iterator, no formula bodies, no
+// reverse-solve. sum/product over [lo..hi @ step] unroll at simplify-time.
+void test_bounded_aggregation_step_a() {
+    SECTION("gen-6 Step A: bounded aggregation (sum/product unroll)");
+
+    // ---- Lexer: DOTDOT + AT ----
+    {
+        auto t = Lexer("1..5").tokenize();
+        ASSERT(t.size() == 4, "L1: '1..5' has 4 tokens (NUMBER, DOTDOT, NUMBER, END)");
+        ASSERT(t[0].type == TokenType::NUMBER && std::abs(t[0].numval - 1) < 1e-9, "L1: t[0] NUMBER(1)");
+        ASSERT(t[1].type == TokenType::DOTDOT, "L2: t[1] DOTDOT");
+        ASSERT(t[2].type == TokenType::NUMBER && std::abs(t[2].numval - 5) < 1e-9, "L1: t[2] NUMBER(5)");
+        ASSERT(t[3].type == TokenType::END, "L1: t[3] END");
+    }
+    {
+        auto t = Lexer("@").tokenize();
+        ASSERT(t[0].type == TokenType::AT, "L3: '@' lexes as AT (no throw)");
+    }
+    {
+        auto t = Lexer("1.5..2").tokenize();
+        ASSERT(t.size() == 4, "L4: '1.5..2' has 4 tokens");
+        ASSERT(t[0].type == TokenType::NUMBER && std::abs(t[0].numval - 1.5) < 1e-9, "L4: t[0] NUMBER(1.5)");
+        ASSERT(t[1].type == TokenType::DOTDOT, "L4: t[1] DOTDOT");
+        ASSERT(t[2].type == TokenType::NUMBER && std::abs(t[2].numval - 2) < 1e-9, "L4: t[2] NUMBER(2)");
+    }
+    {
+        ASSERT(static_cast<int>(TokenType::COUNT_) == 19, "L5: TokenType::COUNT_ == 19 (DOTDOT + AT added)");
+    }
+    {
+        // Critic change 5: scientific-notation adjacency. `1e2` is 100, then DOTDOT.
+        auto t = Lexer("1e2..5").tokenize();
+        ASSERT(t.size() == 4, "L6: '1e2..5' has 4 tokens");
+        ASSERT(t[0].type == TokenType::NUMBER && std::abs(t[0].numval - 100) < 1e-9, "L6: t[0] NUMBER(100)");
+        ASSERT(t[1].type == TokenType::DOTDOT, "L6: t[1] DOTDOT");
+        ASSERT(t[2].type == TokenType::NUMBER && std::abs(t[2].numval - 5) < 1e-9, "L6: t[2] NUMBER(5)");
+    }
+
+    // ---- Parser: range literal ----
+    {
+        auto e = parse("[1..5]");
+        ASSERT(e->type == ExprType::FUNC_CALL && e->name == "range", "P1: '[1..5]' is range FUNC_CALL");
+        ASSERT(e->args.size() == 2, "P2: no-step range has arity 2 (critic change 1)");
+        ASSERT(is_num(e->args[0]) && std::abs(e->args[0]->num - 1) < 1e-9, "P2: range arg0 == 1");
+        ASSERT(is_num(e->args[1]) && std::abs(e->args[1]->num - 5) < 1e-9, "P2: range arg1 == 5");
+    }
+    {
+        auto e = parse("[1..5 @ 2]");
+        ASSERT(e->type == ExprType::FUNC_CALL && e->name == "range", "P3: '[1..5 @ 2]' is range FUNC_CALL");
+        ASSERT(e->args.size() == 3, "P3: with-step range has arity 3");
+        ASSERT(is_num(e->args[2]) && std::abs(e->args[2]->num - 2) < 1e-9, "P3: range step == 2");
+    }
+    {
+        ASSERT(parse("[1,2,3]")->name == "vec", "P4: '[1,2,3]' still vec (COMMA branch)");
+        ASSERT(parse("[[1,2],[3,4]]")->name == "mat", "P5: '[[1,2],[3,4]]' still mat");
+        auto e = parse("[]");
+        ASSERT(e->name == "vec" && e->args.empty(), "P6: '[]' empty vec unchanged");
+    }
+
+    // ---- Parser: aggregate call ----
+    {
+        auto e = parse("sum(i, i in [1..5])");
+        ASSERT(e->type == ExprType::FUNC_CALL && e->name == "sum", "A1: sum call");
+        ASSERT(e->args.size() == 3, "A1: sum has 3 args {body, Var(iter), range}");
+        ASSERT(is_var(e->args[0]) && e->args[0]->name == "i", "A2: args[0] body Var(i)");
+        ASSERT(is_var(e->args[1]) && e->args[1]->name == "i", "A3: args[1] iterator Var(i)");
+        ASSERT(e->args[2]->type == ExprType::FUNC_CALL && e->args[2]->name == "range", "A4: args[2] range node");
+    }
+    {
+        auto e = parse("product(i, i in [1..5])");
+        ASSERT(e->name == "product" && e->args.size() == 3, "A5: product call, 3 args");
+    }
+    {
+        const auto* e = parse("sum(i^2, i in [1..4])");
+        ASSERT(e->name == "sum", "A6: sum(i^2,...) parses");
+        ASSERT(e->args[0]->type == ExprType::BINOP && e->args[0]->op == BinOp::POW, "A6: body is POW");
+    }
+
+    // ---- Simplifier: unroll (BLOCKING acceptance) ----
+    ASSERT_EQ(ss("sum(i, i in [1..5])"), "15", "S1: sum 1..5 == 15");
+    ASSERT_EQ(ss("sum(i, i in [1..5 @ 2])"), "9", "S2: sum 1..5 @2 == 9 (1+3+5)");
+    ASSERT_EQ(ss("product(i, i in [1..5])"), "120", "S3: product 1..5 == 120");
+    ASSERT_EQ(ss("sum(i^2, i in [1..4])"), "30", "S4: sum i^2 1..4 == 30");
+    ASSERT_EQ(ss("sum(i, i in [1..1])"), "1", "S5: single-element sum == 1");
+    ASSERT_EQ(ss("product(i, i in [3..3])"), "3", "S6: single-element product == 3");
+
+    // ---- End-to-end numeric ----
+    ASSERT_NUM(ev("sum(i, i in [1..5])"), 15.0, "E1");
+    ASSERT_NUM(ev("sum(i, i in [1..5 @ 2])"), 9.0, "E2");
+    ASSERT_NUM(ev("product(i, i in [1..5])"), 120.0, "E3");
+    ASSERT_NUM(ev("sum(i^2, i in [1..4])"), 30.0, "E4");
+
+    // ---- Step B defensive: symbolic upper bound stays unevaluated ----
+    {
+        bool threw = false;
+        try { (void)parse("sum(i, i in [1..n])"); } catch (...) { threw = true; }
+        ASSERT(!threw, "B1: symbolic bound parses (no throw)");
+    }
+    {
+        std::string out;
+        bool threw = false;
+        try { out = ss("sum(i, i in [1..n])"); } catch (...) { threw = true; }
+        ASSERT(!threw, "B2: symbolic bound simplify does not throw");
+        ASSERT(out.rfind("sum(", 0) == 0, "B3: stays as sum(...) FUNC_CALL, not a number");
+    }
+    {
+        // B4: once the bound is bound (n := 5), the unroll fires and folds to 15.
+        auto e = substitute(parse("sum(i, i in [1..n])"), "n", Expr::Num(5));
+        ASSERT_EQ(expr_to_string(simplify(e)), "15", "B4: sum 1..n folds to 15 once n=5");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -17712,6 +17826,9 @@ int main() {
 
     // gen-5 arc cycle 3g (2026-05-16): recursive FUNCTION_SECTION reverse-solve
     test_gen5_cycle3g_recursive_function_sections();
+
+    // gen-6 arc cycle 1 Step A (2026-06): bounded aggregation unroll
+    test_bounded_aggregation_step_a();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

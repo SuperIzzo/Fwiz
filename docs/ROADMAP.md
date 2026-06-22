@@ -11,18 +11,81 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 
 <!-- last-updated: 2026-05-16 -->
 <!-- selected-by-cycle: 2026-05-15 (user-directed mid-arc expansion — gen-3 arc reframed from "Constants-as-units design" to "Types as Named Sets"; LLM-benchmark returned to queued) -->
-<!-- generation: 5 -->
+<!-- generation: 6 -->
 
 ## Active arc
 
-### Arc: Types as Named Sets (gen-3 continuation, expanded scope)
+### Arc: Bounded aggregation & combinatorics (PNF-driven, gen-6)
+
+**Theme:** Give fwiz the one general primitive — **bounded aggregation** (`sum`/`product` over
+an explicit integer range) — that turns combinatorics (factorial, nPr, nCr, hypergeometric
+PMF/CDF) and expectation (E[X], variance, order statistics) into **closed-form `.fw` formulas**.
+A closed form is cheap to reverse-solve; that's the whole point — it makes fwiz's bidirectional
+solver usable for **design inversion** ("for target expected damage D, what cost?"). Domain math
+lives in `.fw` stdlib we write; the core gets one small, general addition.
+
+**Started:** 2026-06-21 (user-directed, external real-world requirements doc)
+**Source:** `/home/izzo/Projects/PNF/research/tooling/fwiz-feature-proposal.md` (the "PNF" card-game
+exact-design-inversion use case). Validation throughout = cross-check fwiz exact results against the
+PNF Monte-Carlo sim (a dogfood of fwiz's exactness claims).
+**Estimated cycles:** 3 (down from the proposal's 4-5 — see headline finding)
+**Status:** RESEARCH complete; DESIGN next
+
+**Headline research finding:** the proposal's scariest core ask — **P0b arbitrary-precision
+integers — is NOT needed.** Both researchers independently proved every combinatorial value in
+the 54-card model fits in a `double` exactly (max `C(54,27)≈1.95e15 < 2^53≈9.0e15`); the
+multiplicative/GCD-interleaved nCr never materializes n!. Future #17 stays planned for a future
+crypto/number-theory consumer; it is a no-op here. The arc collapses to ONE core addition + stdlib.
+
+**Milestones:**
+- [ ] **Cycle 1 — P0a bounded aggregation (THE core feature).** `sum`/`product` (likely + `count`,
+      n-ary `max`/`min`) over an integer range, as `ExprType::FUNC_CALL` named `"sum"`/`"product"`
+      (NO new ExprType — the vec/mat FUNC_CALL pattern). Simplifier-dispatch in `simplify_once`'s
+      FUNC_CALL branch: eager-fold to a rational via existing `make_rational` when bounds are
+      numeric; unevaluated form (like `integral`) when symbolic. Reverse-solve falls out free once
+      a static-range aggregation folds away (every CAS does it this way — eager-fold then standard
+      solver; none invert a Sum object). Est. ~80-120 LOC core.
+- [ ] **Cycle 2 — P1a combinatorics stdlib `.fw`.** `factorial`, `nPr`, falling/rising factorial,
+      `nCr` (multiplicative form — implicit GCD via `DIV(Num,Num)` normalization), hypergeometric
+      PMF/CDF. Validate: P(≥2 clubs in 5 of 54) = `0.3467505241` exactly vs the sim. ~zero C++.
+- [ ] **Cycle 3 — P1b expectation & order statistics stdlib `.fw`.** E[X]=`Σ value·probability`,
+      variance, hypergeometric mean/variance, E[k-th order stat of {1..N}] = `k*(N+1)/(n+1)`
+      (EXACT — hockey-stick identity). Validate: E[highest of 5] ≈ 10.34. ~zero C++.
+
+**Deferred / out of scope (protect the tiny core):**
+- P0b arbitrary precision → deferred (Future #17 stays planned; not a PNF blocker).
+- Solve-for-the-range-BOUND (`product(i,1..n)=120`, solve n) — needs explicit Strategy-6 wiring;
+  not a PNF need (their params are in bodies/coefficients, not bounds). Design OQ: in or out?
+- P2 `@include` (Future #80) — optional library packaging; PNF lives without it.
+- No random-variable/distribution TYPE in the core — proposal explicitly does NOT ask; stays
+  consistent with the REJECTED.md tiny-core line. EV is just explicit aggregation.
+
+**Vision alignment:** STRONG. One small general primitive (bounded aggregation) unlocks an entire
+domain (combinatorics + probability) entirely in `.fw` stdlib — the canonical "tiny fast core,
+tools wrap around it" shape. Closes/advances Future #5 / #5b (in-file declarative range /
+aggregation); makes the anticipated `combinatorics/permutations.fw` + `probability/expected_value.fw`
+writable. The reverse-solvability of closed forms is the exact reason fwiz (vs a forward-only CAS)
+is the right tool for design inversion — the arc plays directly to the bidirectional differentiator.
+
+**Why this arc was chosen:** user-directed, from an external real-world requirements doc. First
+arc seeded by an outside consumer with concrete validation targets (the PNF sim) — the strongest
+kind of arc input. plan-ideator skipped (the arc shape is externally fixed by the proposal); the
+design rigor goes into DESIGN (planner/critic/visionary) on the P0a core surface.
+
+**Reopen / extend trigger:** P0b promotes when a consumer needs N>130 (or `__int128` proves
+insufficient). P2 `@include` promotes if the PNF `.fw` library outgrows single files. Solve-for-bound
+promotes if a real query puts the design parameter in a range bound.
+
+## Recently completed
+
+### Arc: Types as Named Sets (gen-5) ✓ COMPLETE 2026-06-06
 
 **Theme:** Unify fwiz's type/domain/dimension machinery under one mechanism — **named sets**. Every type is a named set with a membership predicate. Built-in sets (int, real, rational, complex) are optimized cases of what users could write themselves. Section-based dim sets (`[mass]`, `[length]`) and user-definable predicate sets (`[whole_number(n)] iff n >= 0 && is_int(n)`) and function-section sets (`[fibonacci(n) -> result]`) all share the same surface and the same predicate-testing semantics. Closes C7 (cycle-2 partial-ship), Future #82 (consolidate binding-side metadata), and Future #7b FULL (compound-expression dim-analysis) in one coherent arc.
 
 **Started:** 2026-05-14 (as "Constants-as-units design"); expanded scope 2026-05-15 (user-directed)
 **Estimated cycles:** 4 shipped (1 design + 1 substrate + 3a + 3b) + 1-3 ahead (3d/3c/3e)
 **Cycles elapsed:** 4 (gen-3 cycles 1+2 + cycles 3a+3b)
-**Status:** cycles 1+2+3a+3b ✓ DONE; cycles 3d+3c+3e ahead under expanded framing
+**Status:** ✓ COMPLETE 2026-06-06. Cycles 1+2+3a+3b+3c ✓ DONE; 3d delivered via 3h/3i (function-section reverse-solve, #90/#91/#92); 3c closed Future #7b FULL (dim exponent algebra). Only #81/#3e named compound-dim aliases remain as deferred-pull sugar.
 **Mode:** user-directed scope expansion (was objective-mode gen-3; expanded mid-arc per design discussion 2026-05-15)
 
 **Milestones:**
@@ -178,6 +241,9 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 - **Generation 5 (2026-05-15, user-directed mid-arc scope expansion)**: Discussion-driven re-prioritization. C7 enforcement (cycle-2 partial-ship — `is_int` half of intersection annotation dropped) prompted a step-back design conversation. User observation: "we added ranges/sets as conditions but we never actually added the domains properly." The unification surfaced naturally — types/domains/dimensions are all aspects of "named sets with membership predicates." Three insights validated: (1) sets-as-functions (`x ∈ f(x)` is existential solve — uses existing mechanics); (2) ValueSet ≈ SetDef (named sets are ValueSets with names); (3) built-in sets are optimized cases of user-writable sets — "if users can derive their own int from a superset that's a design victory." gen-3 arc reframed from "Constants-as-units design" to "Types as Named Sets" (cycle 3 → 3a/3b/3c/3d/3e — 3-5 cycle expansion). LLM-ergonomics benchmark returns to queued ("LLM benchmark can wait"). Full design trio (planner + critic + visionary) requested for cycle 3a; design captured via conversation rather than research phase.
 - **Generation 5 cycle 3a closed (2026-05-15)**: Type-axis unification substrate shipped. 3565→3641 (+76 tests); all gates green. `type_map_` replaces `dim_map_`; `SetDef` registry with 4 built-in named sets (int/real/rational/complex); `is_in` canonical predicate + parse-time rewrite of `is_int`/`is_in_dimension` aliases; `SimplifyContext` transport; intersection-atom classification via kind-dispatch; cross-file propagation bug (auto-section branch) fixed; `BindingType`/`SetDef`/`SimplifyContext` relocated to `expr.h` (architecture-emergent). C7 fully closed — `n:(int, mass)` now populates both `.dim` and `.sets`. Semantic strengthening: `is_in(expr, int)` evaluates compound expressions, not just bare Nums. ~166 net production LOC. Future #82 updated; #65 updated; #83 + #84 NEW PARKED.
 - **Generation 5 cycle 3b closed (2026-05-16)**: User-defined predicate sets shipped. 3641→3693 (+52 tests); all gates green. `[name(param)] iff ...` predicate section syntax recognized by `is_predicate_section` + `register_predicate_section`; `SetDef` gains `USER_PREDICATE` kind (Kind enum is now 3-valued), `parameter` field, and `predicate` field. `check_condition` `is_in` switch extended to 3 cases. Thread-local recursion guard prevents self-referential sets from stack-overflowing. Comprehension-gate comment block extended from 4-location to 7-location enumeration. `complex` built-in renamed to `imaginary` in `load_builtins` + error messages (11 of 13 sites; 2 regex-roundtrip test labels preserved per design). Cross-file lifetime comment added at auto-section branch (Future #87). AC8 design victory confirmed: user-defined `[my_int(n)]` is functionally equivalent to built-in `int`. Architecture-emergent: `is_in` predicate dispatch requires rewrite-rule context (equation-condition context provides null `expr_bindings` — stdlib authors must use rewrite-rule shape for dimensional-rejection rules). ~166 net production LOC. Future #82 V2 update; #65 V3 update; #85+#86+#87 NEW PARKED.
+
+- **Generation 5 arc complete (2026-06-06)**: Types as Named Sets shipped cycles 3a/3b/3c (+ 3d delivered via 3h/3i function-section reverse-solve). Future #7b FULL (dim exponent algebra), #82, #90/#91/#92 closed; #84 NumberDomain enum deleted in the 2026-06-21 consolidation cleanup cycle. Dims/sets/predicates/function-sections all unified under named-set membership. Only #81/#3e (named compound-dim aliases) remain deferred-pull. A consolidation/cleanup cycle (2026-06-21, counter=45) cleared accumulated debt (blind-spot sweep all-PASS, compact-pass, metrics-ledger anti-drift) before the next arc.
+- **Generation 6 (2026-06-21, user-directed from external requirements doc)**: Bounded aggregation & combinatorics arc selected — NOT via plan-ideator/plan-critic (the arc shape is externally fixed by `fwiz-feature-proposal.md`, a prioritized real-world requirements pitch from the PNF card-game project). First arc seeded by an outside consumer with concrete validation targets (the PNF Monte-Carlo sim). Two parallel researchers (internal substrate + external CAS/math) independently converged on the headline finding: **P0b arbitrary-precision integers is NOT needed** — every 54-card combinatorial value fits in double exactly (max C(54,27)≈1.95e15 < 2^53). The arc collapsed from the proposal's feared 4-5 cycles (incl. a big-int subsystem) to **3 cycles, ONE core addition** (P0a bounded aggregation as a vec/mat-style FUNC_CALL, eager-fold-then-standard-solver) + pure `.fw` stdlib (P1a combinatorics, P1b expectation). LLM-ergonomics benchmark stays queued (its "Types arc completes" trigger fired, but the user preempted with the PNF arc — more concrete external signal). RESEARCH complete; DESIGN next.
 
 ## Arc entry format
 

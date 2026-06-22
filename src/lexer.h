@@ -21,10 +21,15 @@ enum class TokenType : uint8_t {
     // NUMBER-IDENT denylist which is a parser-level desugar guard, not a token
     // upgrade. See parse_condition for the infix-to-FUNC_CALL synthesis.
     IN,
+    // DOTDOT (`..`) and AT (`@`): range/step markers in range literals
+    // `[lo..hi]` / `[lo..hi @ step]` (gen-6 cycle 1, Future #5b). DOTDOT is
+    // lexed in tokenize() before the number-start dispatch; AT is a single_char.
+    DOTDOT,
+    AT,
     END,
     COUNT_
 };
-static_assert(static_cast<int>(TokenType::COUNT_) == 17,
+static_assert(static_cast<int>(TokenType::COUNT_) == 19,
     "TokenType count drift — update lexer dispatch table if adding/removing tokens.");
 
 struct Token {
@@ -43,6 +48,13 @@ public:
             skip_ws();
             if (pos_ >= src_.size()) break;
             char c = src_[pos_];
+
+            // `..` range separator — two dots as one token (gen-6 cycle 1).
+            // Must precede the number-start check: `..` starts with `.` which
+            // would otherwise begin a number (then fail) or be unexpected.
+            if (c == '.' && pos_ + 1 < src_.size() && src_[pos_ + 1] == '.') {
+                tokens.push_back({TokenType::DOTDOT, "..", 0}); pos_ += 2; continue;
+            }
 
             if (is_digit(c) || (c == '.' && pos_ + 1 < src_.size() && is_digit(src_[pos_ + 1])))
                 tokens.push_back(read_number());
@@ -78,14 +90,20 @@ private:
             case ')': return TokenType::RPAREN; case '[': return TokenType::LBRACKET;
             case ']': return TokenType::RBRACKET; case '=': return TokenType::EQUALS;
             case '?': return TokenType::QUESTION; case ',': return TokenType::COMMA;
-            case ':': return TokenType::COLON;
+            case ':': return TokenType::COLON;  case '@': return TokenType::AT;
             default:  return std::nullopt;
         }
     }
 
     Token read_number() {
         const size_t start = pos_;
-        while (pos_ < src_.size() && (is_digit(src_[pos_]) || src_[pos_] == '.'))
+        // Consume digits and a decimal point, but STOP at the first `.` of a
+        // `..` range separator (gen-6 cycle 1) so `1..5` lexes as
+        // NUMBER(1) DOTDOT NUMBER(5) rather than feeding "1..5" to std::stod.
+        // `1.5` is unaffected: the dot is followed by a digit, not another dot.
+        while (pos_ < src_.size() && (is_digit(src_[pos_]) ||
+               (src_[pos_] == '.' &&
+                (pos_ + 1 >= src_.size() || src_[pos_ + 1] != '.'))))
             pos_++;
         // Scientific notation `[eE][+-]?[0-9]+` — required before the units
         // cycle 1 NUMBER-IDENT desugar so `100e3` keeps parsing as 100000

@@ -36,6 +36,34 @@ static_assert(static_cast<double>(FINGERPRINT_SCALE) * EPSILON_REL == 1.0,
               "FINGERPRINT_SCALE must equal 1/EPSILON_REL so bucket size matches tolerance");
 
 // ============================================================================
+//  gen_range_values — discrete value generation for `[lo..hi @ step]`.
+//
+//  Single source of truth for range enumeration, shared by parse_range
+//  (system.h, --table CLI ranges) and try_unroll_aggregate (this file,
+//  bounded aggregation). Count-based generation avoids IEEE-754 drift from
+//  repeated addition (round() handles e.g. (5-1)/2 = 1.9999... → 2).
+//
+//  Returns an EMPTY vector for degenerate input (zero step, or empty range
+//  for the given direction). Callers decide whether empty is an error
+//  (parse_range throws with a specific message) or a no-op (try_unroll_aggregate
+//  returns nullptr / identity). parse_range performs its own direction/step
+//  validation first to keep its user-facing error messages; this generator's
+//  guards are the belt-and-suspenders floor.
+// ============================================================================
+[[nodiscard]] inline std::vector<double> gen_range_values(double lo, double hi, double step) {
+    std::vector<double> values;
+    if (std::abs(step) < EPSILON_ZERO) return values;            // zero step
+    if (step > 0.0 && lo > hi + EPSILON_ZERO) return values;     // empty ascending
+    if (step < 0.0 && lo < hi - EPSILON_ZERO) return values;     // empty descending
+    const double raw_count = (hi - lo) / step;
+    const auto count = static_cast<size_t>(std::round(raw_count)) + 1;
+    values.reserve(count);
+    for (size_t i = 0; i < count; i++)
+        values.push_back(lo + static_cast<double>(i) * step);
+    return values;
+}
+
+// ============================================================================
 //  Checked<T> — NaN-sentinel wrapper for floating-point evaluate() results.
 //  Empty (no-value) state is encoded as quiet_NaN.
 //  sizeof(Checked<double>) == sizeof(double) — no hidden bool discriminant.
@@ -2746,6 +2774,60 @@ constexpr size_t MATRIX_3X3_DIM = 3;
     return nullptr;
 }
 
+// ============================================================================
+//  Bounded aggregation unroll (gen-6 cycle 1, Future #5 / #5b)
+//
+//  Recognizes FUNC_CALL("sum"|"product", {body, Var(iter), range(...)}) when
+//  the range bounds are all numeric, and expands to:
+//
+//    sum     → ADD(body[iter:=v1], body[iter:=v2], ..., body[iter:=vn])
+//    product → MUL(body[iter:=v1], ..., body[iter:=vn])
+//
+//  Range node is FUNC_CALL("range", {lo, hi}) (step defaults to 1) or
+//  {lo, hi, step}. Reuses substitute + simplify + gen_range_values — no new
+//  evaluator. Single iterator only; multi-iterator and body-free reducers are
+//  deferred to Step B (which will revisit the aggregate arg layout).
+//
+//  Returns nullptr (leaves the FUNC_CALL unevaluated, no crash) when the name
+//  is not sum/product, the shape is wrong, the iterator is not a Var, the range
+//  bounds are non-numeric (Step B symbolic-bound contract), or the range is
+//  degenerate (empty/zero-step → identity element instead).
+// ============================================================================
+[[nodiscard]] inline ExprPtr try_unroll_aggregate(
+        const std::string& name, const std::vector<ExprPtr>& sa) {
+    const bool is_sum     = (name == "sum");
+    const bool is_product = (name == "product");
+    if (!is_sum && !is_product) return nullptr;
+
+    if (sa.size() != 3) return nullptr;          // {body, iter, range}
+    if (!is_var(sa[1])) return nullptr;
+
+    const ExprPtr& rng = sa[2];
+    if (!rng || rng->type != ExprType::FUNC_CALL || rng->name != "range") return nullptr;
+    const size_t ra = rng->args.size();
+    if (ra != 2 && ra != 3) return nullptr;
+    if (!is_num(rng->args[0]) || !is_num(rng->args[1])) return nullptr;  // symbolic bound → unevaluated
+    if (ra == 3 && !is_num(rng->args[2])) return nullptr;
+
+    const double lo   = rng->args[0]->num;
+    const double hi   = rng->args[1]->num;
+    const double step = (ra == 3) ? rng->args[2]->num : 1.0;  // 2-arg form defaults step=1
+
+    const std::vector<double> values = gen_range_values(lo, hi, step);
+    // Empty range → additive/multiplicative identity element.
+    if (values.empty()) return is_sum ? Expr::Num(0) : Expr::Num(1);
+
+    const std::string& iter_var = sa[1]->name;
+    const ExprPtr body  = sa[0];
+    const BinOp fold_op = is_sum ? BinOp::ADD : BinOp::MUL;
+    ExprPtr acc = nullptr;
+    for (double v : values) {
+        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+        acc = acc ? Expr::BinOpExpr(fold_op, acc, term) : term;
+    }
+    return acc;  // never null (values non-empty)
+}
+
 // ---- Simplify: main entry ----
 
 inline ExprPtr simplify_once_impl(const ExprPtr& e) {
@@ -2775,6 +2857,11 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 if (is_undefined(sa.back())) return sa.back();  // propagate
                 if (!is_num(sa.back())) all_num = false;
             }
+            // Bounded aggregation unroll (gen-6 cycle 1): sum/product over a
+            // static numeric range. Returns nullptr for every non-aggregate
+            // name and for symbolic bounds → falls through to existing dispatch.
+            if (auto agg = try_unroll_aggregate(e->name, sa)) return agg;
+
             auto s = Expr::Call(e->name, sa);
             if (all_num && lookup_function(e->name)) return evaluate_symbolic(*s);
 

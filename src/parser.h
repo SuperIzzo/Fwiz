@@ -48,6 +48,45 @@ private:
         advance();
     }
 
+    // Range-literal body parser (gen-6 cycle 1). Called from the LBRACKET branch
+    // when the first element `lo` is parsed and the current token is DOTDOT.
+    // Consumes DOTDOT, the upper bound, an optional `@ step`, and the closing ']'.
+    //
+    // Returns FUNC_CALL("range", {lo, hi})           when no `@` clause, OR
+    //         FUNC_CALL("range", {lo, hi, step})     when `@ step` is present.
+    // The arity carries the discrete-vs-continuous distinction Step B needs:
+    // absence of step is information, not a defaulted 1 (critic change 1).
+    // No new ExprType — "range" is a named FUNC_CALL (same pattern as vec/mat).
+    ExprPtr parse_range_literal(ExprPtr lo) {
+        expect(TokenType::DOTDOT, "Expected '..' in range literal");
+        auto hi = parse_expr();   // stops at AT and RBRACKET (neither is an operator)
+        std::vector<ExprPtr> args = {lo, hi};
+        if (is(TokenType::AT)) {
+            advance();
+            args.push_back(parse_expr());   // step
+        }
+        expect(TokenType::RBRACKET, "Expected ']' to close range literal");
+        return Expr::Call("range", args);
+    }
+
+    // Parse one FUNC_CALL argument, recognizing the iterator clause
+    // `var in [range]` used by aggregates (gen-6 cycle 1). When `IDENT in` is
+    // seen, push Var(iter) into `args` and return the range descriptor parsed by
+    // the normal LBRACKET-range branch (critic change 4 — single dispatch path).
+    // Result layout for the caller: {..., Var(iter), range(...)}. Multi-iterator
+    // and body-free reducers are deferred to Step B, which will revisit the arg
+    // layout. Otherwise this is an ordinary parse_expr().
+    ExprPtr parse_expr_or_iter_clause(std::vector<ExprPtr>& args) {
+        if (is(TokenType::IDENT) && pos_ + 1 < tok_.size()
+                && tok_[pos_ + 1].type == TokenType::IN) {
+            const std::string iter_var = advance().text;  // consume IDENT
+            advance();                                     // consume IN
+            args.push_back(Expr::Var(iter_var));
+            return parse_expr();                           // range literal via LBRACKET branch
+        }
+        return parse_expr();
+    }
+
     // Grammar: additive → multiplicative ((+|-) multiplicative)*
     ExprPtr additive() {
         auto node = multiplicative();
@@ -157,8 +196,11 @@ private:
                 advance();
                 std::vector<ExprPtr> args;
                 if (!is(TokenType::RPAREN)) {
-                    args.push_back(parse_expr());
-                    while (is(TokenType::COMMA)) { advance(); args.push_back(parse_expr()); }
+                    args.push_back(parse_expr_or_iter_clause(args));
+                    while (is(TokenType::COMMA)) {
+                        advance();
+                        args.push_back(parse_expr_or_iter_clause(args));
+                    }
                 }
                 expect(TokenType::RPAREN, "Expected ')'");
                 return Expr::Call(name, args);
@@ -176,11 +218,15 @@ private:
         // No new ExprType; pure FUNC_CALL sugar (design-proposal §M3).
         if (is(TokenType::LBRACKET)) {
             advance();
-            std::vector<ExprPtr> elems;
-            if (!is(TokenType::RBRACKET)) {
-                elems.push_back(parse_expr());
-                while (is(TokenType::COMMA)) { advance(); elems.push_back(parse_expr()); }
-            }
+            // Empty `[]` → vec() (0-element vector). Preserved exactly.
+            if (is(TokenType::RBRACKET)) { advance(); return Expr::Call("vec", {}); }
+            auto first = parse_expr();
+            // Range literal `[lo..hi]` / `[lo..hi @ step]` (gen-6 cycle 1):
+            // disambiguated by DOTDOT immediately after the first element.
+            // Vec/mat literals use COMMA instead — zero ambiguity.
+            if (is(TokenType::DOTDOT)) return parse_range_literal(first);
+            std::vector<ExprPtr> elems = {first};
+            { while (is(TokenType::COMMA)) { advance(); elems.push_back(parse_expr()); } }
             expect(TokenType::RBRACKET, "Expected ']'");
             // Promote to mat if every element is a vec literal AND we have at
             // least one element. Empty [] stays as vec().

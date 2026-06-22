@@ -4798,13 +4798,11 @@ struct CLIQuery {
             throw std::runtime_error("parse_range: empty range '" + sr +
                 "' (start < stop with negative step)");
 
-        // Count-based generation: avoids float drift from repeated addition.
-        // `round` handles cases like 0..1 @ 0.1 where (stop-start)/step = 9.999...
-        const double raw_count = (stop_v - start_v) / step_v;
-        const auto count = static_cast<size_t>(std::round(raw_count)) + 1;
-        values.reserve(values.size() + count);
-        for (size_t i = 0; i < count; i++)
-            values.push_back(start_v + static_cast<double>(i) * step_v);
+        // Shared count-based generation (avoids float drift). The direction/step
+        // validity is already enforced above with specific error messages; the
+        // generator's own guards are a no-op here. See gen_range_values (expr.h).
+        const auto sub_values = gen_range_values(start_v, stop_v, step_v);
+        values.insert(values.end(), sub_values.begin(), sub_values.end());
     }
     return values;
 }
