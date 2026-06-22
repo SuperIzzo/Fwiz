@@ -13,6 +13,51 @@ Core landed; see COMPLETED.md #4.
 - Periodicity detection — core shipped (#12 DONE); numeric gap-based detection deferred (#12a)
 - User-provided initial guess syntax (e.g., `x=?~5`)
 
+## 101. Aggregation reverse-solve: algebraic `=` upgrade for linear inverses — PARKED
+
+**Surfaced gen-6 cycle 1 Step D (2026-06-21).** Reverse-solving through a
+formula-bodied aggregation (`sum(dmg(atk=f, def=k), f in [1..6]) = total`)
+currently composes via the numeric solver (Strategy 6 system-probe), so a linear
+inverse like `total = 21*k` is recovered as an approximate `~` result even though
+it is exactly `k = total/21`.
+
+**Proposed fix:** when the aggregate body unfolds to a closed form linear in the
+unknown, `unfold_formula_call_body` the per-value clones into a single collapsed
+expression (`total = 21*k`) BEFORE Strategy 6, so the exact algebraic Strategy 2
+path (`k = total/21`) fires first and emits `=`.
+
+**Trigger:** user reports `~` on a linear reverse-solve that should be exact, OR a
+cycle needs exact symbolic aggregation inverses.
+
+## 102. `resolve()` first-wins divergence on multi-branch FORMULA_REV — PARKED
+
+**Surfaced gen-6 cycle 1 Step D (2026-06-21).** For a reverse-solve through a
+PIECEWISE (multi-branch) formula call inside an aggregation
+(`sum(combat(atk=f, def=k, dmg=?), f in [1..6]) = 6`), `resolve_all("k")`
+correctly returns `{3}`, but the single-value `resolve("k")` can return a spurious
+root (e.g. `-5`). Root cause: a FORMULA_REV candidate inverts one clone's
+sub-system for `def` via the `dmg = atk - def` branch even when the active branch
+was `dmg = 0` (condition `atk <= def`), producing a `def`(=`k`) value that does
+NOT satisfy the aggregate. `resolve()` accepts the first candidate's value with no
+global forward re-verification; `resolve_all()` is robust because the correct
+numeric-scan root survives among all collected candidates.
+
+This is pre-existing FORMULA_REV behaviour (no global re-verification of an
+inverted single value), merely *exposed* by aggregation — it is not specific to
+the aggregation surface. The Step D BLOCKING piecewise test asserts via
+`resolve_all` accordingly.
+
+**Proposed fix:** add a forward-consistency gate to the FORMULA_REV candidate in
+`try_resolve` — after binding `target` from an inverted sub-system, re-evaluate the
+source equation forward and reject the binding if it does not reproduce the known
+RHS. (Larger surface than a single cycle; touches the general single-value solve
+path, not just aggregation.)
+
+**Trigger:** a user reports a wrong single value from `resolve()` (or CLI
+single-result mode) on a piecewise/multi-branch reverse-solve where `resolve_all`
+gives the right answer, OR a cycle needs sound single-value reverse-solve through
+multi-branch formula calls.
+
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
 Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.

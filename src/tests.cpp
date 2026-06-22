@@ -17689,6 +17689,143 @@ void test_bounded_aggregation_step_c() {
     ASSERT_EQ(ss("mean(i, i in [1..4])"), "5 / 2", "SCreg-B: mean(i,1..4)=5/2 (Step B intact)");
 }
 
+void test_bounded_aggregation_step_d() {
+    SECTION("gen-6 Step D: reverse-solve through formula-bodied aggregations");
+
+    // dmg_linear: result = atk*def. sum over atk in [1..6] = (1+..+6)*def = 21*def.
+    const std::string dmg_linear_def  = "[dmg_linear(atk, def) -> result]\nresult = atk * def\n";
+    // dmg_squared: result = atk*def^2. sum over atk in [1..6] = 21*def^2.
+    const std::string dmg_squared_def = "[dmg_squared(atk, def) -> result]\nresult = atk * def^2\n";
+    // combat: piecewise. dmg = atk - def iff atk > def, else 0.
+    const std::string combat_def =
+        "[combat(atk, def) -> dmg]\ndmg = atk - def iff atk > def\ndmg = 0 iff atk <= def\n";
+
+    // ---- SD1 (BLOCKING): explicit-iterator named binding, linear reverse ----
+    // sum(dmg_linear(atk=f, def=k), f in [1..6]) = 21*k. total=21 -> k=1.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("total = sum(dmg_linear(atk=f, def=k), f in [1..6])\n");
+        // Forward sanity: k=1 -> total=21.
+        ASSERT_NUM(sys.resolve("total", {{"k", 1}}), 21.0, "SD1-fwd: sum(dmg_linear(atk=f,def=1),1..6)=21");
+        // Reverse: total=21 -> k=1. Assert the VALUE (not the ~/= prefix).
+        const double k = sys.resolve("k", {{"total", 21}});
+        ASSERT(FormulaSystem::approx_equal(k, 1.0), "SD1: total=21 -> k=1");
+    }
+
+    // ---- SD2 (BLOCKING): explicit-iterator named binding, nonlinear reverse ----
+    // sum(dmg_squared(atk=f, def=k), f in [1..6]) = 21*k^2. total=84 -> k=2.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_squared"] = dmg_squared_def;
+        sys.load_string("total = sum(dmg_squared(atk=f, def=k), f in [1..6])\n");
+        ASSERT_NUM(sys.resolve("total", {{"k", 2}}), 84.0, "SD2-fwd: sum(dmg_squared(atk=f,def=2),1..6)=84");
+        // 21*k^2 = 84 -> k = +/-2; both are valid roots. resolve() returns one
+        // of them; assert the magnitude (the reverse-solve recovered a root).
+        const double k = sys.resolve("k", {{"total", 84}});
+        ASSERT(FormulaSystem::approx_equal(std::abs(k), 2.0), "SD2: total=84 -> |k|=2");
+        // resolve_all recovers BOTH roots (the value composes either way).
+        auto ks = sys.resolve_all("k", {{"total", 84}});
+        ASSERT(ks.contains(2.0) && ks.contains(-2.0), "SD2: resolve_all -> {-2, 2}");
+    }
+
+    // ---- SD3: broadcast + result=? (already worked pre-cycle) ----
+    // sum(dmg_linear(atk=[1..6], def=k, result=?)) = 21*k. total=21 -> k=1.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("total = sum(dmg_linear(atk=[1..6], def=k, result=?))\n");
+        ASSERT_NUM(sys.resolve("total", {{"k", 1}}), 21.0, "SD3-fwd: broadcast sum = 21 at k=1");
+        const double k = sys.resolve("k", {{"total", 21}});
+        ASSERT(FormulaSystem::approx_equal(k, 1.0), "SD3: broadcast total=21 -> k=1");
+    }
+
+    // ---- SD-piecewise (BLOCKING): combat sum reverse ----
+    // sum(combat(atk=f, def=k), f in [1..6]) = sum of max(f-k, 0) for f in 1..6.
+    // At k=3: f=4->1, f=5->2, f=6->3, rest 0. Sum = 6. total=6 -> k=3.
+    //
+    // The reverse-solve is asserted via resolve_all (NOT resolve): combat is a
+    // MULTI-BRANCH piecewise function, and the first-wins single-value resolve()
+    // can return a spurious root from a FORMULA_REV inversion that picks the
+    // `dmg = atk - def` branch even when the `dmg = 0` branch was the active one
+    // (no global re-verification of the inverted value). resolve_all collects ALL
+    // candidates and the correct numeric-scan root {3} survives. The reverse-solve
+    // composes; the resolve() first-wins divergence on multi-branch inversion is a
+    // pre-existing FORMULA_REV gap (no global forward re-verification of an inverted
+    // single value), filed as Future #102.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["combat"] = combat_def;
+        sys.load_string("total = sum(combat(atk=f, def=k, dmg=?), f in [1..6])\n");
+        ASSERT_NUM(sys.resolve("total", {{"k", 3}}), 6.0, "SD-piecewise-fwd: sum(combat,1..6) at k=3 = 6");
+        auto ks = sys.resolve_all("k", {{"total", 6}});
+        ASSERT(ks.contains(3.0), "SD-piecewise: total=6 -> k=3 (resolve_all composes)");
+    }
+
+    // ---- SD10 (BLOCKING): multi-unknown guard — must fail cleanly, NOT hang ----
+    // Both k and total free with a single aggregation equation: under-determined.
+    // The contract is: solve(k) with NO total binding either throws cleanly or
+    // returns a value — it must NOT hang. We assert termination + clean failure.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("total = sum(dmg_linear(atk=f, def=k), f in [1..6])\n");
+        // No binding for total -> k is under-determined. Expect a clean throw
+        // (cannot solve), NOT a hang and NOT a wrong silent value.
+        bool threw = false;
+        double got = std::numeric_limits<double>::quiet_NaN();
+        try { got = sys.resolve("k", {}); }
+        catch (const std::exception&) { threw = true; }
+        ASSERT(threw || std::isnan(got), "SD10: under-determined reverse fails cleanly (no hang)");
+    }
+
+    // ---- SD-product (DESIRABLE): product-aggregate reverse ----
+    // product(dmg_linear(atk=f, def=k), f in [1..3]) = (1*k)*(2*k)*(3*k) = 6*k^3.
+    // At k=2: 6*8 = 48. total=48 -> k=2.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("total = product(dmg_linear(atk=f, def=k), f in [1..3])\n");
+        ASSERT_NUM(sys.resolve("total", {{"k", 2}}), 48.0, "SD-product-fwd: product at k=2 = 48");
+        const double k = sys.resolve("k", {{"total", 48}});
+        ASSERT(FormulaSystem::approx_equal(k, 2.0), "SD-product: total=48 -> k=2");
+    }
+
+    // ---- Regression: Step C forward cases still pass under this fn ----
+    // SC1 positional body (the shape Shape A already handled).
+    {
+        const std::string score_def = "[score(roll) -> result]\nresult = roll * 2\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = sum(score(roll), roll in [1..6])\n");
+        ASSERT_NUM(sys.resolve("total", {}), 42.0, "SD-reg-SC1: positional body still = 42");
+    }
+    // Step C broadcast forward still passes.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["combat"] = combat_def;
+        sys.load_string("total = sum(combat(atk=[1..6], def=5, dmg=?))\n");
+        ASSERT_NUM(sys.resolve("total", {}), 1.0, "SD-reg-broadcast: combat broadcast still = 1");
+    }
+    // A normal non-aggregation solve still resolves ALGEBRAICALLY (never enters
+    // the numeric Strategy-6 path) — the predicate widening is additive-after-
+    // algebraic, so a plain linear solve stays exact (no numeric_results_ entry).
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_string("y = 3 * x\n");
+        ASSERT_NUM(sys.resolve("x", {{"y", 12}}), 4.0, "SD-reg-exact: y=3x, y=12 -> x=4");
+        ASSERT(sys.numeric_results_.count("x") == 0,
+               "SD-reg-exact: linear solve stays algebraic (=), no numeric fallback");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -18056,6 +18193,7 @@ int main() {
     test_bounded_aggregation_step_a();
     test_bounded_aggregation_step_b();
     test_bounded_aggregation_step_c();
+    test_bounded_aggregation_step_d();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

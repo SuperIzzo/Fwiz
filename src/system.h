@@ -1380,12 +1380,37 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         });
     }
 
-    // Unroll one aggregate node whose body may contain formula calls. Two shapes:
+    // Clone a pre-extracted FormulaCall for one aggregate domain value: fresh
+    // output_var (_fcN), and `var → Num(v)` substituted into EVERY binding value
+    // (so `atk=Var("f")` becomes `atk=Num(v)`, and compound bindings like
+    // `atk=f+1` fold too). Pushes the clone into formula_calls and returns its
+    // new output_var. Used by Shape A-named (Shape B keeps its own inline clone
+    // loop because it must also rewrite the range-literal binding `atk=[1..6]`,
+    // which is not a Var substitution). ONE-LEVEL: substitutes into this call's
+    // own bindings only; nested/chained FormulaCall bindings are out of scope
+    // (cartesian/nested cycle).
+    [[nodiscard]] std::string clone_call_with_subst(
+            const FormulaCall& tmpl, const std::string& var, double v) {
+        FormulaCall clone = tmpl;
+        clone.output_var = "_fc" + std::to_string(next_call_id_++);
+        for (auto& [param, val] : clone.bindings)
+            val = simplify(substitute(val, var, Expr::Num(v)));
+        formula_calls.push_back(clone);
+        return clone.output_var;
+    }
+
+    // Unroll one aggregate node whose body may contain formula calls. Shapes:
     //
     //   Shape A — explicit iterator: sum(body, Var(iter), range(lo, hi[, step])).
     //     For each domain value v: term = simplify(substitute(body, iter, Num(v))),
     //     then extract_positional_calls on the term so any nested formula call
     //     (score(v)) becomes a FormulaCall. fold_aggregate folds the terms.
+    //
+    //   Shape A-named — explicit iterator inside a NAMED formula-call binding:
+    //     sum(dmg(atk=f, def=k), f in [...]). The call is pre-extracted at parse
+    //     time, so the body reaching here is a bare Var("_fcN") and the iterator
+    //     `f` lives in the call's bindings. Clone the call per domain value with
+    //     `iter → Num(v)` substituted into its bindings (clone_call_with_subst).
     //
     //   Shape B — broadcast: sum(Var(_fcN)) where _fcN is a FormulaCall already
     //     extracted by extract_formula_calls with a range-literal binding (atk=[1..6]).
@@ -1415,6 +1440,43 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 if (!extract_range_values(rng, values)) return node;  // symbolic → unevaluated
                 const std::string iter_var = iter->name;
                 const ExprPtr body = is_count ? nullptr : node->args[0];
+
+                // Shape A-named: the body is a bare Var("_fcN") naming a formula
+                // call extracted at PARSE time (`sum(dmg(atk=f, def=k), f in ...)`
+                // — named-arg calls are pre-extracted, so the iterator `f` lives
+                // in the call's BINDINGS, not in the body expression). Substituting
+                // the inert body would never touch `f`; instead CLONE the call per
+                // domain value with `iter_var → Num(v)` applied to its bindings —
+                // exactly Shape B's clone mechanism, generalized to an explicit
+                // (rather than range-literal-derived) iterator. ONE-LEVEL only:
+                // bindings are `atk=Num(i), def=Var("k")`; nested/chained call
+                // bindings are out of scope (cartesian/nested cycle).
+                if (!is_count && is_var(body)) {
+                    const FormulaCall* orig = nullptr;
+                    // not std::find_if: needs the element's address to snapshot it
+                    for (const auto& c : formula_calls)
+                        // cppcheck-suppress useStlAlgorithm
+                        if (c.output_var == body->name) { orig = &c; break; }
+                    if (orig && formula_call_bindings_contain(body, iter_var)) {
+                        const std::string tmpl_var = body->name;
+                        const FormulaCall tmpl = *orig;  // snapshot (vector may grow)
+                        ExprPtr folded = fold_aggregate(name, values, [&](double v) {
+                            return Expr::Var(clone_call_with_subst(tmpl, iter_var, v));
+                        });
+                        // Drop the original template call: it still carries the
+                        // UN-substituted iterator binding (`atk=f`, f unbound), and
+                        // it is no longer referenced by any equation (the fold uses
+                        // the per-value clones). Leaving it would let the solver
+                        // probe its unbound iterator across the whole numeric range
+                        // during a reverse solve, returning spurious roots.
+                        // not std::remove_if: single-element removal by output_var
+                        for (auto it = formula_calls.begin(); it != formula_calls.end(); ++it)
+                            // cppcheck-suppress useStlAlgorithm
+                            if (it->output_var == tmpl_var) { formula_calls.erase(it); break; }
+                        return folded ? folded : node;
+                    }
+                }
+
                 ExprPtr folded = fold_aggregate(name, values,
                     is_count ? std::function<ExprPtr(double)>(nullptr)
                              : std::function<ExprPtr(double)>([&](double v) {
@@ -3776,6 +3838,25 @@ private:
         int source_group = -1;
     };
 
+    // True iff `expr` references a FormulaCall (by its output_var) whose bindings
+    // mention `var`. This is how the iterator/unknown of a formula-bodied
+    // aggregation hides from `contains_var(eq.rhs, target)`: after Step-C unroll,
+    // `total = _fc0 + ... + _fcN` and the unknown (`def=k`) lives inside each
+    // _fcN's bindings, not in the RHS tree itself. Strategy 6 consults this so a
+    // reverse-solve target buried in a formula-call binding is still emitted as a
+    // numeric candidate. ONE-LEVEL (non-transitive): inspects the directly-named
+    // calls' bindings only; bindings that are themselves formula-call outputs are
+    // not followed (nested/chained aggregation is a future step).
+    [[nodiscard]] bool formula_call_bindings_contain(
+            const ExprPtr& expr, const std::string& var) const {
+        return std::any_of(formula_calls.begin(), formula_calls.end(),
+            [&](const FormulaCall& fc) {
+                return contains_var(expr, fc.output_var)
+                    && std::any_of(fc.bindings.begin(), fc.bindings.end(),
+                        [&](const auto& kv) { return contains_var(kv.second, var); });
+            });
+    }
+
     // Generates candidates for solving a target variable.
     // Calls handler(candidate) for each. Handler returns true to stop.
     // Optional bindings are used for Strategy 4 (equating) to substitute
@@ -3997,7 +4078,8 @@ private:
                     && contains_var_in_condition(*eq.condition, target);
                 if (eq.lhs_var != target
                         && !contains_var(eq.rhs, target)
-                        && !target_in_cond) continue;
+                        && !target_in_cond
+                        && !formula_call_bindings_contain(eq.rhs, target)) continue;
                 auto combined = simplify(Expr::BinOpExpr(BinOp::SUB,
                     Expr::Var(eq.lhs_var), eq.rhs));
                 if (handler(Candidate{CandidateType::NUMERIC, combined,
