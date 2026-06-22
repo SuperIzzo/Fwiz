@@ -1894,6 +1894,47 @@ However, **both floor graders independently flagged the same structural gap unpr
 
 **Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Cheap hygiene that directly implements a newly-adopted Code-Style rule.
 
+## #R17. Refactor: `try_unroll_aggregate_with_calls` three-shape dispatch → named helpers — `nuanced-refactor-candidate`
+
+**From:** FULL-SWEEP Batch 1 (2026-06-22, gen-6 aggregation surface, function-scope ANALYZE, T1). Floor (Haiku + Gemma) **PASSED** the comprehension gate worst-of-two (purpose vague-but-correct/vague via Gemma; mechanics match/specific via both). This is NOT a gate failure.
+
+However, **both floor graders merged Shape A-named into Shape A** at T1 (comment-stripped). The function is a 96-line dispatcher over three structurally-distinct unroll shapes that the author has already delimited with `// Shape A` / `// Shape A-named` / `// Shape B` comments: (A) explicit-iterator body substitution, (A-named) body is a bare `Var("_fcN")` naming a parse-time-extracted formula call → clone-with-subst on its bindings + drop the template call, (B) broadcast arity-1 reducer over a formula-call output var → clone per range value. Haiku resolved more shapes than Gemma (it named the template-call-drop and the lockstep branch) but still folded A-named under A in the purpose read; Gemma stayed generic.
+
+**Diagnosis:** **structure** (the three shapes are real, internally commented, but live inline in one function body) compounded by **size** (96 LOC). The per-shape comments are doing the work that named helpers should do — the author conceptualizes three units, but a T1-stripped reader sees one wall and merges them.
+
+**Proposed (structural, low-priority):** Extract each comment-delimited block into a named private helper, turning the body into a three-line dispatcher:
+```cpp
+if (auto r = unroll_explicit_iterator(node))   return r;  // Shape A
+if (auto r = unroll_named_call_iterator(node))  return r;  // Shape A-named
+if (auto r = unroll_broadcast_over_call(node))  return r;  // Shape B
+return node;
+```
+The helper names carry the shape taxonomy the comments currently carry; the dispatcher becomes self-documenting and each helper is independently comprehensible (all three are < 40 LOC). This is the size+structure diagnosis from the comprehension-gate ladder (extract by responsibility boundary, where the boundary is already comment-marked).
+
+**Pattern coverage:** single site. The sibling `try_unroll_aggregate` (expr.h) is the simplify-path entry and is already small + clean (it passed match/specific on both graders) — it does NOT need the same treatment; only the system.h call-handling variant carries all three shapes.
+
+**Reopen trigger:** Either of:
+1. Implementer touches `try_unroll_aggregate_with_calls` for any reason (bug fix, cartesian-product extension for the 2+ ranges case) — extract the helpers as part of that change (the cartesian extension will add a fourth shape, at which point the inline form becomes untenable).
+2. A future function-scope sweep re-flags this function with a purpose read that merges or misattributes the shapes by either floor grader.
+
+**Locked:** No — nuanced channel, low-priority.
+
+## #R18. Refactor: `fold_aggregate` mean branch → explicit `is_mean` flag — naming
+
+**From:** FULL-SWEEP Batch 1 (2026-06-22, gen-6 aggregation surface, function-scope ANALYZE, T1). Floor **PASSED** worst-of-two (purpose match/vague worst-case via Gemma; mechanics match/vague worst-case via Haiku). Not a gate failure — both graders got the substance (it computes the arithmetic mean).
+
+**The signal:** the function names four reducer flags — `is_sum`, `is_product`, `is_max`, `is_min` — and handles each in an explicitly-flagged branch. The fifth reducer, `mean`, is handled by the **unflagged final fall-through** (sum the terms, divide by count). Haiku, unable to see `is_aggregate_reducer`'s set (`sum/product/max/min/mean/count`) at T1, read the unlabeled fall-through as *"the final unreachable branch ... may represent a bug, dead code, or an aggregate type whose identifier is not documented."* That is the **too-smart failure mode** (confident wrong-on-detail hedge) triggered precisely by the missing name — the one branch without a flag is the one the reader cannot identify.
+
+**Intervention (empirical):** adding an explicit `const bool is_mean = (name == "mean");` flag and an `if (is_mean) { ... }` guard flips Gemma's intervention-check read to confident *"arithmetic mean"* with the dead-code hedge gone (Gemma, /tmp/f3-iv-out, 2026-06-22). Naming was the entire bottleneck — intervention #1 (rename/explicit-flag) resolves it.
+
+**Proposed (single-pass, near-zero risk):** Mirror the other four reducers — add `const bool is_mean = (name == "mean");` alongside the existing four flags, and wrap the final mean computation in `if (is_mean) { ... }` (with the trailing `return nullptr;` as the genuine no-match fall-through, which then correctly reads as "unknown reducer that passed `is_aggregate_reducer` but isn't handled" — a defensive guard, not a mystery). The five-flag symmetry makes the fold-policy table read as the exhaustive dispatch it is.
+
+**Pattern coverage:** single site. This is the canonical "the unflagged branch is the unreadable branch" pattern — worth the Code-Style note below.
+
+**Reopen trigger:** Implementer touches `fold_aggregate` for any reason, OR a sixth reducer is added (at which point the implicit-fall-through-is-mean assumption silently breaks and the new reducer would hit the mean path).
+
+**Locked:** No — naming, low-priority but cheap and risk-free.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
