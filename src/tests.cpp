@@ -17464,6 +17464,103 @@ void test_bounded_aggregation_step_a() {
     }
 }
 
+void test_bounded_aggregation_step_b() {
+    SECTION("gen-6 Step B: remaining reducers (max/min/mean/count)");
+
+    // ---- Parser: bodied reducers (3-arg) ----
+    {
+        auto e = parse("max(i^2, i in [1..5])");
+        ASSERT(e->name == "max" && e->args.size() == 3, "PB1: max has 3 args {body, Var(iter), range}");
+        ASSERT(is_var(e->args[1]) && e->args[1]->name == "i", "PB1: args[1] iterator Var(i)");
+        ASSERT(e->args[2]->type == ExprType::FUNC_CALL && e->args[2]->name == "range", "PB1: args[2] range");
+    }
+    {
+        auto e = parse("mean(i, i in [1..5])");
+        ASSERT(e->name == "mean" && e->args.size() == 3, "PB2: mean has 3 args");
+    }
+    // ---- Parser: body-free count (2-arg) ----
+    {
+        auto e = parse("count(i in [1..5])");
+        ASSERT(e->type == ExprType::FUNC_CALL && e->name == "count", "PB3: count call");
+        ASSERT(e->args.size() == 2, "PB3: count has 2 args {Var(iter), range} (body-free)");
+        ASSERT(is_var(e->args[0]) && e->args[0]->name == "i", "PB3: args[0] iterator Var(i)");
+        ASSERT(e->args[1]->type == ExprType::FUNC_CALL && e->args[1]->name == "range", "PB3: args[1] range");
+    }
+
+    // ---- Simplifier: unroll (BLOCKING acceptance) ----
+    ASSERT_EQ(ss("max(i^2, i in [1..5])"), "25", "SB1: max i^2 1..5 == 25");
+    ASSERT_EQ(ss("min(i, i in [1..5])"), "1", "SB2: min i 1..5 == 1");
+    ASSERT_EQ(ss("mean(i, i in [1..5])"), "3", "SB3: mean i 1..5 == 3");
+    ASSERT_EQ(ss("count(i in [1..5])"), "5", "SB4: count 1..5 == 5");
+    ASSERT_EQ(ss("count(i in [1..5 @ 2])"), "3", "SB5: count 1..5 @2 == 3 (1,3,5)");
+
+    // ---- mean stays exact (rational, not float) ----
+    ASSERT_EQ(ss("mean(i, i in [1..4])"), "5 / 2", "SB6: mean i 1..4 == 5/2 exact (not 2.5)");
+
+    // ---- max/min over negatives + non-trivial bodies ----
+    ASSERT_EQ(ss("max(i, i in [1..5])"), "5", "SB7: max i 1..5 == 5");
+    ASSERT_EQ(ss("min(i^2, i in [2..4])"), "4", "SB8: min i^2 2..4 == 4");
+
+    // ---- End-to-end numeric ----
+    ASSERT_NUM(ev("max(i^2, i in [1..5])"), 25.0, "EB1");
+    ASSERT_NUM(ev("min(i, i in [1..5])"), 1.0, "EB2");
+    ASSERT_NUM(ev("mean(i, i in [1..5])"), 3.0, "EB3");
+    ASSERT_NUM(ev("count(i in [1..5])"), 5.0, "EB4");
+    ASSERT_NUM(ev("count(i in [1..5 @ 2])"), 3.0, "EB5");
+    ASSERT_NUM(ev("mean(i, i in [1..4])"), 2.5, "EB6: mean 1..4 numerically 2.5");
+
+    // ---- Empty domain (gen_range_values: [5..1] ascending w/o neg step → empty) ----
+    ASSERT_EQ(ss("count(i in [5..1])"), "0", "EMB1: count empty == 0");
+    ASSERT_EQ(ss("sum(i, i in [5..1])"), "0", "EMB2: sum empty == 0 (Step A identity, regression)");
+    ASSERT_EQ(ss("product(i, i in [5..1])"), "1", "EMB3: product empty == 1 (Step A identity)");
+    {
+        // max/min over empty → unevaluated (no identity). Stays as FUNC_CALL, no crash.
+        std::string out;
+        bool threw = false;
+        try { out = ss("max(i, i in [5..1])"); } catch (...) { threw = true; }
+        ASSERT(!threw, "EMB4: max empty does not throw");
+        ASSERT(out.rfind("max(", 0) == 0, "EMB4: max empty stays unevaluated FUNC_CALL");
+    }
+    {
+        std::string out;
+        bool threw = false;
+        try { out = ss("min(i, i in [5..1])"); } catch (...) { threw = true; }
+        ASSERT(!threw, "EMB5: min empty does not throw");
+        ASSERT(out.rfind("min(", 0) == 0, "EMB5: min empty stays unevaluated FUNC_CALL");
+    }
+    {
+        // mean over empty → unevaluated (division by 0). Stays as FUNC_CALL, no crash.
+        std::string out;
+        bool threw = false;
+        try { out = ss("mean(i, i in [5..1])"); } catch (...) { threw = true; }
+        ASSERT(!threw, "EMB6: mean empty does not throw");
+        ASSERT(out.rfind("mean(", 0) == 0, "EMB6: mean empty stays unevaluated FUNC_CALL");
+    }
+
+    // ---- Symbolic bound stays unevaluated for ALL reducers ----
+    {
+        for (const std::string& q : {std::string("max(i, i in [1..n])"),
+                                     std::string("min(i, i in [1..n])"),
+                                     std::string("mean(i, i in [1..n])"),
+                                     std::string("count(i in [1..n])")}) {
+            std::string out;
+            bool threw = false;
+            try { out = ss(q); } catch (...) { threw = true; }
+            ASSERT(!threw, "SYB: symbolic-bound reducer does not throw");
+            // Stays as the SAME reducer FUNC_CALL — not a number, not evaluated.
+            const std::string prefix = q.substr(0, q.find('('));
+            ASSERT(out.rfind(prefix + "(", 0) == 0, "SYB: symbolic-bound stays unevaluated reducer FUNC_CALL");
+        }
+    }
+    {
+        // Folds once the bound is bound (regression of the Step A "B4" pattern).
+        auto e = substitute(parse("count(i in [1..n])"), "n", Expr::Num(5));
+        ASSERT_EQ(expr_to_string(simplify(e)), "5", "SYB-fold: count 1..n folds to 5 once n=5");
+        auto e2 = substitute(parse("max(i, i in [1..n])"), "n", Expr::Num(5));
+        ASSERT_EQ(expr_to_string(simplify(e2)), "5", "SYB-fold: max 1..n folds to 5 once n=5");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -17829,6 +17926,7 @@ int main() {
 
     // gen-6 arc cycle 1 Step A (2026-06): bounded aggregation unroll
     test_bounded_aggregation_step_a();
+    test_bounded_aggregation_step_b();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

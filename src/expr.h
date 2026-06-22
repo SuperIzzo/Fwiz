@@ -2777,55 +2777,118 @@ constexpr size_t MATRIX_3X3_DIM = 3;
 // ============================================================================
 //  Bounded aggregation unroll (gen-6 cycle 1, Future #5 / #5b)
 //
-//  Recognizes FUNC_CALL("sum"|"product", {body, Var(iter), range(...)}) when
-//  the range bounds are all numeric, and expands to:
+//  Recognizes the six reducers over a static numeric range and expands by
+//  macro-substitution + the existing simplifier — no new evaluator. The shape
+//  depends on the reducer name (single-iterator only):
 //
-//    sum     → ADD(body[iter:=v1], body[iter:=v2], ..., body[iter:=vn])
-//    product → MUL(body[iter:=v1], ..., body[iter:=vn])
+//    BODIED (3-arg, {body, Var(iter), range(...)}):
+//      sum     → ADD(body[iter:=v1], ..., body[iter:=vn])     identity 0
+//      product → MUL(body[iter:=v1], ..., body[iter:=vn])     identity 1
+//      max     → fold std::max over body[iter:=vi]            empty → unevaluated
+//      min     → fold std::min over body[iter:=vi]            empty → unevaluated
+//      mean    → DIV(sum-fold, Num(count))  (exact rational)  empty → unevaluated
+//    BODY-FREE (2-arg, {Var(iter), range(...)}):
+//      count   → Num(|domain|)                                empty → 0
 //
 //  Range node is FUNC_CALL("range", {lo, hi}) (step defaults to 1) or
-//  {lo, hi, step}. Reuses substitute + simplify + gen_range_values — no new
-//  evaluator. Single iterator only; multi-iterator and body-free reducers are
-//  deferred to Step B (which will revisit the aggregate arg layout).
+//  {lo, hi, step}. Reuses substitute + simplify + gen_range_values.
 //
 //  Returns nullptr (leaves the FUNC_CALL unevaluated, no crash) when the name
-//  is not sum/product, the shape is wrong, the iterator is not a Var, the range
-//  bounds are non-numeric (Step B symbolic-bound contract), or the range is
-//  degenerate (empty/zero-step → identity element instead).
+//  is not a reducer, the shape is wrong, the iterator is not a Var, the range
+//  bounds are non-numeric (symbolic-bound contract — folds once bound), or the
+//  domain is empty for a reducer with no identity (max/min/mean).
 // ============================================================================
+
+// Validate + extract a static numeric range node into enumerated values.
+// Returns false (and leaves `out` untouched) when `rng` is not a range FUNC_CALL,
+// has wrong arity, or has any non-numeric (symbolic) bound. An empty domain is
+// a SUCCESSFUL extraction with `out` empty — the caller decides identity vs
+// unevaluated per reducer.
+[[nodiscard]] inline bool extract_range_values(
+        const ExprPtr& rng, std::vector<double>& out) {
+    if (!rng || rng->type != ExprType::FUNC_CALL || rng->name != "range") return false;
+    const size_t ra = rng->args.size();
+    if (ra != 2 && ra != 3) return false;
+    if (!is_num(rng->args[0]) || !is_num(rng->args[1])) return false;  // symbolic → unevaluated
+    if (ra == 3 && !is_num(rng->args[2])) return false;
+    const double lo   = rng->args[0]->num;
+    const double hi   = rng->args[1]->num;
+    const double step = (ra == 3) ? rng->args[2]->num : 1.0;  // 2-arg form defaults step=1
+    out = gen_range_values(lo, hi, step);
+    return true;
+}
+
 [[nodiscard]] inline ExprPtr try_unroll_aggregate(
         const std::string& name, const std::vector<ExprPtr>& sa) {
     const bool is_sum     = (name == "sum");
     const bool is_product = (name == "product");
-    if (!is_sum && !is_product) return nullptr;
+    const bool is_max     = (name == "max");
+    const bool is_min     = (name == "min");
+    const bool is_mean    = (name == "mean");
+    const bool is_count   = (name == "count");
+
+    // count is body-free: {Var(iter), range}. The others carry a body first.
+    if (is_count) {
+        if (sa.size() != 2) return nullptr;      // {iter, range}
+        if (!is_var(sa[0])) return nullptr;
+        std::vector<double> values;
+        if (!extract_range_values(sa[1], values)) return nullptr;  // symbolic → unevaluated
+        return Expr::Num(static_cast<double>(values.size()));      // empty → 0
+    }
+
+    if (!is_sum && !is_product && !is_max && !is_min && !is_mean) return nullptr;
 
     if (sa.size() != 3) return nullptr;          // {body, iter, range}
     if (!is_var(sa[1])) return nullptr;
+    std::vector<double> values;
+    if (!extract_range_values(sa[2], values)) return nullptr;     // symbolic → unevaluated
 
-    const ExprPtr& rng = sa[2];
-    if (!rng || rng->type != ExprType::FUNC_CALL || rng->name != "range") return nullptr;
-    const size_t ra = rng->args.size();
-    if (ra != 2 && ra != 3) return nullptr;
-    if (!is_num(rng->args[0]) || !is_num(rng->args[1])) return nullptr;  // symbolic bound → unevaluated
-    if (ra == 3 && !is_num(rng->args[2])) return nullptr;
-
-    const double lo   = rng->args[0]->num;
-    const double hi   = rng->args[1]->num;
-    const double step = (ra == 3) ? rng->args[2]->num : 1.0;  // 2-arg form defaults step=1
-
-    const std::vector<double> values = gen_range_values(lo, hi, step);
-    // Empty range → additive/multiplicative identity element.
-    if (values.empty()) return is_sum ? Expr::Num(0) : Expr::Num(1);
+    // Empty domain: sum/product have identity elements; max/min/mean do not.
+    if (values.empty()) {
+        if (is_sum)     return Expr::Num(0);
+        if (is_product) return Expr::Num(1);
+        return nullptr;                          // max/min/mean → unevaluated
+    }
 
     const std::string& iter_var = sa[1]->name;
-    const ExprPtr body  = sa[0];
-    const BinOp fold_op = is_sum ? BinOp::ADD : BinOp::MUL;
+    const ExprPtr body = sa[0];
+
+    // Associative-fold reducers (sum / product) emit a BinOp tree the simplifier
+    // collapses. max / min / mean fold the per-term simplified values directly.
+    if (is_sum || is_product) {
+        const BinOp fold_op = is_sum ? BinOp::ADD : BinOp::MUL;
+        ExprPtr acc = nullptr;
+        for (double v : values) {
+            ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+            acc = acc ? Expr::BinOpExpr(fold_op, acc, term) : term;
+        }
+        return acc;  // never null (values non-empty)
+    }
+
+    if (is_max || is_min) {
+        ExprPtr best = nullptr;
+        double best_num = 0.0;
+        for (double v : values) {
+            ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+            const Checked<double> tn = evaluate(*term);
+            if (!tn) return nullptr;             // non-numeric term → unevaluated
+            const double n = tn.value();
+            if (!best || (is_max ? (n > best_num) : (n < best_num))) {
+                best = term;
+                best_num = n;
+            }
+        }
+        return best;
+    }
+
+    // mean = sum-fold / count, kept exact via rational DIV simplification.
     ExprPtr acc = nullptr;
     for (double v : values) {
         ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
-        acc = acc ? Expr::BinOpExpr(fold_op, acc, term) : term;
+        acc = acc ? Expr::BinOpExpr(BinOp::ADD, acc, term) : term;
     }
-    return acc;  // never null (values non-empty)
+    return simplify(Expr::BinOpExpr(
+        BinOp::DIV, acc, Expr::Num(static_cast<double>(values.size()))));
 }
 
 // ---- Simplify: main entry ----
@@ -2857,9 +2920,10 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                 if (is_undefined(sa.back())) return sa.back();  // propagate
                 if (!is_num(sa.back())) all_num = false;
             }
-            // Bounded aggregation unroll (gen-6 cycle 1): sum/product over a
-            // static numeric range. Returns nullptr for every non-aggregate
-            // name and for symbolic bounds → falls through to existing dispatch.
+            // Bounded aggregation unroll (gen-6 cycle 1): sum/product/max/min/
+            // mean/count over a static numeric range. Returns nullptr for every
+            // non-reducer name and for symbolic bounds → falls through to
+            // existing dispatch.
             if (auto agg = try_unroll_aggregate(e->name, sa)) return agg;
 
             auto s = Expr::Call(e->name, sa);
