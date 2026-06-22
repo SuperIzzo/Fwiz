@@ -58,6 +58,24 @@ single-result mode) on a piecewise/multi-branch reverse-solve where `resolve_all
 gives the right answer, OR a cycle needs sound single-value reverse-solve through
 multi-branch formula calls.
 
+## 103. Bounded aggregation over a cross-file formula-call body — PARKED
+
+**Surfaced gen-6 cycle 2 (2026-06-22).** The aggregate-unroll post-load pass resolves formula calls registered in the SAME system (`custom_function_defs_`/sections), but a cross-file callee is resolved later via `load_sub_system`. The aggregate unrolls at load time before that cross-file sub exists, so `sum(hyp_pmf(N=N,..., result=?p), j in [kmin..n])` fails with "no value for 'p'". Workaround used: hyp_at_least.fw inlines the PMF term as nested products — a single self-contained bounded aggregation that unrolls cleanly.
+
+**Trigger:** reopen when the aggregate-unroll pass is taught to defer / re-run after cross-file sub-systems load, OR when a user reports a tail-sum of a sibling stdlib function not folding.
+
+## 104. Iterator named `i` collides with imaginary unit in non-linear aggregation bodies — PARKED
+
+**Surfaced gen-6 cycle 3 (2026-06-22).** The builtin rewrite rule `i^2 = -1` fires on the aggregation body BEFORE the unroll substitutes the iterator, so `sum(i^2, i in [1..N])` resolved via a binding returns `-N` instead of the correct sum of squares. Linear bodies (`sum(i, ...)`, `sum(i+1, ...)`) are unaffected. The fix used in stdlib/probability/ is to name iterators `v` instead of `i`. A principled fix would require the unroll pass to substitute the iterator into the body BEFORE rewrite rules run, or to shadow the `i` builtin during unroll.
+
+**Trigger:** user reports a surprising aggregation result with an `i` iterator (e.g. `sum(i^2, i in [1..5])` returning -5), OR a scoping pass makes iterators shadow builtin constants.
+
+## 105. `;` in a `.fw` comment parses as a statement separator — PARKED
+
+**Surfaced gen-6 cycle 3 (2026-06-22).** A semicolon `;` is a statement separator anywhere in fwiz (documented). The comment-stripping does not protect text after a `;` on the same line. A comment like `# draw; with k = 1` silently creates a default equation `k = 1` because the post-`;` text `with k = 1` parses as a valid statement. Workaround: avoid `; var = value` shaped prose inside comments. The combinatorics files use `;` in comments harmlessly (the post-`;` text is non-parseable prose); only `var = value`-shaped post-`;` text triggers it. Reproducer: `printf '# foo; with k = 1\n[f(N,n,k)->result]\nresult=k*(N+1)/(n+1)\n'` then resolve `f(N=9,n=4,k=3)` → returns 1 instead of 6.
+
+**Trigger:** user reports a stray binding from a comment, OR a comment-lexer hardening cycle. Fix: teach the lexer to consume the rest of a `#`-comment line including any `;` so post-semicolon prose inside comments is inert.
+
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
 Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.

@@ -27,6 +27,7 @@ For a gentle introduction, see [../README.md](../README.md).
 15. [Vector and Matrix Literals](#15-vector-and-matrix-literals)
 16. [Complex Numbers](#16-complex-numbers)
 17. [Dimension Annotations](#17-dimension-annotations)
+18. [Bounded Aggregation](#18-bounded-aggregation)
 
 ---
 
@@ -106,15 +107,16 @@ The result is in SI base (m/s). `--derive` and `--fit` retain their existing sym
 | `;` | Line separator (equivalent to newline) |
 | `?` | Query marker (`x=?`) |
 | `!` | "Exactly one solution" modifier (`x=?!`) |
-| `[ ]` | Section header brackets |
+| `[ ]` | Section header brackets; also range/vector/matrix literals (`[1..6]`, `[1,2,3]`) |
 | `->` | Section return-variable arrow |
 | `:` | Binding-annotation separator (`var:dim = expr`); since gen-3 cycle 2. |
-| `@` | Prefix for directives (currently only `@extern`) |
+| `..` | Range separator in range literals (`[lo..hi]`); since gen-6 cycle 1. |
+| `@` | Step separator in range literals (`[lo..hi @ step]`); prefix for directives (`@extern`) |
 | `#` | Line comment |
 
 ### Keywords
 
-`if`, `iff`, `undefined`. Plus the directive `@extern`. These cannot be used as variable names.
+`if`, `iff`, `in`, `undefined`. Plus the directive `@extern`. These cannot be used as variable names. (`in` is a keyword since cycle 3f; it can appear as a parameter name in formula-call bindings.)
 
 ---
 
@@ -958,7 +960,104 @@ Both legacy forms still work — the engine normalizes them at parse time. All p
 ### 17.5 Current Scope and Limitations
 
 - Atomic annotations, intersection annotations, four built-in named sets, and user-defined predicate sets ship as of cycle 3b.
-- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`) is deferred to cycle 3c (Future #7b FULL). Until then, `is_in(expr, mass)` only works on bare annotated Vars, not compound sub-expressions.
+- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`, `NEG`) shipped in cycle 3c (2026-06-06, Future #7b FULL DONE). `is_in(expr, mass)` works for compound expressions like `kg*2`, not only bare annotated Vars.
 - Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — Future #81.
 - Function-section sets (`x:fibonacci` triggers existential solve) are planned for cycle 3d.
 - Stdlib `.fw` files do not yet wrap SI base units in dim sections — a natural cycle-3c follow-on.
+
+---
+
+## 18. Bounded Aggregation
+
+Since gen-6 cycle 1 (2026-06-22), fwiz supports bounded aggregations — reducing a body expression over a discrete integer domain.
+
+### 18.1 Range Literals
+
+`[lo..hi]` and `[lo..hi @ step]` are first-class expression-grammar constructs. They parse to an internal `range(lo, hi)` or `range(lo, hi, step)` representation; bounds can be any expression.
+
+```
+[1..6]          # 1, 2, 3, 4, 5, 6
+[1..10 @ 2]     # 1, 3, 5, 7, 9
+[0..2*pi @ pi/4]  # 0, pi/4, pi/2, ... (symbolic bounds: stays unevaluated until concrete)
+```
+
+Disambiguation: inside `[...]`, a `..` sequence triggers range parsing; a `,` gathers a vector/matrix literal (§15). The two forms cannot be mixed inside the same bracket.
+
+### 18.2 Reducers
+
+Six reducers fold a body over the domain:
+
+| Syntax | Result | Empty-domain |
+|--------|--------|--------------|
+| `sum(body, var in domain)` | sum of body over each domain value | 0 |
+| `product(body, var in domain)` | product | 1 |
+| `count(var in domain)` | number of elements (no body) | 0 |
+| `max(body, var in domain)` | maximum numeric value | unevaluated |
+| `min(body, var in domain)` | minimum numeric value | unevaluated |
+| `mean(body, var in domain)` | exact arithmetic mean (structural fraction) | unevaluated |
+
+`mean` returns an exact structural fraction when the domain size does not divide the sum evenly: `mean(i, i in [1..4])` → `5 / 2`, not `2.5`.
+
+### 18.3 Iterator Clause
+
+The explicit iterator form `sum(body, var in domain)` names the variable (`var`) and its domain. Inside `body`, `var` is the loop variable:
+
+```
+sum(i, i in [1..5])         # 15
+sum(i^2, i in [1..4])       # 30
+product(i, i in [1..5])     # 120
+count(i in [1..5 @ 2])      # 3  (1, 3, 5)
+mean(i, i in [1..4])        # 5 / 2
+```
+
+### 18.4 Symbolic Bounds
+
+When either bound of the range is symbolic (unresolved), the aggregate stays unevaluated as a `sum(...)` call. Once the bound becomes concrete (via a solve or binding), the aggregate folds automatically:
+
+```
+total = sum(i, i in [1..n])     # stays unevaluated while n is free
+                                 # resolves once n is bound (e.g. n=5 → total=15)
+```
+
+### 18.5 Formula-Call Bodies
+
+Reducers work over formula calls in the body.
+
+**Explicit iterator with named bindings:**
+```
+total = sum(dmg(atk=f, def=k), f in [1..6])
+```
+Each domain value substitutes the iterator into the named binding (`atk=1`, `atk=2`, …). The formula call resolves per term.
+
+**Single-literal broadcast:**
+```
+total = sum(combat(atk=[1..6], def=5, dmg=?))
+```
+The range literal appears directly in the formula-call binding. One anonymous iterator; the binding is concretized per term. `dmg=?` selects the formula's return variable.
+
+**Lockstep:**
+```
+total = sum(combat(atk=[1..6], def=atk, dmg=?))
+```
+`def=atk` is a lockstep binding — `def` follows `atk` value-for-value.
+
+### 18.6 Reverse-Solve
+
+Since the static-domain aggregate unrolls into an ordinary expression at load time, the existing solver inverts body parameters without any aggregation-specific logic:
+
+```
+total = sum(dmg(atk=f, def=k), f in [1..6])
+```
+
+With `total=21`, query `k`: the solver numerically scans `k` via the system-probe path (Strategy 6) and finds `k ~ 1`.
+
+Use `resolve_all` (the `x=?` query form) for piecewise-body aggregations — `resolve()` first-wins can return a spurious root through multi-branch formula calls (Future #102). The algebraic `=` display (instead of `~`) for linear inverses is a planned quality upgrade (Future #101).
+
+### 18.7 Planned / Deferred
+
+The full collection ontology is designed but only `[..]` ranges are implemented this cycle:
+
+- `{}` ordered array/sequence literals — not yet implemented
+- Boundary brackets `[`/`(`/`]`/`)` for open/closed intervals — designed, not yet parsed
+- Multi-iterator cartesian and dependent ranges (`sum(f(i,j), j in [1..6], i in [j..6])`) — deferred to a later cycle
+- Solve-for-the-range-bound (`sum(i in [1..n]) = 15`, solve `n`) — deferred
