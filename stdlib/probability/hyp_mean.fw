@@ -1,0 +1,16 @@
+# hyp_mean.fw — mean of the hypergeometric distribution (closed form).
+#
+# Drawing n items WITHOUT replacement from a population of N that contains K
+# "successes", the expected number of successes drawn is the closed form
+#
+#   hyp_mean(N, K, n) = n * K / N
+#
+# (No aggregation needed — this is the exact closed-form mean. fwiz carries the
+# division exactly as a structural rational, so e.g. clubs in a 5-card draw from
+# a 54-card deck with 13 clubs gives hyp_mean(54, 13, 5) = 65/54 ~ 1.2037.)
+#
+# Usage:
+#   hyp_mean(N=54, K=13, n=5, result=?m)     # expected clubs in 5 of 54 -> 65/54
+
+[hyp_mean(N, K, n) -> result]
+result = n * K / N

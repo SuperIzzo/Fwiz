@@ -1,0 +1,31 @@
+# expected_value.fw — expectation E[X] as a Sigma value*probability sum.
+#
+# The general definition of the expected value of a discrete random variable is
+#
+#   E[X] = sum over outcomes of  value * probability
+#
+# expressed directly as a bounded aggregation (the Sigma form). This file gives
+# the discrete-UNIFORM case over {1..N}: every value v in [1..N] has equal
+# probability 1/N, so
+#
+#   expected_value(N) = sum(v * (1/N), v in [1..N]) = (N+1)/2
+#
+# For a fair N-sided die this is the mean pip value: expected_value(6) = 3.5.
+#
+# General (non-uniform) expectations follow the same Sigma value*prob shape with
+# the value/probability written as expressions of the iterator; see
+# order_statistic.fw and the PNF card-deck E[max] dogfood for a non-uniform
+# example built from this primitive.
+#
+# NOTE: the iterator is named v, NOT i — i is the built-in imaginary unit and the
+# rewrite rule i^2 = -1 would corrupt any squared-iterator body before the
+# aggregation unrolls.
+#
+# NOTE: the function name matches the filename (expected_value) — cross-file
+# named-call dispatch resolves a section call by filename.
+#
+# Usage:
+#   expected_value(N=6, result=?m)          # mean of a fair 6-sided die -> 3.5
+
+[expected_value(N) -> result]
+result = sum(v * (1/N), v in [1..N])

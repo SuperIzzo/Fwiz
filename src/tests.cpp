@@ -17984,6 +17984,100 @@ void test_combinatorics_stdlib() {
     }
 }
 
+void test_expectation_stdlib() {
+    SECTION("gen-6 Cycle 3: expectation / order-statistics stdlib (.fw)");
+
+    // Resolve a section file via named-binding call routed into a synthetic query.
+    auto call_named = [](const std::string& file, const std::string& query) -> double {
+        FormulaSystem sys;
+        sys.load_file(file);
+        sys.load_string(query);
+        return sys.resolve("y", {});
+    };
+
+    // ---- E[X]: general Sigma value*prob form, fair die = sum(v*(1/N), v in [1..N]) ----
+    // Iterator named v (NOT i — i is the imaginary unit; i^2 -> -1 via rewrite rule
+    // would corrupt any squared-iterator body before the unroll substitutes v).
+    ASSERT_NUM(call_named("stdlib/probability/expected_value.fw",
+                          "y = expected_value(N=6, result=?)\n"),
+               3.5, "E[fair die] = 7/2 = 3.5");
+
+    // ---- variance of the fair die = E[(X-mean)^2] = 35/12 ~ 2.9167 ----
+    ASSERT(std::abs(call_named("stdlib/probability/variance.fw",
+                               "y = variance(N=6, result=?)\n")
+                    - 35.0/12.0) < 1e-12,
+           "Var[fair die] = 35/12 ~ 2.9167");
+
+    // ---- hypergeometric mean n*K/N : clubs in 5 of 54 -> 5*13/54 = 65/54 ----
+    {
+        const double hm = call_named("stdlib/probability/hyp_mean.fw",
+                                     "y = hyp_mean(N=54, K=13, n=5, result=?)\n");
+        ASSERT(std::abs(hm - 65.0/54.0) < 1e-12,
+               "hyp_mean(54,13,5) = 65/54 ~ 1.2037 (got " + std::to_string(hm) + ")");
+    }
+
+    // ---- hypergeometric variance n*(K/N)*((N-K)/N)*((N-n)/(N-1)) ----
+    {
+        const double hv = call_named("stdlib/probability/hyp_variance.fw",
+                                     "y = hyp_variance(N=54, K=13, n=5, result=?)\n");
+        // 5*(13/54)*(41/54)*(49/53) = exact rational; cross-check the float.
+        const double want = 5.0*(13.0/54.0)*(41.0/54.0)*(49.0/53.0);
+        ASSERT(std::abs(hv - want) < 1e-12,
+               "hyp_variance(54,13,5) = " + std::to_string(want)
+               + " (got " + std::to_string(hv) + ")");
+    }
+
+    // ---- order statistic of discrete uniform {1..N}: k*(N+1)/(n+1) (EXACT) ----
+    // E[max of 5 from {1..5}] (k=n=5) = 5*6/6 = 5.
+    ASSERT_NUM(call_named("stdlib/probability/order_statistic.fw",
+                          "y = order_statistic(N=5, n=5, k=5, result=?)\n"),
+               5.0, "E[max of 5 from {1..5}] = 5 (exact)");
+    // E[3rd of 4 from {1..9}] = 3*10/5 = 6.
+    ASSERT_NUM(call_named("stdlib/probability/order_statistic.fw",
+                          "y = order_statistic(N=9, n=4, k=3, result=?)\n"),
+               6.0, "E[3rd of 4 from {1..9}] = 6 (exact)");
+
+    // ---- dual-shape coverage: positional calls (filename dispatch) ----
+    ASSERT_NUM(call_named("stdlib/probability/order_statistic.fw",
+                          "y = order_statistic(9, 4, 3)\n"),
+               6.0, "order_statistic(9,4,3) positional = 6");
+    ASSERT(std::abs(call_named("stdlib/probability/hyp_mean.fw",
+                               "y = hyp_mean(54, 13, 5)\n") - 65.0/54.0) < 1e-12,
+           "hyp_mean(54,13,5) positional = 65/54");
+    // aggregation-bodied section via positional shape.
+    ASSERT_NUM(call_named("stdlib/probability/expected_value.fw",
+                          "y = expected_value(6)\n"),
+               3.5, "expected_value(6) positional = 3.5");
+
+    // ---- E[highest of 5] ~ 10.34 (PNF card model, CardValues2 scheme) ----
+    // The 54-card deck value histogram (card-sim.md: Joker=A=11, J=Q=K=10, 2..10
+    // face) is NON-uniform, so the uniform closed form above does NOT apply.
+    // E[max] = sum_v v * P(max == v), P(max==v) = (C(cum(v),5)-C(cum(v-1),5))/C(54,5).
+    // Dogfood: compose the sibling nCr stdlib per cumulative count and sum.
+    // cum(v) for distinct values v = 2..11 (cards with value <= v).
+    {
+        auto ncr5 = [](long a) -> double {
+            if (a < 5) return 0.0;
+            FormulaSystem sys;
+            sys.load_file("stdlib/combinatorics/nCr.fw");
+            sys.load_string("y = nCr(n=" + std::to_string(a) + ", k=5, result=?)\n");
+            return sys.resolve("y", {});
+        };
+        const long val[] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+        const long cum[] = {4, 8, 12, 16, 20, 24, 28, 32, 48, 54};
+        const double total = ncr5(54);
+        double E = 0.0, prev = 0.0;
+        for (int idx = 0; idx < 10; idx++) {
+            const double c = ncr5(cum[idx]);
+            E += static_cast<double>(val[idx]) * (c - prev) / total;
+            prev = c;
+        }
+        ASSERT(std::abs(E - 10.34) < 0.01,
+               "E[highest of 5] (PNF CardValues2 model) ~ 10.34 (got "
+               + std::to_string(E) + ")");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -18354,6 +18448,7 @@ int main() {
     test_bounded_aggregation_step_d();
     test_aggregation_binder_scoping();
     test_combinatorics_stdlib();
+    test_expectation_stdlib();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

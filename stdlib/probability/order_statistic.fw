@@ -1,0 +1,30 @@
+# order_statistic.fw — k-th order statistic of the discrete uniform {1..N}.
+#
+# Draw n distinct items (without replacement) from {1, 2, ..., N} and sort them
+# ascending. The expected value of the k-th smallest is the EXACT closed form
+#
+#   order_statistic(N, n, k) = k * (N+1) / (n+1)
+#
+# This is exact (it follows from the hockey-stick / Vandermonde identity, not an
+# approximation). Setting k to n gives the expected MAXIMUM of the draw, and
+# setting k to 1 gives the expected minimum.
+#
+# (Comment style note: avoid a bare "; var = value" inside .fw comments — a
+# semicolon is a statement separator, so prose after it would be parsed.)
+#
+# Hand-checkable cases:
+#   order_statistic(5, 5, 5) = 5*6/6 = 5    # E[max of 5 from {1..5}]
+#   order_statistic(9, 4, 3) = 3*10/5 = 6   # E[3rd smallest of 4 from {1..9}]
+#
+# NOTE: this closed form assumes a UNIFORM value set {1..N} with no repeats. A
+# non-uniform value distribution (e.g. a card deck where several ranks share a
+# value) does NOT reduce to this form — there E[order statistic] must be summed
+# as E[k-th] = sum_v v * P(k-th == v) over the value histogram (the general
+# Sigma value*prob form of expected_value.fw). See the PNF card-deck E[max]
+# dogfood for that non-uniform case.
+#
+# Usage:
+#   order_statistic(N=5, n=5, k=5, result=?e)     # expected highest of 5 from {1..5}
+
+[order_statistic(N, n, k) -> result]
+result = k * (N+1) / (n+1)

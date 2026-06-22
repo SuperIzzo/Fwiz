@@ -1,0 +1,26 @@
+# variance.fw — variance Var[X] = E[(X - mean)^2] as a Sigma sum.
+#
+# The variance of a discrete random variable is the expected squared deviation
+# from the mean:
+#
+#   Var[X] = sum over outcomes of  (value - mean)^2 * probability
+#
+# This file gives the discrete-UNIFORM case over {1..N} (probability 1/N each).
+# The mean is itself a bounded aggregation (the same Sigma value*prob form as
+# expected_value.fw), computed first into `mean`, then the squared-deviation sum
+# folds against it:
+#
+#   variance(N) = sum((v - mean)^2 * (1/N), v in [1..N])
+#
+# For a fair 6-sided die: variance(6) = 35/12 ~ 2.9167.
+# (Equivalent E[X^2] - mean^2 form folds to the same value; the deviation form
+# is used here so every intermediate stays a clean Sigma over the domain.)
+#
+# Iterator named v, NOT i (imaginary unit) — see expected_value.fw.
+#
+# Usage:
+#   variance(N=6, result=?s2)               # variance of a fair 6-sided die
+
+[variance(N) -> result]
+mean = sum(v * (1/N), v in [1..N])
+result = sum((v - mean)^2 * (1/N), v in [1..N])

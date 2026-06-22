@@ -1,0 +1,17 @@
+# hyp_variance.fw — variance of the hypergeometric distribution (closed form).
+#
+# Drawing n items WITHOUT replacement from a population of N with K successes,
+# the variance of the number of successes drawn is the closed form
+#
+#   hyp_variance(N, K, n) = n * (K/N) * ((N-K)/N) * ((N-n)/(N-1))
+#
+# The trailing factor (N-n)/(N-1) is the finite-population correction — it is
+# what distinguishes sampling WITHOUT replacement (hypergeometric) from the
+# binomial n*p*(1-p). (No aggregation; exact closed form, carried as structural
+# rationals up to the final divisions.)
+#
+# Usage:
+#   hyp_variance(N=54, K=13, n=5, result=?s2)   # spread of clubs in 5 of 54
+
+[hyp_variance(N, K, n) -> result]
+result = n * (K/N) * ((N-K)/N) * ((N-n)/(N-1))
