@@ -765,13 +765,33 @@ inline const std::map<std::string, double>& builtin_constants() {
 //  Tree queries
 // ============================================================================
 
+[[nodiscard]] inline bool is_aggregate_reducer(const std::string& name);  // defined below
+
 inline void collect_vars(const Expr& e, std::set<std::string>& out) {
     switch (e.type) {
         case ExprType::NUM:       break;
         case ExprType::VAR:       if (e.name != "undefined") out.insert(e.name); break;
         case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
         case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
-        case ExprType::FUNC_CALL: for (const auto* a : e.args) collect_vars(*a, out); break;
+        case ExprType::FUNC_CALL:
+            // A reducer's iterator (the Var arg) is a BINDER local to this subtree —
+            // arg layout (from the aggregation primitive): count is {Var(iter), range},
+            // the bodied reducers are {body, Var(iter), range}. Collect the free vars
+            // of the body + range into a LOCAL set, erase the iterator from THAT set,
+            // then merge — so a sibling occurrence outside the reducer still survives
+            // (local-scope exclusion, never a global erase). Mirrors the `undefined`
+            // exclusion idiom above.
+            if (is_aggregate_reducer(e.name) && !e.args.empty()) {
+                const size_t iter_pos = (e.name == "count") ? 0 : 1;
+                std::set<std::string> local;
+                for (const auto* a : e.args) collect_vars(*a, local);
+                if (iter_pos < e.args.size() && e.args[iter_pos]->type == ExprType::VAR)
+                    local.erase(e.args[iter_pos]->name);
+                out.insert(local.begin(), local.end());
+                break;
+            }
+            for (const auto* a : e.args) collect_vars(*a, out);
+            break;
         case ExprType::COUNT_: assert(false && "invalid ExprType"); break;
     }
 }

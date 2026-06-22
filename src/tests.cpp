@@ -17826,6 +17826,72 @@ void test_bounded_aggregation_step_d() {
     }
 }
 
+void test_aggregation_binder_scoping() {
+    SECTION("gen-6 Cycle 2a: aggregation iterator is a binder, not a free var");
+
+    // ---- A1: collect_vars excludes the bound iterator from the reducer subtree ----
+    // product(c*i, i in [1..n]): free vars are {c, n}. `i` is bound by the reducer.
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("product(c*i, i in [1..n])"), vars);
+        ASSERT(vars.count("c") && vars.count("n"),
+               "A1: product free vars include c and n (the bound)");
+        ASSERT(vars.count("i") == 0, "A1: bound iterator i is NOT a free var");
+        ASSERT(vars.size() == 2, "A1: exactly {c, n}");
+    }
+
+    // ---- A2: SHADOWING — a sibling `i` outside the reducer survives (local-scope, ----
+    // ---- not global erase). product(c*i, i in [1..n]) + i has free vars {c,n,i}. ----
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("product(c*i, i in [1..n]) + i"), vars);
+        ASSERT(vars.count("c") && vars.count("n") && vars.count("i"),
+               "A2: trailing free i survives alongside c, n");
+        ASSERT(vars.size() == 3, "A2: exactly {c, n, i}");
+    }
+
+    // ---- A3: count is body-free {Var(iter), range}; iterator excluded, bound free ----
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("count(i in [1..n])"), vars);
+        ASSERT(vars.count("n"), "A3: count bound n is free");
+        ASSERT(vars.count("i") == 0, "A3: count iterator i is bound");
+        ASSERT(vars.size() == 1, "A3: exactly {n}");
+    }
+
+    // ---- A4: factorial via the binding path — product(i, i in [1..n]), n=5 -> 120 ----
+    {
+        const std::string fac_def =
+            "[fac(n) -> result]\nresult = product(i, i in [1..n])\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["fac"] = fac_def;
+        sys.load_string("y = fac(n=5, result=?)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 120.0, "A4: factorial(5) via binding path = 120");
+    }
+
+    // ---- A5: THE UNBLOCK — nCr(52,5) via the resolve/binding path = 2598960 ----
+    // result = product((n-k+i)/i, i in [1..k]). Symbolic bound k, resolved via bindings.
+    {
+        const std::string ncr_def =
+            "[ncr(n, k) -> result]\nresult = product((n-k+i)/i, i in [1..k])\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["ncr"] = ncr_def;
+        // Direct sub-system resolve on the section, the exact reproducer from Cycle 2.
+        sys.load_string("y = ncr(n=52, k=5, result=?)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 2598960.0, "A5: nCr(52,5) via binding path = 2598960");
+    }
+
+    // ---- A6: count via binding path — count(i in [1..n]), n=5 -> 5 ----
+    {
+        const std::string cnt_def =
+            "[cnt(n) -> result]\nresult = count(i in [1..n])\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["cnt"] = cnt_def;
+        sys.load_string("y = cnt(n=5, result=?)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 5.0, "A6: count(1..5) via binding path = 5");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -18194,6 +18260,7 @@ int main() {
     test_bounded_aggregation_step_b();
     test_bounded_aggregation_step_c();
     test_bounded_aggregation_step_d();
+    test_aggregation_binder_scoping();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
