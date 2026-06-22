@@ -2818,30 +2818,42 @@ constexpr size_t MATRIX_3X3_DIM = 3;
     return true;
 }
 
-[[nodiscard]] inline ExprPtr try_unroll_aggregate(
-        const std::string& name, const std::vector<ExprPtr>& sa) {
+// Single source of truth for the six bounded-aggregation reducer names. Used by
+// the simplify-time unroll (try_unroll_aggregate, below) AND the system-layer
+// extraction guards + post-load pass (extract_formula_calls / extract_positional_calls
+// / resolve_aggregate_calls in system.h) so a reducer is never mistaken for a
+// user-defined formula call. NOT a mathematical rewrite — a structural guard on
+// the load/extraction layer, so it correctly stays in C++ (no .fw mechanism).
+[[nodiscard]] inline bool is_aggregate_reducer(const std::string& name) {
+    return name == "sum" || name == "product" || name == "max"
+        || name == "min" || name == "mean" || name == "count";
+}
+
+// ── fold_aggregate — the single fold-policy table ─────────────────────────────
+// ONE place encodes the per-reducer fold semantics (ADD/MUL/max/min/mean-via-
+// exact-DIV/count + empty-domain identities). Two callers share it:
+//
+//   - try_unroll_aggregate (simplify path, below): make_term = simplify∘substitute.
+//   - resolve_aggregate_calls (system.h, post-load path): make_term ALSO runs
+//     extract_positional_calls on the substituted term and pushes FormulaCalls,
+//     so formula-bodied terms (score(1), score(2), …) resolve through the solver.
+//
+// `make_term(v)` produces the per-iteration term for iterator value `v`. `count`
+// is body-free, so make_term is never invoked for it. Returns nullptr (leave the
+// aggregate unevaluated) for: unknown reducer name; empty domain with no identity
+// (max/min/mean); or a max/min term that does not evaluate to a finite number.
+[[nodiscard]] inline ExprPtr fold_aggregate(
+        const std::string& name, const std::vector<double>& values,
+        const std::function<ExprPtr(double)>& make_term) {
+    if (name == "count")
+        return Expr::Num(static_cast<double>(values.size()));     // empty → 0
+
+    if (!is_aggregate_reducer(name)) return nullptr;
+
     const bool is_sum     = (name == "sum");
     const bool is_product = (name == "product");
     const bool is_max     = (name == "max");
     const bool is_min     = (name == "min");
-    const bool is_mean    = (name == "mean");
-    const bool is_count   = (name == "count");
-
-    // count is body-free: {Var(iter), range}. The others carry a body first.
-    if (is_count) {
-        if (sa.size() != 2) return nullptr;      // {iter, range}
-        if (!is_var(sa[0])) return nullptr;
-        std::vector<double> values;
-        if (!extract_range_values(sa[1], values)) return nullptr;  // symbolic → unevaluated
-        return Expr::Num(static_cast<double>(values.size()));      // empty → 0
-    }
-
-    if (!is_sum && !is_product && !is_max && !is_min && !is_mean) return nullptr;
-
-    if (sa.size() != 3) return nullptr;          // {body, iter, range}
-    if (!is_var(sa[1])) return nullptr;
-    std::vector<double> values;
-    if (!extract_range_values(sa[2], values)) return nullptr;     // symbolic → unevaluated
 
     // Empty domain: sum/product have identity elements; max/min/mean do not.
     if (values.empty()) {
@@ -2850,16 +2862,13 @@ constexpr size_t MATRIX_3X3_DIM = 3;
         return nullptr;                          // max/min/mean → unevaluated
     }
 
-    const std::string& iter_var = sa[1]->name;
-    const ExprPtr body = sa[0];
-
     // Associative-fold reducers (sum / product) emit a BinOp tree the simplifier
-    // collapses. max / min / mean fold the per-term simplified values directly.
+    // collapses. max / min fold the per-term values directly; mean = sum/count.
     if (is_sum || is_product) {
         const BinOp fold_op = is_sum ? BinOp::ADD : BinOp::MUL;
         ExprPtr acc = nullptr;
         for (double v : values) {
-            ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+            ExprPtr term = make_term(v);
             acc = acc ? Expr::BinOpExpr(fold_op, acc, term) : term;
         }
         return acc;  // never null (values non-empty)
@@ -2869,7 +2878,7 @@ constexpr size_t MATRIX_3X3_DIM = 3;
         ExprPtr best = nullptr;
         double best_num = 0.0;
         for (double v : values) {
-            ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+            ExprPtr term = make_term(v);
             const Checked<double> tn = evaluate(*term);
             if (!tn) return nullptr;             // non-numeric term → unevaluated
             const double n = tn.value();
@@ -2884,11 +2893,36 @@ constexpr size_t MATRIX_3X3_DIM = 3;
     // mean = sum-fold / count, kept exact via rational DIV simplification.
     ExprPtr acc = nullptr;
     for (double v : values) {
-        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+        ExprPtr term = make_term(v);
         acc = acc ? Expr::BinOpExpr(BinOp::ADD, acc, term) : term;
     }
     return simplify(Expr::BinOpExpr(
         BinOp::DIV, acc, Expr::Num(static_cast<double>(values.size()))));
+}
+
+[[nodiscard]] inline ExprPtr try_unroll_aggregate(
+        const std::string& name, const std::vector<ExprPtr>& sa) {
+    // count is body-free: {Var(iter), range}. The others carry a body first.
+    if (name == "count") {
+        if (sa.size() != 2) return nullptr;      // {iter, range}
+        if (!is_var(sa[0])) return nullptr;
+        std::vector<double> values;
+        if (!extract_range_values(sa[1], values)) return nullptr;  // symbolic → unevaluated
+        return fold_aggregate(name, values, nullptr);              // empty → 0
+    }
+
+    if (!is_aggregate_reducer(name)) return nullptr;
+
+    if (sa.size() != 3) return nullptr;          // {body, iter, range}
+    if (!is_var(sa[1])) return nullptr;
+    std::vector<double> values;
+    if (!extract_range_values(sa[2], values)) return nullptr;     // symbolic → unevaluated
+
+    const std::string& iter_var = sa[1]->name;
+    const ExprPtr body = sa[0];
+    return fold_aggregate(name, values, [&](double v) {
+        return simplify(substitute(body, iter_var, Expr::Num(v)));
+    });
 }
 
 // ---- Simplify: main entry ----

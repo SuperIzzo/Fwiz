@@ -454,6 +454,10 @@ public:
     size_t diff_resolved_up_to_ = 0;
     // Symmetric dirty-flag for resolve_integral_in_equations (Future #16).
     size_t integral_resolved_up_to_ = 0;
+    // Symmetric dirty-flag for resolve_aggregate_in_equations (gen-6 Step C):
+    // unrolls formula-bodied aggregations (sum(score(roll), …)) into N concrete
+    // FormulaCall terms after positional/diff/integral passes.
+    size_t agg_resolved_up_to_ = 0;
 
     [[nodiscard]] std::set<std::string> all_variables() const {
         std::set<std::string> vars;
@@ -891,6 +895,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                                      std::vector<FormulaCall>& calls) {
         if (!e) return e;
         if (e->type == ExprType::FUNC_CALL
+            && !is_aggregate_reducer(e->name)       // Step C: don't probe load_sub_system("sum")
             && !builtin_functions().count(e->name)
             && !custom_functions_.count(e->name)) {
             // Not a builtin — try loading as sub-system formula
@@ -957,6 +962,13 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 extract_positional_calls(e->left, calls),
                 extract_positional_calls(e->right, calls));
         if (e->type == ExprType::FUNC_CALL) {
+            // Step C: aggregate reducer bodies must NOT have their nested formula
+            // calls eagerly extracted here — iterator substitution (and thus
+            // concrete per-term bindings) happens in resolve_aggregate_in_equations
+            // (post-load). Recurse into NO args (they are only body/Var/range).
+            // Premature extraction would bind score(roll) once and fold N copies
+            // of the same output var → Bug-B `N*score(last)`.
+            if (is_aggregate_reducer(e->name)) return e;
             std::vector<ExprPtr> args;
             args.reserve(e->args.size());
             // not std::transform: extract_positional_calls mutates the captured `calls` vector via reference
@@ -1280,6 +1292,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         compute_rewrite_groups();  // regroup after user rules loaded
         resolve_diff_in_equations();  // Future #6: rewrite diff(...) calls
         resolve_integral_in_equations();  // Future #16 (M1): rewrite integral(...) calls
+        resolve_aggregate_in_equations();  // gen-6 Step C: unroll formula-bodied aggregations
         trace_loaded();
     }
 
@@ -1340,6 +1353,132 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         resolve_at_load(
             [this](ExprPtr e) { return resolve_integral_calls(e); },
             integral_resolved_up_to_);
+    }
+
+    // Post-load aggregate unroll (gen-6 Step C). Formula-bodied aggregations
+    // (`sum(score(roll), roll in [1..6])`) cannot resolve at the expr.h simplify
+    // layer because the formula body must be loaded and substituted with concrete
+    // iterator values. This pass — mirroring diff/integral — unrolls every
+    // reducer node into N concrete FormulaCall terms folded by `fold_aggregate`,
+    // the same fold-policy table the simplify-time unroll uses. Pure-numeric and
+    // pure-expression bodies (Steps A/B) are already handled at simplify time and
+    // are simply re-folded here to identical Nums (idempotent).
+    void resolve_aggregate_in_equations() {
+        resolve_at_load(
+            [this](ExprPtr e) { return resolve_aggregate_calls(e); },
+            agg_resolved_up_to_);
+    }
+
+    // Walks `e` post-order; replaces every aggregate reducer FUNC_CALL with its
+    // unrolled fold tree (see try_unroll_aggregate_with_calls). Nested aggregates
+    // resolve inner-first via tree_map's post-order recursion.
+    [[nodiscard]] ExprPtr resolve_aggregate_calls(ExprPtr e) {
+        return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+            if (node->type != ExprType::FUNC_CALL || !is_aggregate_reducer(node->name))
+                return node;
+            return try_unroll_aggregate_with_calls(node);
+        });
+    }
+
+    // Unroll one aggregate node whose body may contain formula calls. Two shapes:
+    //
+    //   Shape A — explicit iterator: sum(body, Var(iter), range(lo, hi[, step])).
+    //     For each domain value v: term = simplify(substitute(body, iter, Num(v))),
+    //     then extract_positional_calls on the term so any nested formula call
+    //     (score(v)) becomes a FormulaCall. fold_aggregate folds the terms.
+    //
+    //   Shape B — broadcast: sum(Var(_fcN)) where _fcN is a FormulaCall already
+    //     extracted by extract_formula_calls with a range-literal binding (atk=[1..6]).
+    //     Lift the single range binding to an anonymous iterator: clone the call N
+    //     times with concrete Num(v) bindings (and lockstep substitution for any
+    //     other binding equal to Var(range_param)). fold_aggregate folds the clones.
+    //
+    // Broadcast handles all four populations: 1 range → lift; 1 range + lockstep
+    // → clone with concrete bindings; 2+ ranges → UNEVALUATED + stderr warning
+    // (cartesian is a later step); 0 ranges → UNEVALUATED (no iterator domain).
+    // Returns the original node unchanged when the shape is unsupported or the
+    // range is symbolic (folds once bound). Never returns a node that still
+    // contains a reducer for a numeric-bound formula body (graceful-degrade:
+    // missing sub-systems become unresolved FUNC_CALLs in the fold, not a
+    // surviving sum() that simplify-unroll would mis-fold as N*body(last)).
+    [[nodiscard]] ExprPtr try_unroll_aggregate_with_calls(ExprPtr node) {
+        const std::string& name = node->name;
+
+        // Shape A: explicit iterator (bodied 3-arg, or count 2-arg body-free).
+        const bool is_count = (name == "count");
+        const size_t want_arity = is_count ? 2 : 3;
+        if (node->args.size() == want_arity) {
+            const ExprPtr iter = is_count ? node->args[0] : node->args[1];
+            const ExprPtr rng  = is_count ? node->args[1] : node->args[2];
+            if (is_var(iter)) {
+                std::vector<double> values;
+                if (!extract_range_values(rng, values)) return node;  // symbolic → unevaluated
+                const std::string iter_var = iter->name;
+                const ExprPtr body = is_count ? nullptr : node->args[0];
+                ExprPtr folded = fold_aggregate(name, values,
+                    is_count ? std::function<ExprPtr(double)>(nullptr)
+                             : std::function<ExprPtr(double)>([&](double v) {
+                        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+                        std::vector<FormulaCall> term_calls;
+                        term = extract_positional_calls(term, term_calls);
+                        // not std::transform: move-append into a different container
+                        for (auto& c : term_calls)
+                            // cppcheck-suppress useStlAlgorithm
+                            formula_calls.push_back(std::move(c));
+                        return term;
+                    }));
+                return folded ? folded : node;
+            }
+        }
+
+        // Shape B: broadcast — arity-1 reducer over a FormulaCall output var.
+        if (node->args.size() == 1 && is_var(node->args[0])) {
+            const std::string fc_name = node->args[0]->name;
+            FormulaCall* orig = nullptr;
+            // not std::find_if: needs the element's address (&c) to read bindings below
+            for (auto& c : formula_calls)
+                // cppcheck-suppress useStlAlgorithm
+                if (c.output_var == fc_name) { orig = &c; break; }
+            if (!orig) return node;  // not a formula call → unsupported shape
+
+            // Count range-literal bindings; remember the single range param + domain.
+            std::string range_param;
+            std::vector<double> values;
+            int range_count = 0;
+            for (auto& [param, val] : orig->bindings) {
+                std::vector<double> v;
+                if (extract_range_values(val, v)) {
+                    range_count++;
+                    range_param = param;
+                    values = v;
+                }
+            }
+            if (range_count == 0) return node;       // 0 ranges → unevaluated
+            if (range_count >= 2) {                   // 2+ ranges → unevaluated + warn
+                std::cerr << "warning: aggregation over multiple ranges ("
+                          << range_param << ", …) is not supported (cartesian product "
+                             "is a future step); leaving "
+                          << name << "(...) unevaluated\n";
+                return node;
+            }
+
+            // Snapshot the template (orig may dangle as formula_calls grows below).
+            const FormulaCall tmpl = *orig;
+            ExprPtr folded = fold_aggregate(name, values, [&](double v) {
+                FormulaCall clone = tmpl;
+                clone.output_var = "_fc" + std::to_string(next_call_id_++);
+                for (auto& [param, val] : clone.bindings) {
+                    if (param == range_param) val = Expr::Num(v);          // range → concrete
+                    else if (is_var(val) && val->name == range_param)
+                        val = Expr::Num(v);                                // lockstep (def=atk)
+                }
+                formula_calls.push_back(clone);
+                return Expr::Var(clone.output_var);
+            });
+            return folded ? folded : node;
+        }
+
+        return node;  // unsupported shape — leave unevaluated
     }
 
     // Walks `e` post-order; replaces any `diff(target, var)` FUNC_CALL with the
@@ -2959,7 +3098,13 @@ public:
                 && i + 1 < tok.size()
                 && tok[i + 1].type == TokenType::LPAREN) {
                 const size_t rparen = find_matching_rparen(tok, i + 1);
-                if (rparen != std::string::npos && has_question_in_range(tok, i + 2, rparen)) {
+                // gen-6 Step C (Bug A guard): never extract an aggregate reducer
+                // (sum/product/…) as a formula call. The `?`/`=` inside the
+                // reducer's range belongs to a NESTED formula call (e.g. dmg=?
+                // in sum(combat(...,dmg=?))); the inner call is extracted on a
+                // later loop iteration, the reducer passes through verbatim.
+                if (rparen != std::string::npos && !is_aggregate_reducer(tok[i].text)
+                    && has_question_in_range(tok, i + 2, rparen)) {
                     auto call = parse_call_args(tok, i, rparen);
 
                     // Implied alias: if preceded by "IDENT =" and call has no explicit alias
@@ -2986,6 +3131,7 @@ public:
                 // so the parser can try its luck (and Fix W's enhanced warning
                 // will name the line if the parser also fails).
                 if (rparen != std::string::npos && self != nullptr
+                    && !is_aggregate_reducer(tok[i].text)  // Step C Bug A guard (see above)
                     && has_named_eq_in_range(tok, i + 2, rparen)) {
                     if (auto opt_call = try_extract_named_call(tok, i, rparen, *self)) {
                         calls.push_back(*opt_call);

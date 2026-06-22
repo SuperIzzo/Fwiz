@@ -17561,6 +17561,134 @@ void test_bounded_aggregation_step_b() {
     }
 }
 
+// Helper: true iff any equation RHS still contains a `sum`/`product`/`max`/
+// `min`/`mean`/`count` reducer FUNC_CALL node (post-load pass failed to unroll).
+static bool sys_has_reducer_node(const FormulaSystem& sys) {
+    std::function<bool(const Expr*)> walk = [&](const Expr* e) -> bool {
+        if (!e) return false;
+        if (e->type == ExprType::FUNC_CALL && is_aggregate_reducer(e->name)) return true;
+        if (e->type == ExprType::FUNC_CALL) {
+            for (const auto* a : e->args) if (walk(a)) return true;
+            return false;
+        }
+        if (e->type == ExprType::UNARY_NEG) return walk(e->child);
+        if (e->type == ExprType::BINOP) return walk(e->left) || walk(e->right);
+        return false;
+    };
+    for (const auto& eq : sys.equations) if (walk(eq.rhs)) return true;
+    return false;
+}
+
+// Helper: resolve a target, treating a thrown "cannot solve" as the
+// UNEVALUATED signal (returns NaN). Used by SC4/SC5 where the honest result
+// is "no finite value" — resolve() throws rather than returning NaN.
+static double resolve_or_nan(const FormulaSystem& sys, const std::string& target) {
+    try { return sys.resolve(target, {}); }
+    catch (const std::exception&) { return std::numeric_limits<double>::quiet_NaN(); }
+}
+
+void test_bounded_aggregation_step_c() {
+    SECTION("gen-6 Step C: formula-bodied aggregations (forward)");
+
+    const std::string score_def  = "[score(roll) -> result]\nresult = roll * 2\n";
+    // combat: dmg = atk - def when atk > def, else 0. Multi-branch piecewise.
+    const std::string combat_def =
+        "[combat(atk, def) -> dmg]\ndmg = atk - def iff atk > def\ndmg = 0 iff atk <= def\n";
+
+    // ---- C1: is_aggregate_reducer predicate ----
+    ASSERT(is_aggregate_reducer("sum"), "C1: sum is reducer");
+    ASSERT(is_aggregate_reducer("product"), "C1: product is reducer");
+    ASSERT(is_aggregate_reducer("max"), "C1: max is reducer");
+    ASSERT(is_aggregate_reducer("min"), "C1: min is reducer");
+    ASSERT(is_aggregate_reducer("mean"), "C1: mean is reducer");
+    ASSERT(is_aggregate_reducer("count"), "C1: count is reducer");
+    ASSERT(!is_aggregate_reducer("sin"), "C1: sin not reducer");
+    ASSERT(!is_aggregate_reducer("score"), "C1: score not reducer");
+
+    // ---- SC1: explicit iterator form, sum over score(roll) = 2+4+..+12 = 42 ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = sum(score(roll), roll in [1..6])\n");
+        ASSERT_NUM(sys.resolve("total", {}), 42.0, "SC1: sum(score(roll), 1..6) = 42");
+    }
+
+    // ---- SC1b: product over score(roll) for [1..3] = 2*4*6 = 48 ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = product(score(roll), roll in [1..3])\n");
+        ASSERT_NUM(sys.resolve("total", {}), 48.0, "SC1b: product(score(roll), 1..3) = 48");
+    }
+
+    // ---- SC2: broadcast, multi-return, dmg=? selects the return ----
+    // atk in {1..5}: atk<=def(5) -> dmg=0; atk=6: dmg=1. Sum = 1.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["combat"] = combat_def;
+        sys.load_string("total = sum(combat(atk=[1..6], def=5, dmg=?))\n");
+        ASSERT_NUM(sys.resolve("total", {}), 1.0, "SC2: broadcast sum(combat(atk=[1..6], def=5, dmg=?)) = 1");
+    }
+
+    // ---- SC3: lockstep def=atk -> all dmg=0 -> sum=0 ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["combat"] = combat_def;
+        sys.load_string("total = sum(combat(atk=[1..6], def=atk, dmg=?))\n");
+        ASSERT_NUM(sys.resolve("total", {}), 0.0, "SC3: lockstep sum(combat(atk=[1..6], def=atk, dmg=?)) = 0");
+    }
+
+    // ---- SC4: 2+ range literals -> UNEVALUATED (not a number) ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["combat"] = combat_def;
+        sys.load_string("total = sum(combat(atk=[1..6], def=[1..6], dmg=?))\n");
+        ASSERT(std::isnan(resolve_or_nan(sys, "total")), "SC4: 2+ ranges stays unevaluated (NaN)");
+    }
+
+    // ---- SC5: 0 range literals (bare scalar arg) -> UNEVALUATED ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = sum(score(roll=5))\n");
+        ASSERT(std::isnan(resolve_or_nan(sys, "total")), "SC5: 0 ranges stays unevaluated (NaN)");
+    }
+
+    // ---- SC6: idempotency — no leftover reducer node after post-load pass ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = sum(score(roll), roll in [1..6])\n");
+        ASSERT(!sys_has_reducer_node(sys), "SC6: no leftover sum() node after post-load pass");
+        // Resolving twice yields the same single-pass result (no double-unroll).
+        const double r1 = sys.resolve("total", {});
+        const double r2 = sys.resolve("total", {});
+        ASSERT_NUM(r1, 42.0, "SC6: first resolve = 42");
+        ASSERT_NUM(r2, 42.0, "SC6: second resolve = 42 (idempotent)");
+    }
+
+    // ---- SC7: graceful-degrade — missing sub-system must NOT leave a sum() node ----
+    // `bogus` has no definition. The pass must still unroll into a fold of
+    // UNRESOLVED FUNC_CALLs (Bug-B guard), never the original sum() node.
+    {
+        FormulaSystem sys;
+        sys.load_string("total = sum(bogus(roll), roll in [1..6])\n");
+        ASSERT(!sys_has_reducer_node(sys), "SC7: missing sub-system still leaves no sum() node");
+    }
+
+    // ---- DESIRABLE: mean reducer with formula body = 42/6 = 7 ----
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = mean(score(roll), roll in [1..6])\n");
+        ASSERT_NUM(sys.resolve("total", {}), 7.0, "SCmean: mean(score(roll), 1..6) = 7");
+    }
+
+    // ---- Regression: Step A/B expression-body aggregations still simplify ----
+    ASSERT_EQ(ss("sum(i, i in [1..5])"), "15", "SCreg-A: sum(i,1..5)=15 (Step A intact)");
+    ASSERT_EQ(ss("mean(i, i in [1..4])"), "5 / 2", "SCreg-B: mean(i,1..4)=5/2 (Step B intact)");
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -17927,6 +18055,7 @@ int main() {
     // gen-6 arc cycle 1 Step A (2026-06): bounded aggregation unroll
     test_bounded_aggregation_step_a();
     test_bounded_aggregation_step_b();
+    test_bounded_aggregation_step_c();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
