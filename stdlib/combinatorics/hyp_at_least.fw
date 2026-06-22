@@ -1,0 +1,25 @@
+# hyp_at_least.fw — hypergeometric upper-tail probability P(X >= kmin).
+#
+# Drawing n items WITHOUT replacement from a population of N with K successes,
+# the probability of getting AT LEAST kmin successes is the tail sum of the
+# PMF from kmin up to n (you can never draw more successes than items drawn):
+#
+#   hyp_at_least(N, K, n, kmin) = sum over k = kmin..n of hyp_pmf(N, K, n, k)
+#
+# The PMF term hyp_pmf(N,K,n,k) = nCr(K,k)*nCr(N-K,n-k)/nCr(N,n) is written
+# inline as nested multiplicative products so the WHOLE tail is one bounded
+# aggregation — the iterator k drives the upper bound of the inner nCr(K,k)
+# and nCr(N-K,n-k) products. Each product stays exact (overflow-safe), so the
+# tail is an exact rational up to the final divisions.
+#
+# (The inline form is used rather than summing cross-file hyp_pmf calls because
+# bounded aggregation unrolls at load time, before a cross-file callee in the
+# body could be resolved — see hyp_pmf.fw for the composing per-k PMF.)
+#
+# Keystone (PNF card-deck cross-check, N=54 deck, K=13 clubs, draw n=5):
+#   hyp_at_least(N=54, K=13, n=5, kmin=2)  ->  0.3467505241  (P(>=2 clubs))
+#
+# Usage:
+#   hyp_at_least(N=54, K=13, n=5, kmin=2, result=?p)
+
+result = sum( product((K-k+i)/i, i in [1..k]) * product((N-K-(n-k)+i)/i, i in [1..n-k]) / product((N-n+i)/i, i in [1..n]), k in [kmin..n])

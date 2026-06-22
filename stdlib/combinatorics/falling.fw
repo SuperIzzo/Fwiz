@@ -1,0 +1,17 @@
+# falling.fw — falling factorial (Pochhammer descending), written x^(m) underline.
+#
+#   falling(x, m) = x * (x-1) * (x-2) * ... * (x-m+1)   (m factors)
+#
+# Equivalently nPr(x, m) for integer x; defined here for any x so it composes
+# as a polynomial building block. Product form, overflow-safe.
+#
+#   product(x-i+1, i in [1..m])
+#
+# falling(x, 0) = 1 via the empty-product identity.
+#
+# Usage:
+#   ./bin/fwiz 'stdlib/combinatorics/falling(5, 2)'       # positional -> 20
+#   falling(x=5, m=2, result=?f)                           # named binding
+
+[falling(x, m) -> result]
+result = product(x-i+1, i in [1..m])

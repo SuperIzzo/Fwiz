@@ -1,0 +1,14 @@
+# factorial.fw — n! via a bounded product.
+#
+#   factorial(n) = product(i, i in [1..n]) = 1 * 2 * ... * n
+#
+# factorial(0) = 1 falls out of the empty-product identity ([1..0] is empty,
+# product over an empty domain is 1) — no special-case branch needed.
+# Exact integer arithmetic; no floating-point intermediate factorials.
+#
+# Usage:
+#   ./bin/fwiz 'stdlib/combinatorics/factorial(5)'        # positional -> 120
+#   factorial(n=5, result=?r)                              # named binding
+
+[factorial(n) -> result]
+result = product(i, i in [1..n])

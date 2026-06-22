@@ -1,0 +1,19 @@
+# nPr.fw — permutations: number of ordered r-arrangements of n items.
+#
+#   nPr(n, r) = n! / (n-r)! = n * (n-1) * ... * (n-r+1)
+#
+# Authored as the falling-factorial PRODUCT form, NOT n!/(n-r)! of two big
+# factorials — the product never builds an intermediate value larger than the
+# answer, so it stays overflow-safe and exact for arguments where the two-
+# factorial form would already have overflowed.
+#
+#   product(n-r+i, i in [1..r]) = (n-r+1) * (n-r+2) * ... * n
+#
+# nPr(n, 0) = 1 via the empty-product identity.
+#
+# Usage:
+#   ./bin/fwiz 'stdlib/combinatorics/nPr(5, 2)'           # positional -> 20
+#   nPr(n=5, r=2, result=?p)                               # named binding
+
+[nPr(n, r) -> result]
+result = product(n-r+i, i in [1..r])

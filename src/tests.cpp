@@ -17892,6 +17892,98 @@ void test_aggregation_binder_scoping() {
     }
 }
 
+// gen-6 Cycle 2: combinatorics stdlib (.fw) authored via bounded aggregation.
+// Loads the committed stdlib/combinatorics/*.fw files (cwd == repo root under
+// `make test`) and asserts the closed forms — including the PNF Monte-Carlo
+// keystone P(>=2 clubs in 5 of 54) = 0.3467505241. Exercises BOTH the named-
+// binding and positional formula-call shapes, plus cross-file composition
+// (hyp_pmf composes nCr).
+void test_combinatorics_stdlib() {
+    SECTION("gen-6 Cycle 2: combinatorics stdlib (.fw, bounded aggregation)");
+
+    // Resolve a section file by named-binding call into a synthetic CLI query.
+    auto call_named = [](const std::string& file, const std::string& query) -> double {
+        FormulaSystem sys;
+        sys.load_file(file);
+        sys.load_string(query);
+        return sys.resolve("y", {});
+    };
+    // Resolve a composing file directly on its `result` with named bindings.
+    auto resolve_result = [](const std::string& file,
+                             std::map<std::string, double> b) -> double {
+        FormulaSystem sys;
+        sys.load_file(file);
+        return sys.resolve("result", b);
+    };
+
+    // ---- factorial: n! via product(i, i in [1..n]); 0! = 1 (empty product) ----
+    ASSERT_NUM(call_named("stdlib/combinatorics/factorial.fw",
+                          "y = factorial(n=5, result=?)\n"),
+               120.0, "factorial(5) = 120");
+    ASSERT_NUM(call_named("stdlib/combinatorics/factorial.fw",
+                          "y = factorial(n=0, result=?)\n"),
+               1.0, "factorial(0) = 1 (empty product)");
+    // Positional shape (filename dispatch, no explicit result=?).
+    ASSERT_NUM(call_named("stdlib/combinatorics/factorial.fw",
+                          "y = factorial(5)\n"),
+               120.0, "factorial(5) positional = 120");
+
+    // ---- nCr: exact at both ends; the large value pins exactness ----
+    ASSERT_NUM(call_named("stdlib/combinatorics/nCr.fw",
+                          "y = nCr(n=52, k=5, result=?)\n"),
+               2598960.0, "nCr(52,5) = 2598960 exact");
+    {
+        const double big = call_named("stdlib/combinatorics/nCr.fw",
+                                      "y = nCr(n=54, k=27, result=?)\n");
+        // 1946939425648112 is exactly representable in double; assert to the unit.
+        ASSERT(big == 1946939425648112.0,
+               "nCr(54,27) = 1946939425648112 exact (got "
+               + std::to_string(big) + ")");
+    }
+
+    // ---- nPr: falling-factorial product form (overflow-safe, not n!/(n-r)!) ----
+    ASSERT_NUM(call_named("stdlib/combinatorics/nPr.fw",
+                          "y = nPr(n=5, r=2, result=?)\n"),
+               20.0, "nPr(5,2) = 20");
+    ASSERT_NUM(call_named("stdlib/combinatorics/nPr.fw", "y = nPr(5, 2)\n"),
+               20.0, "nPr(5,2) positional = 20");
+
+    // ---- falling / rising factorial product forms ----
+    ASSERT_NUM(call_named("stdlib/combinatorics/falling.fw",
+                          "y = falling(x=5, m=2, result=?)\n"),
+               20.0, "falling(5,2) = 20 (5*4)");
+    ASSERT_NUM(call_named("stdlib/combinatorics/rising.fw",
+                          "y = rising(x=5, m=2, result=?)\n"),
+               30.0, "rising(5,2) = 30 (5*6)");
+
+    // ---- hypergeometric PMF: composes nCr cross-file (named bindings) ----
+    // P(exactly 2 of 13 clubs in 5 of 54) = nCr(13,2)*nCr(41,3)/nCr(54,5).
+    ASSERT(std::abs(resolve_result("stdlib/combinatorics/hyp_pmf.fw",
+                                   {{"N",54},{"K",13},{"n",5},{"k",2}})
+                    - 0.262917745715) < 1e-9,
+           "hyp_pmf(54,13,5,2) composes nCr cross-file = 0.262917745715");
+
+    // ---- KEYSTONE: P(>=2 clubs in 5 of 54) tail sum = 0.3467505241 ----
+    // The PNF Monte-Carlo cross-check; assert to ~1e-9.
+    {
+        const double ks = resolve_result("stdlib/combinatorics/hyp_at_least.fw",
+                                         {{"N",54},{"K",13},{"n",5},{"kmin",2}});
+        ASSERT(std::abs(ks - 0.3467505241) < 1e-9,
+               "KEYSTONE P(>=2 clubs in 5 of 54) = 0.3467505241 (got "
+               + std::to_string(ks) + ")");
+    }
+
+    // ---- one more PNF-flavored hypergeometric: P(>=1 ace in 5 of 52) ----
+    // 1 - nCr(48,5)/nCr(52,5) = 1 - 1712304/2598960 = 0.3411580...
+    {
+        const double ace = resolve_result("stdlib/combinatorics/hyp_at_least.fw",
+                                          {{"N",52},{"K",4},{"n",5},{"kmin",1}});
+        ASSERT(std::abs(ace - 0.341158001662) < 1e-9,
+               "P(>=1 ace in 5 of 52) = 0.341158001662 (got "
+               + std::to_string(ace) + ")");
+    }
+}
+
 void test_checked_type() {
     SECTION("Checked<T>: NaN-sentinel optional wrapper");
 
@@ -18261,6 +18353,7 @@ int main() {
     test_bounded_aggregation_step_c();
     test_bounded_aggregation_step_d();
     test_aggregation_binder_scoping();
+    test_combinatorics_stdlib();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

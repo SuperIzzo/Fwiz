@@ -1,0 +1,19 @@
+# hyp_pmf.fw — hypergeometric probability mass function.
+#
+# Drawing n items WITHOUT replacement from a population of N that contains K
+# "successes", the probability of getting exactly k successes is:
+#
+#   hyp_pmf(N, K, n, k) = nCr(K, k) * nCr(N-K, n-k) / nCr(N, n)
+#
+# Composes the sibling nCr.fw three times by named binding (cross-file formula
+# calls, the same pattern as examples/box.fw composing examples/rectangle.fw).
+# Because each nCr is exact, the PMF is an exact rational up to the final
+# division.
+#
+# Usage:
+#   hyp_pmf(N=54, K=13, n=5, k=2, result=?p)   # P(exactly 2 of 13 in 5 of 54)
+
+nCr(result=?a, n=K, k=k)
+nCr(result=?b, n=N-K, k=n-k)
+nCr(result=?c, n=N, k=n)
+result = a * b / c

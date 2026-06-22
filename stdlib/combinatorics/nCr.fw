@@ -1,0 +1,22 @@
+# nCr.fw — combinations (binomial coefficient): unordered k-subsets of n items.
+#
+#   nCr(n, k) = n! / (k! * (n-k)!)
+#
+# Authored as the MULTIPLICATIVE product form, NOT a ratio of big factorials:
+#
+#   product((n-k+i)/i, i in [1..k])
+#     = ((n-k+1)/1) * ((n-k+2)/2) * ... * (n/k)
+#
+# Each partial product is itself an integer (a binomial coefficient), so the
+# running value never exceeds the final answer — overflow-safe. fwiz carries
+# the division exactly (structural rationals), so the result is exact even at
+# the large end: nCr(54, 27) = 1946939425648112 to the last digit.
+#
+# nCr(n, 0) = 1 via the empty-product identity.
+#
+# Usage:
+#   ./bin/fwiz 'stdlib/combinatorics/nCr(52, 5)'          # positional -> 2598960
+#   nCr(n=52, k=5, result=?c)                              # named binding
+
+[nCr(n, k) -> result]
+result = product((n-k+i)/i, i in [1..k])

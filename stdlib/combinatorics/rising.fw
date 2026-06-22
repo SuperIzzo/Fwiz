@@ -1,0 +1,16 @@
+# rising.fw — rising factorial (Pochhammer ascending), written x^(m) overline.
+#
+#   rising(x, m) = x * (x+1) * (x+2) * ... * (x+m-1)     (m factors)
+#
+# The ascending companion to falling.fw. Product form, overflow-safe.
+#
+#   product(x+i-1, i in [1..m])
+#
+# rising(x, 0) = 1 via the empty-product identity.
+#
+# Usage:
+#   ./bin/fwiz 'stdlib/combinatorics/rising(5, 2)'        # positional -> 30
+#   rising(x=5, m=2, result=?r)                            # named binding
+
+[rising(x, m) -> result]
+result = product(x+i-1, i in [1..m])
