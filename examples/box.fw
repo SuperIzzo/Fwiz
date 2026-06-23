@@ -1,3 +1,4 @@
+@include "rectangle.fw"
 # bottom face: width x depth
 rectangle(area=?bottom, width=width, height=depth)
 top = bottom

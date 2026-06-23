@@ -1,3 +1,4 @@
+@include "nCr.fw"
 # hyp_pmf.fw — hypergeometric probability mass function.
 #
 # Drawing n items WITHOUT replacement from a population of N that contains K

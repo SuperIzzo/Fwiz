@@ -430,17 +430,25 @@ fwiz has no `import` or module system — you organize a project by putting `.fw
 
 #### Resolution rules
 
+Since the @include migration (2026-06-23) fwiz resolves cross-file calls in **strict mode by
+default** — a callee must be **explicitly declared** with `@include` (or be on the include path).
+Co-location alone is no longer a resolution channel.
+
 When `box.fw` calls `rectangle(...)`:
 
 1. If `box.fw` defines a section `[rectangle(...) -> ...]`, use that.
-2. Otherwise, fwiz looks for `rectangle.fw` in the **current working directory** (where you ran `fwiz`, not where `box.fw` lives).
-3. If not found, the call fails with `No equation found for 'rectangle'`.
+2. Otherwise, if `box.fw` has `@include "rectangle.fw"` (or `rectangle.fw` is on the `-I` / `FWIZ_PATH`
+   search path), load it. The callee must declare an explicit `[rectangle(args) -> ret]` section —
+   a flat file of bare equations merges its definitions but is not callable by stem.
+3. If neither holds, the call fails with a clear error naming the call and suggesting
+   `add @include "rectangle.fw"`, listing the searched directories.
 
-Because resolution is CWD-relative, invoke fwiz from the root of your project so relative paths work consistently:
+To restore the old implicit-CWD behavior (co-located callee resolved without `@include`), pass
+`--legacy-implicit` — a one-release backward-compat opt-out:
 
 ```bash
 $ cd my-project/
-$ fwiz box(volume=?, width=2, height=3, depth=4)
+$ fwiz --legacy-implicit box(volume=?, width=2, height=3, depth=4)
 ```
 
 #### Typical layout
@@ -468,6 +476,39 @@ Do NOT split just because a file has multiple equations — fwiz is designed aro
 #### The shipped stdlib
 
 fwiz ships a small standard library in the `stdlib/` directory. See §14.
+
+### 7.7 `@include` — explicit cross-file dependencies
+
+```
+@include "rectangle.fw"          # pull rectangle.fw's definitions into this file
+@include "stdlib/units/si-minimal.fw"
+```
+
+`@include "path.fw"` (quoted form primary; unquoted tolerated) recursively loads the named file,
+merging its definitions (sections, constants, rewrite rules) into the current system. It is the
+explicit declaration that satisfies strict-mode resolution. Place `@include` lines anywhere in a
+`.fw` file (conventionally at the top); transitive includes (A includes B includes C) and include
+cycles are both handled — a cycle throws a clear error rather than looping.
+
+**Search order** for the included path:
+
+1. **File-relative** — the directory of the file doing the `@include` (`base_dir`).
+2. **`-I <dir>`** — each `-I` directory on the command line, in order (repeatable; `-Idir` attached
+   form also accepted).
+3. **`FWIZ_PATH`** — directories from the `FWIZ_PATH` environment variable (split on `:` / `;`),
+   searched after the `-I` dirs.
+
+A not-found `@include` names every directory it searched.
+
+**Strict-by-default model.** A fresh fwiz invocation resolves cross-file calls strictly: the callee
+must be reachable via `@include` or the include path, AND must declare an explicit
+`[name(args) -> ret]` section to be callable by stem. This makes a `.fw` file's dependencies
+self-documenting. Inline builtins (`diff`, `integral`, `range`, `vec`, `mat`, `matmul`, `det`, `inv`,
+`transpose`) are NOT cross-file calls — they are resolved internally and never require `@include`.
+
+**`--legacy-implicit`** opts out: cross-file calls fall back to the pre-migration implicit base_dir
+co-location probe (a co-located `rectangle.fw` resolves a `rectangle(...)` call without `@include`,
+and a flat file is callable by stem). This flag is a one-release backward-compat window.
 
 ---
 
@@ -766,7 +807,7 @@ $ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=d
 speed = 25 / 18
 ```
 
-Note: a multi-file CLI load form (`fwiz file_a.fw file_b.fw(...)`) is **not** currently supported — the CLI accepts exactly one filename. Library files needing a units catalog must either (a) inline the necessary bindings (the `stdlib/physics/mechanics.fw` pattern, see §14.4) or (b) drive the equations via CLI synthetic bindings. Tracked as Future #80 (CLI-level multi-file include / `@include` directive).
+Note: a multi-file CLI load form (`fwiz file_a.fw file_b.fw(...)`) is **not** currently supported — the CLI accepts exactly one filename. Library files needing a units catalog must either (a) inline the necessary bindings (the `stdlib/physics/mechanics.fw` pattern, see §14.4) or (b) drive the equations via CLI synthetic bindings. Completed 2026-06-23 (M1+M2+M3). See the `@include` directive section (§7.7) for syntax and strict-mode resolution.
 
 Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b (the latter blocked by Future #78 — see Future.md).
 

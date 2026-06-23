@@ -374,9 +374,10 @@ public:
     // or the -I/FWIZ_PATH search path. An unresolved strict-mode call throws
     // StrictIncludeError naming the call and suggesting @include. Set by the
     // CLI `--strict-includes` flag; propagated via copy_metadata_to_sub so a
-    // strict parent's sub-systems inherit strict resolution. Default flips to
-    // true in M3 (with a --legacy-implicit opt-out).
-    bool strict_includes_ = false;
+    // strict parent's sub-systems inherit strict resolution. Default is true
+    // since M3 (Future #80 final); --legacy-implicit opts back into the old
+    // implicit base_dir filesystem auto-probe for one backward-compat release.
+    bool strict_includes_ = true;
     // Human-readable source label — file stem for load_file, the passed
     // `label` argument for load_string, or empty for a fresh-constructed
     // system. Used by build_alias_table() as the stem qualifier on
@@ -983,6 +984,12 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
 
                 calls.push_back(std::move(call));
                 return Expr::Var(calls.back().output_var);
+            } catch (const StrictIncludeError&) {
+                // Inline post-load/simplifier builtin (diff/integral/vec/mat/...) — not a
+                // cross-file call; leave it for the post-load pass / simplifier. A genuine
+                // un-@include'd cross-file call rethrows so the "add @include" hint surfaces.
+                if (is_postload_builtin(e->name)) return e;
+                throw;
             } catch (const std::runtime_error&) {
                 // Sub-system not found — leave as FUNC_CALL
                 return e;

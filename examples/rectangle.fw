@@ -1,1 +1,1 @@
-area = width * height
+[rectangle(width, height) -> area] area = width * height

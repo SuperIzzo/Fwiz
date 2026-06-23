@@ -41,7 +41,8 @@ int main(int argc, const char* argv[]) {
                   << "  --zip          with --table: zip ranges element-wise (default: cartesian)\n"
                   << "  -I <dir>       add a directory to the @include / cross-file search path\n"
                   << "                 (repeatable; FWIZ_PATH env var dirs are searched after)\n"
-                  << "  --strict-includes  require @include for cross-file calls (no base_dir auto-probe)\n"
+                  << "  --strict-includes  require @include for cross-file calls (default; no base_dir auto-probe)\n"
+                  << "  --legacy-implicit  restore implicit cross-file filesystem resolution (pre-@include behavior)\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
@@ -70,7 +71,7 @@ int main(int argc, const char* argv[]) {
         std::string output_file;
         std::string query_str;
         std::vector<std::string> include_dirs;  // Future #80: -I dirs (order-preserving)
-        bool strict_includes = false;           // Future #80 M2: --strict-includes flag
+        bool strict_includes = true;             // Future #80 M3: explicit @include is the default
 
         for (int i = 1; i < argc; i++) {
             const std::string arg = argv[i];
@@ -140,6 +141,7 @@ int main(int argc, const char* argv[]) {
                 include_dirs.emplace_back(arg.substr(2));  // attached form: -Idir
             }
             else if (arg == "--strict-includes") strict_includes = true;
+            else if (arg == "--legacy-implicit") strict_includes = false;
             else    { if (!query_str.empty()) query_str += ' '; query_str += arg; }
         }
 
@@ -176,7 +178,7 @@ int main(int argc, const char* argv[]) {
         sys.approximate_mode = approximate_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
-        sys.strict_includes_ = strict_includes;  // Future #80 M2 (default-off)
+        sys.strict_includes_ = strict_includes;  // Future #80 M3 (default-on; --legacy-implicit opts out)
 
         // Future #80: @include / cross-file search path. -I dirs first (CLI
         // order), then FWIZ_PATH dirs (split on ':' and ';' for portability),

@@ -1,7 +1,9 @@
 # factorial.fw — Recursive factorial
 #
-# Usage:
-#   fwiz factorial(result=?, n=5)
+# Usage (requires --legacy-implicit: this file is a self-recursive flat system,
+# and a self-call cannot be expressed via @include under the explicit-include
+# default):
+#   fwiz --legacy-implicit factorial(result=?, n=5)
 #   result = 120
 #
 # Requires: conditions and recursion (formula calls to self)

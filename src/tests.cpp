@@ -4871,11 +4871,12 @@ void test_formula_call_parsing() {
 void test_formula_call_forward() {
     SECTION("Formula Call Forward Resolution");
 
-    write_fw("/tmp/fcf_rect.fw", "area = width * height\n");
+    write_fw("/tmp/fcf_rect.fw", "[fcf_rect(width, height) -> area] area = width * height\n");
 
     // Basic forward: solve for output_var via sub-system
     {
         write_fw("/tmp/fcf1.fw",
+            "@include \"fcf_rect.fw\"\n"
             "fcf_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -4887,7 +4888,7 @@ void test_formula_call_forward() {
 
     // Direct query of formula call output
     {
-        write_fw("/tmp/fcf2.fw", "fcf_rect(area=?floor, width=width, height=depth)\n");
+        write_fw("/tmp/fcf2.fw", "@include \"fcf_rect.fw\"\nfcf_rect(area=?floor, width=width, height=depth)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcf2.fw");
         ASSERT_NUM(sys.resolve("floor", {{"width", 4}, {"depth", 3}}), 12,
@@ -4897,6 +4898,7 @@ void test_formula_call_forward() {
     // Providing the output_var skips sub-system (bridge)
     {
         write_fw("/tmp/fcf3.fw",
+            "@include \"fcf_rect.fw\"\n"
             "fcf_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -4908,6 +4910,7 @@ void test_formula_call_forward() {
     // Multiple formula calls to same file with different bindings
     {
         write_fw("/tmp/fcf4.fw",
+            "@include \"fcf_rect.fw\"\n"
             "fcf_rect(area=?a1, width=w1, height=h1)\n"
             "fcf_rect(area=?a2, width=w2, height=h2)\n"
             "total = a1 + a2\n");
@@ -4921,6 +4924,7 @@ void test_formula_call_forward() {
     // Inline formula call in expression (form 4)
     {
         write_fw("/tmp/fcf5.fw",
+            "@include \"fcf_rect.fw\"\n"
             "volume = fcf_rect(area=?floor, width=w, height=d) * h\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcf5.fw");
@@ -4932,11 +4936,12 @@ void test_formula_call_forward() {
 void test_formula_call_reverse() {
     SECTION("Formula Call Reverse Resolution");
 
-    write_fw("/tmp/fcr_rect.fw", "area = width * height\n");
+    write_fw("/tmp/fcr_rect.fw", "[fcr_rect(width, height) -> area] area = width * height\n");
 
     // Reverse: solve parent var through binding
     {
         write_fw("/tmp/fcr1.fw",
+            "@include \"fcr_rect.fw\"\n"
             "fcr_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -4949,6 +4954,7 @@ void test_formula_call_reverse() {
     // Reverse: solve through volume equation + formula call
     {
         write_fw("/tmp/fcr2.fw",
+            "@include \"fcr_rect.fw\"\n"
             "fcr_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -4960,7 +4966,7 @@ void test_formula_call_reverse() {
 
     // Reverse: solve width through sub-system
     {
-        write_fw("/tmp/fcr3.fw", "fcr_rect(area=?floor, width=w, height=h)\n");
+        write_fw("/tmp/fcr3.fw", "@include \"fcr_rect.fw\"\nfcr_rect(area=?floor, width=w, height=h)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcr3.fw");
         // w=? with floor=24, h=6 → area=24, height=6, width=24/6=4 → w=4
@@ -4974,9 +4980,16 @@ void test_formula_call_chained() {
 
     // A → B → C chain
     {
-        write_fw("/tmp/fcc_c.fw", "z = x + y\n");
-        write_fw("/tmp/fcc_b.fw", "fcc_c(z=?mid, x=a, y=b)\nresult = mid * 2\n");
-        write_fw("/tmp/fcc_a.fw", "fcc_b(result=?out, a=p, b=q)\nfinal = out + 1\n");
+        write_fw("/tmp/fcc_c.fw", "[fcc_c(x, y) -> z] z = x + y\n");
+        write_fw("/tmp/fcc_b.fw",
+            "@include \"fcc_c.fw\"\n"
+            "[fcc_b(a, b) -> result]\n"
+            "fcc_c(z=?mid, x=a, y=b)\n"
+            "result = mid * 2\n");
+        write_fw("/tmp/fcc_a.fw",
+            "@include \"fcc_b.fw\"\n"
+            "fcc_b(result=?out, a=p, b=q)\n"
+            "final = out + 1\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcc_a.fw");
         // z = p+q = 3+4=7, mid=7, result=14, out=14, final=15
@@ -4986,8 +4999,8 @@ void test_formula_call_chained() {
 
     // Sub-system uses defaults from its own file
     {
-        write_fw("/tmp/fcc_d.fw", "g = 9.81\nforce = mass * g\n");
-        write_fw("/tmp/fcc_e.fw", "fcc_d(force=?f, mass=m)\n");
+        write_fw("/tmp/fcc_d.fw", "[fcc_d(mass) -> force]\ng = 9.81\nforce = mass * g\n");
+        write_fw("/tmp/fcc_e.fw", "@include \"fcc_d.fw\"\nfcc_d(force=?f, mass=m)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fcc_e.fw");
         ASSERT_NUM(sys.resolve("f", {{"m", 10}}), 98.1,
@@ -5011,8 +5024,8 @@ void test_formula_call_errors() {
 
     // Sub-system can't solve (missing binding)
     {
-        write_fw("/tmp/fce_rect.fw", "area = width * height\n");
-        write_fw("/tmp/fce2.fw", "fce_rect(area=?floor, width=w)\n"); // no height binding
+        write_fw("/tmp/fce_rect.fw", "[fce_rect(width, height) -> area] area = width * height\n");
+        write_fw("/tmp/fce2.fw", "@include \"fce_rect.fw\"\nfce_rect(area=?floor, width=w)\n"); // no height binding
         FormulaSystem sys;
         sys.load_file("/tmp/fce2.fw");
         auto msg = get_error([&]() { (void)sys.resolve("floor", {{"w", 4}}); });
@@ -5561,6 +5574,11 @@ void test_recursion_depth_guard() {
         write_fw("/tmp/trdg_b2.fw", "trdg_a2(result=?y, n=n)\n");
         FormulaSystem sys;
         sys.max_formula_depth = 20;
+        // Legacy-implicit (Bucket 2): this validates a mutual FORMULA-CALL cycle
+        // (A calls B, B calls A) throwing the depth/recursion guard. Migrating to
+        // @include would instead create an @include cycle (wrong error shape), so
+        // this test deliberately exercises the pre-@include implicit resolution.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/trdg_a2.fw");
         auto msg = get_error([&]() { (void)sys.resolve("result", {{"n", 5}}); });
         ASSERT(!msg.empty(), "mutual recursion: throws");
@@ -5602,8 +5620,9 @@ void test_recursion_depth_guard() {
 
     // Normal formula calls should still work (not falsely triggered)
     {
-        write_fw("/tmp/trdg_rect.fw", "area = width * height\n");
+        write_fw("/tmp/trdg_rect.fw", "[trdg_rect(width, height) -> area] area = width * height\n");
         write_fw("/tmp/trdg_box.fw",
+            "@include \"trdg_rect.fw\"\n"
             "trdg_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -5639,6 +5658,11 @@ void test_recursion_depth_guard() {
         // call — that triggers a second `load_sub_system("matmul")` → the
         // cycle guard fires.
         FormulaSystem sys;
+        // Legacy-implicit (Bucket 2): validates the cross-file LOAD-cycle guard
+        // (a self-loading .fw file). Strict mode would throw StrictIncludeError
+        // at the call site before the load probe runs (different error shape), so
+        // this test exercises the pre-@include implicit filesystem resolution.
+        sys.strict_includes_ = false;
         auto msg = get_error([&]() {
             sys.load_file("/tmp/fwiz_xrc_69/caller.fw");
             (void)sys.resolve("result", {});
@@ -5671,6 +5695,7 @@ void test_recursion_depth_guard() {
         write_fw("/tmp/fwiz_xrc_69b/c2.fw",
                  "result = myfn(3)\n");
         FormulaSystem sys2;
+        sys2.strict_includes_ = false;  // Bucket 2: same load-cycle rationale as above
         auto msg2 = get_error([&]() {
             sys2.load_file("/tmp/fwiz_xrc_69b/c2.fw");
             (void)sys2.resolve("result", {});
@@ -5925,11 +5950,11 @@ void test_explore_binary_integration() {
 void test_formula_call_additional() {
     SECTION("Formula Call Additional Coverage");
 
-    write_fw("/tmp/fca_rect.fw", "area = width * height\n");
+    write_fw("/tmp/fca_rect.fw", "[fca_rect(width, height) -> area] area = width * height\n");
 
     // Implied alias (Form 3) with actual resolution
     {
-        write_fw("/tmp/fca1.fw", "floor = fca_rect(area=?, width=width, height=depth)\nvolume = floor * h\n");
+        write_fw("/tmp/fca1.fw", "@include \"fca_rect.fw\"\nfloor = fca_rect(area=?, width=width, height=depth)\nvolume = floor * h\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fca1.fw");
         ASSERT_NUM(sys.resolve("volume", {{"width", 4}, {"depth", 3}, {"h", 6}}), 72,
@@ -5940,7 +5965,7 @@ void test_formula_call_additional() {
 
     // Inline formula call without alias — area enters scope
     {
-        write_fw("/tmp/fca2.fw", "volume = depth * fca_rect(area=?, width=width, height=height)\n");
+        write_fw("/tmp/fca2.fw", "@include \"fca_rect.fw\"\nvolume = depth * fca_rect(area=?, width=width, height=height)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fca2.fw");
         // area is the output_var (no alias), used in equation as: volume = depth * area
@@ -5950,7 +5975,7 @@ void test_formula_call_additional() {
 
     // Shorthand bindings resolve correctly
     {
-        write_fw("/tmp/fca3.fw", "fca_rect(area=?a, width, height)\n");
+        write_fw("/tmp/fca3.fw", "@include \"fca_rect.fw\"\nfca_rect(area=?a, width, height)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/fca3.fw");
         ASSERT_NUM(sys.resolve("a", {{"width", 6}, {"height", 7}}), 42,
@@ -5960,6 +5985,7 @@ void test_formula_call_additional() {
     // Sub-system caching: two calls share one loaded file
     {
         write_fw("/tmp/fca4.fw",
+            "@include \"fca_rect.fw\"\n"
             "fca_rect(area=?a1, width=w1, height=h1)\n"
             "fca_rect(area=?a2, width=w2, height=h2)\n"
             "total = a1 + a2\n");
@@ -6035,6 +6061,11 @@ void test_nested_cli_calls() {
         ASSERT_EQ(q.queries[0].variable, "result", "T1: outer queries 'result'");
 
         FormulaSystem sys;
+        // Legacy-implicit (Bucket 2): nested CLI calls have no host file in which
+        // to place an @include directive — the FormulaCall is injected directly
+        // from the parsed CLI query. Cross-file nested CLI resolution therefore
+        // relies on the implicit base_dir probe.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/nc_outer.fw");
         for (const auto& fc : q.nested_calls) sys.formula_calls.push_back(fc);
         ASSERT_NUM(sys.resolve("result", q.bindings), 8, "T1: (3+1)*2 = 8");
@@ -6086,6 +6117,7 @@ void test_nested_cli_calls() {
             "nc_outer(result=?, bogus_file_xyz(z=?x, p=3))");
         ASSERT(q.nested_calls.size() == 1, "T4: parse succeeds (1 nested call)");
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // Bucket 2: nested CLI call, same rationale as T1
         sys.load_file("/tmp/nc_outer.fw");
         for (const auto& fc : q.nested_calls) sys.formula_calls.push_back(fc);
         std::string msg = get_error([&]() {
@@ -6183,8 +6215,8 @@ void test_strategy_coverage() {
 
     // Strategy 3 (forward formula call): target is output_var
     {
-        write_fw("/tmp/tsc_sub.fw", "area = width * height\n");
-        write_fw("/tmp/tsc3.fw", "tsc_sub(area=?floor, width=w, height=h)\n");
+        write_fw("/tmp/tsc_sub.fw", "[tsc_sub(width, height) -> area] area = width * height\n");
+        write_fw("/tmp/tsc3.fw", "@include \"tsc_sub.fw\"\ntsc_sub(area=?floor, width=w, height=h)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tsc3.fw");
         ASSERT_NUM(sys.resolve("floor", {{"w", 4}, {"h", 5}}), 20,
@@ -6202,8 +6234,8 @@ void test_strategy_coverage() {
 
     // Strategy 5 (reverse formula call): target maps through binding
     {
-        write_fw("/tmp/tsc5_sub.fw", "area = width * height\n");
-        write_fw("/tmp/tsc5.fw", "tsc5_sub(area=?floor, width=w, height=h)\n");
+        write_fw("/tmp/tsc5_sub.fw", "[tsc5_sub(width, height) -> area] area = width * height\n");
+        write_fw("/tmp/tsc5.fw", "@include \"tsc5_sub.fw\"\ntsc5_sub(area=?floor, width=w, height=h)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tsc5.fw");
         // h=? with floor=20, w=4 → area=20, width=4, height=20/4=5
@@ -6231,8 +6263,8 @@ void test_strategy_coverage() {
 
     // All strategies apply to derive_recursive too
     {
-        write_fw("/tmp/tsc_sub.fw", "area = width * height\n");
-        write_fw("/tmp/tsc_d.fw", "tsc_sub(area=?floor, width=w, height=h)\nvolume = floor * d\n");
+        write_fw("/tmp/tsc_sub.fw", "[tsc_sub(width, height) -> area] area = width * height\n");
+        write_fw("/tmp/tsc_d.fw", "@include \"tsc_sub.fw\"\ntsc_sub(area=?floor, width=w, height=h)\nvolume = floor * d\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tsc_d.fw");
         auto r = sys.derive("volume", {}, {{"w","w"},{"h","h"},{"d","d"}});
@@ -6725,8 +6757,9 @@ void test_derive_formula_call() {
 
     // Cross-file derive
     {
-        write_fw("/tmp/tdf_rect.fw", "area = width * height\n");
+        write_fw("/tmp/tdf_rect.fw", "[tdf_rect(width, height) -> area] area = width * height\n");
         write_fw("/tmp/tdf1.fw",
+            "@include \"tdf_rect.fw\"\n"
             "tdf_rect(area=?floor, width=width, height=depth)\n"
             "volume = floor * h\n");
         FormulaSystem sys;
@@ -6740,8 +6773,9 @@ void test_derive_formula_call() {
     // parent: y = n + addfour(result=?, x=n)
     // Unfolding: y = n + (n + 4) = 2*n + 4, so n = (y - 4) / 2
     {
-        write_fw("/tmp/tdf_add4.fw", "result = x + 4\n");
+        write_fw("/tmp/tdf_add4.fw", "[tdf_add4(x) -> result] result = x + 4\n");
         write_fw("/tmp/tdf_unfold.fw",
+            "@include \"tdf_add4.fw\"\n"
             "tdf_add4(result=?f, x=n)\n"
             "y = n + f\n");
         FormulaSystem sys;
@@ -6758,8 +6792,9 @@ void test_derive_formula_call() {
     // rect: area = width * height
     // parent: rect(area=?a, width=x, height=3), solve for x given a
     {
-        write_fw("/tmp/tdf_rect2.fw", "area = width * height\n");
+        write_fw("/tmp/tdf_rect2.fw", "[tdf_rect2(width, height) -> area] area = width * height\n");
         write_fw("/tmp/tdf_rev.fw",
+            "@include \"tdf_rect2.fw\"\n"
             "tdf_rect2(area=?a, width=x, height=3)\n"
             "y = a + 1\n");
         FormulaSystem sys;
@@ -6776,6 +6811,7 @@ void test_derive_formula_call() {
     // Should evaluate to 120 (numeric, not symbolic)
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // examples/factorial.fw stays flat (self-recursive); runs under legacy
         sys.load_file("examples/factorial.fw");
         try {
             auto result = sys.derive("result", {{"n", 5}}, {});
@@ -6790,6 +6826,7 @@ void test_derive_formula_call() {
     // Even if it can't fully solve, it should produce something or fail gracefully
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // examples/factorial.fw stays flat (self-recursive); runs under legacy
         sys.load_file("examples/factorial.fw");
         try {
             auto result = sys.derive("n", {}, {{"result", "result"}});
@@ -6830,6 +6867,7 @@ void test_derive_formula_call() {
     // Recursive base case — n=0 gives result=1
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // examples/factorial.fw stays flat (self-recursive); runs under legacy
         sys.load_file("examples/factorial.fw");
         auto result = sys.derive("result", {{"n", 0}}, {});
         ASSERT_EQ(result, "1", "derive: factorial base case n=0");
@@ -6837,8 +6875,9 @@ void test_derive_formula_call() {
 
     // FORMULA_REV through cross-file call chain (like box)
     {
-        write_fw("/tmp/tdf_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_inner.fw", "[tdf_inner(w, h) -> area] area = w * h\n");
         write_fw("/tmp/tdf_outer.fw",
+            "@include \"tdf_inner.fw\"\n"
             "tdf_inner(area=?base, w=width, h=depth)\n"
             "volume = base * height\n");
         FormulaSystem sys;
@@ -6850,8 +6889,9 @@ void test_derive_formula_call() {
 
     // FORMULA_REV with expression binding (width = x + 1)
     {
-        write_fw("/tmp/tdf_expr_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_expr_inner.fw", "[tdf_expr_inner(w, h) -> area] area = w * h\n");
         write_fw("/tmp/tdf_expr_outer.fw",
+            "@include \"tdf_expr_inner.fw\"\n"
             "tdf_expr_inner(area=?a, w=x, h=3)\n"
             "y = a\n");
         FormulaSystem sys;
@@ -6865,8 +6905,9 @@ void test_derive_formula_call() {
     // f(x) = 2*x + 3, parent: y = x + f(x) = x + 2x + 3 = 3x + 3
     // Solve for x: x = (y - 3) / 3
     {
-        write_fw("/tmp/tdf_reappear_inner.fw", "result = 2 * x + 3\n");
+        write_fw("/tmp/tdf_reappear_inner.fw", "[tdf_reappear_inner(x) -> result] result = 2 * x + 3\n");
         write_fw("/tmp/tdf_reappear.fw",
+            "@include \"tdf_reappear_inner.fw\"\n"
             "tdf_reappear_inner(result=?f, x=n)\n"
             "y = n + f\n");
         FormulaSystem sys;
@@ -6879,6 +6920,7 @@ void test_derive_formula_call() {
     // factorial with numeric input should still work via fallback
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // examples/factorial.fw stays flat (self-recursive); runs under legacy
         sys.load_file("examples/factorial.fw");
         auto result = sys.derive("result", {{"n", 3}}, {});
         ASSERT_EQ(result, "6", "derive: recursive fallback for n=3");
@@ -6888,8 +6930,9 @@ void test_derive_formula_call() {
     // area = w * h, call: inner(area=?a, w=n+1, h=3), y = a
     // → a = (n+1)*3, y = 3n+3, n = y/3 - 1
     {
-        write_fw("/tmp/tdf_exprbind_inner.fw", "area = w * h\n");
+        write_fw("/tmp/tdf_exprbind_inner.fw", "[tdf_exprbind_inner(w, h) -> area] area = w * h\n");
         write_fw("/tmp/tdf_exprbind.fw",
+            "@include \"tdf_exprbind_inner.fw\"\n"
             "tdf_exprbind_inner(area=?a, w=n+1, h=3)\n"
             "y = a\n");
         FormulaSystem sys;
@@ -6900,8 +6943,9 @@ void test_derive_formula_call() {
 
     // Multiple formula calls — target used in two calls
     {
-        write_fw("/tmp/tdf_multi_inner.fw", "result = x + 4\n");
+        write_fw("/tmp/tdf_multi_inner.fw", "[tdf_multi_inner(x) -> result] result = x + 4\n");
         write_fw("/tmp/tdf_multi.fw",
+            "@include \"tdf_multi_inner.fw\"\n"
             "tdf_multi_inner(result=?a, x=p)\n"
             "tdf_multi_inner(result=?b, x=q)\n"
             "y = a + b\n");
@@ -6914,6 +6958,7 @@ void test_derive_formula_call() {
     // Symbolic recursive derive — picks first valid (base case)
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // examples/factorial.fw stays flat (self-recursive); runs under legacy
         sys.load_file("examples/factorial.fw");
         auto result = sys.derive("result", {}, {{"n", "n"}});
         // Can't evaluate condition, first equation wins → result = 1
@@ -7311,6 +7356,7 @@ void test_numeric_integration() {
             "n >= 0\nn <= 20\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
+        sys.strict_includes_ = false;  // Bucket 2: self-recursive flat file (self-call can't be @include'd)
         sys.load_file("/tmp/tn_fact.fw");
         auto result = sys.resolve_all("n", {{"result", 120}});
         auto& d = result.discrete();
@@ -7327,6 +7373,7 @@ void test_numeric_integration() {
             "n >= 0\nn <= 20\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
+        sys.strict_includes_ = false;  // Bucket 2: self-recursive flat file (self-call can't be @include'd)
         sys.load_file("/tmp/tn_fact2.fw");
         auto result = sys.resolve_all("n", {{"result", 720}});
         auto& d = result.discrete();
@@ -7484,6 +7531,7 @@ void test_numeric_edge_cases() {
             "n >= 0\nn <= 10\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
+        sys.strict_includes_ = false;  // Bucket 2: self-recursive flat file (self-call can't be @include'd)
         sys.load_file("/tmp/tne_memo.fw");
         auto r1 = sys.resolve_all("n", {{"result", 24}});
         sys.numeric_memo_.clear();
@@ -7527,7 +7575,8 @@ void test_numeric_binary_integration() {
             "result = 1 if n <=0\n"
             "result = n * tnb_fact(result=?prev, n=n-1) if n >0\n"
             "n >= 0\nn <= 20\n");
-        int rc = system("./bin/fwiz '/tmp/tnb_fact(n=?, result=120)' 2>/dev/null "
+        // Self-recursive flat file: --legacy-implicit (self-call can't be @include'd).
+        int rc = system("./bin/fwiz --legacy-implicit '/tmp/tnb_fact(n=?, result=120)' 2>/dev/null "
                         "| grep -q '5'");
         ASSERT(WEXITSTATUS(rc) == 0, "numeric binary: factorial finds 5");
     }
@@ -8075,8 +8124,8 @@ void test_constants_edge_cases() {
 
     // Constants in formula call bindings
     {
-        write_fw("/tmp/tc_fcall_inner.fw", "y = a * x\n");
-        write_fw("/tmp/tc_fcall.fw", "tc_fcall_inner(y=?result, a=pi, x=r)\n");
+        write_fw("/tmp/tc_fcall_inner.fw", "[tc_fcall_inner(a, x) -> y] y = a * x\n");
+        write_fw("/tmp/tc_fcall.fw", "@include \"tc_fcall_inner.fw\"\ntc_fcall_inner(y=?result, a=pi, x=r)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/tc_fcall.fw");
         double result = sys.resolve("result", {{"r", 2}});
@@ -8117,9 +8166,13 @@ void test_derive_edge_cases_extended() {
 
     // Deeply nested formula calls (3 levels: A → B → C)
     {
-        write_fw("/tmp/td3_c.fw", "z = w * 2\n");
-        write_fw("/tmp/td3_b.fw", "td3_c(z=?mid, w=v)\ny = mid + 1\n");
-        write_fw("/tmp/td3_a.fw", "td3_b(y=?result, v=x)\n");
+        write_fw("/tmp/td3_c.fw", "[td3_c(w) -> z] z = w * 2\n");
+        write_fw("/tmp/td3_b.fw",
+            "@include \"td3_c.fw\"\n"
+            "[td3_b(v) -> y]\n"
+            "td3_c(z=?mid, w=v)\n"
+            "y = mid + 1\n");
+        write_fw("/tmp/td3_a.fw", "@include \"td3_b.fw\"\ntd3_b(y=?result, v=x)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/td3_a.fw");
         try {
@@ -8132,8 +8185,8 @@ void test_derive_edge_cases_extended() {
 
     // Unfold with conditions on sub-system equations
     {
-        write_fw("/tmp/td_cond_inner.fw", "y = x if x >0\ny = 0 if x <=0\n");
-        write_fw("/tmp/td_cond_outer.fw", "td_cond_inner(y=?r, x=a)\n");
+        write_fw("/tmp/td_cond_inner.fw", "[td_cond_inner(x) -> y]\ny = x if x >0\ny = 0 if x <=0\n");
+        write_fw("/tmp/td_cond_outer.fw", "@include \"td_cond_inner.fw\"\ntd_cond_inner(y=?r, x=a)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/td_cond_outer.fw");
         // With a=5, condition x>0 should select first equation
@@ -8534,6 +8587,9 @@ void test_sections() {
         write_fw("/tmp/tsec_building.fw",
             "tsec_shapes.rect(area=?floor, w=width, h=depth)\nvolume = floor * height\n");
         FormulaSystem sys;
+        // Bucket 2: cross-file `file.section` dot-dispatch into a non-header'd
+        // section — the legacy implicit cross-file path, distinct from @include.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/tsec_building.fw");
         double v = sys.resolve("volume", {{"width", 10}, {"depth", 8}, {"height", 3}});
         ASSERT_NUM(v, 240, "section: cross-file section call");
@@ -9172,6 +9228,10 @@ void test_rewrite_rules() {
     // 9. Custom user condition: iff x > 0
     {
         FormulaSystem sys;
+        // Bucket 2: `y = foo(bar)` reads as a cross-file call to 'foo' at load
+        // time; the test's intent is the `foo(x) = x^2` rewrite rule, so legacy
+        // resolution avoids the strict cross-file probe on the incidental call.
+        sys.strict_includes_ = false;
         sys.load_string("y = foo(bar)\nfoo(x) = x^2 iff x > 0\n");
         simplify_clear_assumptions();
         RewriteRulesGuard rr_guard(&sys.rewrite_rules);
@@ -10506,6 +10566,7 @@ void test_positional_args() {
             "[square(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem (no host file for @include; section name != stem)
         sys.load_string("y = tpa_square(5)\n");
         try {
             double result = sys.resolve("y", {});
@@ -10522,6 +10583,7 @@ void test_positional_args() {
             "[myadd(a, b) -> result]\nresult = a + b\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_myadd(3, 4)\n");
         try {
             double result = sys.resolve("y", {});
@@ -10538,6 +10600,7 @@ void test_positional_args() {
             "[sq2(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_sq2(x)\n");
         try {
             double result = sys.resolve("x", {{"y", 25}});
@@ -10554,6 +10617,7 @@ void test_positional_args() {
             "[sq3(x) -> result]\nresult = x^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_sq3(2+3)\n");
         try {
             double result = sys.resolve("y", {});
@@ -10570,6 +10634,7 @@ void test_positional_args() {
             "[mysin(x) -> result]\n@extern sin\nresult = x\n");  // fallback eq
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_mysin(1.5707963267948966)\n");  // sin(pi/2)
         try {
             double result = sys.resolve("y", {});
@@ -10586,6 +10651,7 @@ void test_positional_args() {
             "[mysqrt(x) -> result]\n@extern sqrt\nx = result^2\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_mysqrt(x)\n");
         try {
             // Forward: sqrt(9) = 3
@@ -10681,6 +10747,7 @@ void test_semicolon_separator() {
             "[oneline(x) -> result] result = x * 10\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_oneline(5)\n");
         try {
             double r = sys.resolve("y", {});
@@ -10700,6 +10767,7 @@ void test_semicolon_separator() {
         write_fw_local("/tmp/tpa_sugar.fw", "[sugar(x) -> result] = x^2 + 1\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_sugar(3)\n");
         try {
             double r = sys.resolve("y", {});
@@ -10736,6 +10804,7 @@ void test_semicolon_separator() {
             "[sugar2(x) -> result] = x^2 iff x >= 0; = -x^2 iff x < 0\n");
         FormulaSystem sys;
         sys.base_dir = "/tmp";
+        sys.strict_includes_ = false;  // Bucket 2: load_string cross-file call by file stem
         sys.load_string("y = tpa_sugar2(3)\n");
         try {
             double r = sys.resolve("y", {});
@@ -11219,6 +11288,7 @@ void test_dead_end_and_first_candidate() {
             "n >= 0\nn <= 20\n");
         FormulaSystem sys;
         sys.numeric_mode = true;
+        sys.strict_includes_ = false;  // Bucket 2: self-recursive flat file (self-call can't be @include'd)
         sys.load_file("/tmp/tde_fact.fw");
         auto result = sys.resolve_all("n", {{"result", 120}});
         auto& d = result.discrete();
@@ -12734,7 +12804,7 @@ void test_provenance_plumbing() {
     // solved_symbolic_[result] must propagate to parent's render path.
     {
         write_fw("/tmp/halfpi.fw", "[halfpi(x) -> result] = pi / 2\n");
-        write_fw("/tmp/prov4.fw", "phase = halfpi(0)\n");
+        write_fw("/tmp/prov4.fw", "@include \"halfpi.fw\"\nphase = halfpi(0)\n");
         std::string out = capture_cmd(
             "./bin/fwiz --steps '/tmp/prov4.fw(phase=?)' 2>&1");
         // The parent's T7 emits "  result: phase = <render>" (with leading spaces).
@@ -12769,7 +12839,7 @@ void test_provenance_plumbing() {
         write_fw("/tmp/mysin.fw",
             "[mysin(x) -> result] @extern sin; x = asin(result)\n");
         write_fw("/tmp/prov_e_caller.fw",
-            "y1 = mysin(z1)\ny2 = mysin(z2)\n");
+            "@include \"mysin.fw\"\ny1 = mysin(z1)\ny2 = mysin(z2)\n");
         FormulaSystem sys;
         sys.load_file("/tmp/prov_e_caller.fw");
         (void)sys.resolve_all("y1", {{"z1", 0.3}});  // populates sub_systems
@@ -13015,8 +13085,9 @@ void test_symbolic_diff_unfold_formula_call() {
 
     // BLOCKING #10: unfold-then-diff for formula call
     write_fw("/tmp/tdiff_kine.fw",
-        "distance = velocity * time + 0.5 * a * time^2\n");
+        "[tdiff_kine(velocity, time, a) -> distance] distance = velocity * time + 0.5 * a * time^2\n");
     write_fw("/tmp/tdiff_caller.fw",
+        "@include \"tdiff_kine.fw\"\n"
         "tdiff_kine(distance=?d, velocity=velocity, time=time, a=a)\n"
         "slope = diff(d, time)\n");
     FormulaSystem sys;
@@ -13571,14 +13642,14 @@ void test_t22_positional_call_counter_per_instance() {
 
     FormulaSystem s1;
     s1.base_dir = "/tmp";
-    s1.load_string("a = t22_sq(3)\n");
+    s1.load_string("@include \"t22_sq.fw\"\na = t22_sq(3)\n");
     ASSERT(!s1.formula_calls.empty(), "T2.2: instance 1 has formula_calls");
     ASSERT_EQ(s1.formula_calls[0].output_var, std::string("_fc0"),
               "T2.2: instance 1 first positional call -> _fc0");
 
     FormulaSystem s2;
     s2.base_dir = "/tmp";
-    s2.load_string("a = t22_sq(3)\n");
+    s2.load_string("@include \"t22_sq.fw\"\na = t22_sq(3)\n");
     ASSERT(!s2.formula_calls.empty(), "T2.2: instance 2 has formula_calls");
     ASSERT_EQ(s2.formula_calls[0].output_var, std::string("_fc0"),
               "T2.2: instance 2 also gets _fc0 (independent counter)");
@@ -15550,6 +15621,10 @@ void test_gen3_cycle2_constants_as_units() {
                  "m_cross_child(out=?y, inp=inp)\n"
                  "[mass]\ng = 1\nkg = 1000 * g\n");
         FormulaSystem sys;
+        // Bucket 2: validates type_map_ propagation through the implicit cross-file
+        // call path (orthogonal to @include); the child carries a dim annotation
+        // that depends on the parent's [mass] section, so it stays on legacy.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/m_cross_parent.fw");
         // Force the child sub-system to load by resolving y.
         const double r = sys.resolve("y", {{"inp", 0}});
@@ -15832,6 +15907,10 @@ void test_gen5_cycle3a_types_as_named_sets() {
                  "m5_cross_child(out=?y, inp=inp)\n"
                  "[mass]\nrefkg = 1\nkg = 1000 * refkg\n");
         FormulaSystem sys;
+        // Bucket 2: validates set_definitions_ propagation through the implicit
+        // cross-file call path (orthogonal to @include); child's dim annotation
+        // depends on the parent's [mass] section, so it stays on legacy.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/m5_cross_parent.fw");
         const double r = sys.resolve("y", {{"inp", 0}});
         ASSERT_NUM(r, 10, "M5 C6: y resolves through child sub-system (forces load)");
@@ -16230,6 +16309,10 @@ void test_gen5_cycle3b_user_defined_predicates() {
                  "m5_3b_child(out=?y, inp=inp)\n"
                  "[whole_number(n)] iff n >= 0 && is_in(n, int)\n");
         FormulaSystem sys;
+        // Bucket 2: validates USER_PREDICATE propagation through the implicit
+        // cross-file call path (orthogonal to @include); kept on legacy to match
+        // the sibling m_cross / m5_cross propagation tests.
+        sys.strict_includes_ = false;
         sys.load_file("/tmp/m5_3b_parent.fw");
         ASSERT(sys.set_definitions_.count("whole_number") == 1,
                "M5 C12: parent has whole_number USER_PREDICATE");
@@ -17672,6 +17755,7 @@ void test_bounded_aggregation_step_c() {
     // UNRESOLVED FUNC_CALLs (Bug-B guard), never the original sum() node.
     {
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // Bucket 2: 'bogus' is intentionally undefined (graceful-degrade probe)
         sys.load_string("total = sum(bogus(roll), roll in [1..6])\n");
         ASSERT(!sys_has_reducer_node(sys), "SC7: missing sub-system still leaves no sum() node");
     }
@@ -17902,13 +17986,17 @@ void test_combinatorics_stdlib() {
     SECTION("gen-6 Cycle 2: combinatorics stdlib (.fw, bounded aggregation)");
 
     // Resolve a section file by named-binding call into a synthetic CLI query.
+    // Under the strict-includes default the caller must declare the dependency, so
+    // the query @include's the section file (by absolute path) rather than relying
+    // on a co-located base_dir probe.
     auto call_named = [](const std::string& file, const std::string& query) -> double {
         FormulaSystem sys;
-        sys.load_file(file);
-        sys.load_string(query);
+        sys.load_string("@include \"" + file + "\"\n" + query);
         return sys.resolve("y", {});
     };
     // Resolve a composing file directly on its `result` with named bindings.
+    // hyp_pmf.fw composes nCr.fw cross-file via its `@include "nCr.fw"` line, so it
+    // resolves under the strict-includes default (no legacy opt-out needed).
     auto resolve_result = [](const std::string& file,
                              std::map<std::string, double> b) -> double {
         FormulaSystem sys;
@@ -17988,10 +18076,11 @@ void test_expectation_stdlib() {
     SECTION("gen-6 Cycle 3: expectation / order-statistics stdlib (.fw)");
 
     // Resolve a section file via named-binding call routed into a synthetic query.
+    // Strict-includes default: the query @include's the section file by absolute
+    // path rather than relying on a co-located base_dir probe.
     auto call_named = [](const std::string& file, const std::string& query) -> double {
         FormulaSystem sys;
-        sys.load_file(file);
-        sys.load_string(query);
+        sys.load_string("@include \"" + file + "\"\n" + query);
         return sys.resolve("y", {});
     };
 
@@ -18059,8 +18148,8 @@ void test_expectation_stdlib() {
         auto ncr5 = [](long a) -> double {
             if (a < 5) return 0.0;
             FormulaSystem sys;
-            sys.load_file("stdlib/combinatorics/nCr.fw");
-            sys.load_string("y = nCr(n=" + std::to_string(a) + ", k=5, result=?)\n");
+            sys.load_string("@include \"stdlib/combinatorics/nCr.fw\"\n"
+                            "y = nCr(n=" + std::to_string(a) + ", k=5, result=?)\n");
             return sys.resolve("y", {});
         };
         const long val[] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
@@ -18179,6 +18268,7 @@ void test_include_m1() {
                  "inc_rect(area=?a, width=w, height=h)\n"
                  "tot = a + kk\n");
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // Bucket 2: COEXIST — co-located flat-file formula call (legacy probe)
         sys.include_dirs = {base + "/libdir"};
         sys.load_file(base + "/uses4.fw");
         // a = 4*3 = 12, kk = 9, tot = 21. inc_rect co-located resolves AFTER
@@ -18196,6 +18286,7 @@ void test_include_m1() {
                  "coex_rect(area=?a, width=w, height=h)\n"
                  "vol = a * d\n");
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // Bucket 2: COEXIST — include_dirs fallback to a flat file (legacy probe)
         sys.include_dirs = {base + "/libdir"};   // NOT @include'd, NOT co-located
         sys.load_file(base + "/coex_use.fw");
         ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
@@ -18211,6 +18302,7 @@ void test_include_m1() {
                  "mid(out=?o, w=w, h=h)\n"
                  "res = o * 2\n");
         FormulaSystem sys;
+        sys.strict_includes_ = false;  // Bucket 2: COEXIST — nested co-located flat-file calls (legacy probe)
         sys.include_dirs = {base + "/libdir"};
         sys.load_file(base + "/prop_use.fw");
         // mid resolves via include_dirs; inside mid, leaf must also resolve via
@@ -18309,10 +18401,11 @@ void test_include_m2() {
         write_fw(base + "/legacy_use.fw",
                  "legacy_rect(area=?a, width=w, height=h)\n"
                  "vol = a * d\n");
-        FormulaSystem sys;  // strict_includes_ defaults to false
+        FormulaSystem sys;
+        sys.strict_includes_ = false;  // explicit legacy opt-out (default is now strict)
         sys.load_file(base + "/legacy_use.fw");
         ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
-                   "non-strict default: legacy co-located flat-file call still works");
+                   "legacy opt-out: co-located flat-file call still works under --legacy-implicit");
     }
 
     // Propagation: a strict parent's sub-system is also strict.
@@ -18330,6 +18423,59 @@ void test_include_m2() {
         // Sanity: the strict-mode @include'd call resolves end-to-end.
         ASSERT_NUM(parent.resolve("out", {{"w", 2}, {"h", 3}}), 7,
                    "strict mode propagation: @include'd sub resolves under strict parent");
+    }
+
+    fs::remove_all(base);
+}
+
+// @include M3 (Future #80 final): the strict-includes default is now ON. A fresh
+// FormulaSystem (no flags set) must reject an un-@include'd cross-file call, and
+// the error must name @include so the user knows the fix. B18 acceptance.
+void test_include_m3() {
+    SECTION("@include M3 (strict-includes default flipped ON)");
+
+    namespace fs = std::filesystem;
+    const std::string base = "/tmp/fwiz_inc_m3";
+    fs::remove_all(base);
+    fs::create_directories(base);
+
+    // B18: default strict — un-@include'd cross-file call errors with an @include hint.
+    {
+        write_fw(base + "/m3_rect.fw", "[m3_rect(w, h) -> area] area = w * h\n");  // co-located, header'd
+        write_fw(base + "/m3_use.fw",
+                 "m3_rect(area=?a, w=w, h=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;  // NO flags — strict_includes_ now defaults to true
+        sys.load_file(base + "/m3_use.fw");
+        bool threw = false;
+        std::string what;
+        try { (void)sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}); }
+        catch (const std::exception& e) { threw = true; what = e.what(); }
+        ASSERT(threw, "B18: default (no flags) strict — un-@include'd cross-file call throws");
+        ASSERT(what.find("@include") != std::string::npos,
+               "B18: default-strict error message contains '@include' hint");
+    }
+
+    // B18b: adding the @include makes the same call resolve under the default.
+    {
+        write_fw(base + "/m3_use_ok.fw",
+                 "@include \"m3_rect.fw\"\n"
+                 "m3_rect(area=?a, w=w, h=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;  // NO flags — default strict
+        sys.load_file(base + "/m3_use_ok.fw");
+        ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
+                   "B18b: default-strict + @include'd header'd file resolves (vol=30)");
+    }
+
+    // B15: the SHIPPED examples/box.fw (@include "rectangle.fw" + header'd
+    // rectangle) forward-solves end-to-end under the strict default — the
+    // committed migration, not a synthetic fixture. bottom=w*d=15, vol=bottom*h=60.
+    {
+        FormulaSystem sys;  // NO flags — default strict
+        sys.load_file("examples/box.fw");
+        ASSERT_NUM(sys.resolve("volume", {{"width", 3}, {"height", 4}, {"depth", 5}}), 60,
+                   "B15: examples/box.fw strict-mode forward-solve (volume=60)");
     }
 
     fs::remove_all(base);
@@ -18700,6 +18846,7 @@ int main() {
     // Future #80 M1 (2026-06): @include directive + search path (COEXIST infra)
     test_include_m1();
     test_include_m2();
+    test_include_m3();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

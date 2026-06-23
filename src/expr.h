@@ -2849,6 +2849,17 @@ constexpr size_t MATRIX_3X3_DIM = 3;
         || name == "min" || name == "mean" || name == "count";
 }
 
+// Names resolved by post-load passes (diff/integral/range) or the simplifier
+// (vec/mat/matmul/det/inv/transpose) — NOT by cross-file resolution. In
+// strict-include mode these must not be treated as missing cross-file calls.
+// Maintenance point: a new simplifier/post-load builtin that takes the FUNC_CALL
+// shape must be added here so strict mode does not mistake it for a cross-file call.
+[[nodiscard]] inline bool is_postload_builtin(const std::string& name) {
+    return name == "diff" || name == "integral" || name == "range"
+        || name == "vec" || name == "mat" || name == "matmul"
+        || name == "det" || name == "inv" || name == "transpose";
+}
+
 // ── fold_aggregate — the single fold-policy table ─────────────────────────────
 // ONE place encodes the per-reducer fold semantics (ADD/MUL/max/min/mean-via-
 // exact-DIV/count + empty-domain identities). Two callers share it:

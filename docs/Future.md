@@ -1190,7 +1190,28 @@ result = n if n <= 1
 
 **NOT proposed**: ad-hoc type-position arithmetic (`v:length/time` directly in annotation without prior `:=` declaration). Speculative; meta-trigger ("evaluate after #81 ships"). May surface organically post-#81 — re-propose then.
 
-## 80. Multi-file CLI load / `@include` directive — IN-PROGRESS (M1+M2 shipped 2026-06-23)
+## 80. Multi-file CLI load / `@include` directive — DONE (M1+M2+M3 shipped 2026-06-23)
+
+**M3 SHIPPED 2026-06-23 (breaking migration — strict-includes is now the DEFAULT).** Delivered:
+- `strict_includes_` library default flipped `false` → `true` (`system.h`); `main.cpp` binary default
+  flipped to match. A fresh `FormulaSystem` (no flags) now rejects un-`@include`'d cross-file calls.
+- `--legacy-implicit` CLI flag (`main.cpp`) sets `strict_includes_ = false` — the one-release
+  backward-compat opt-out (now load-bearing).
+- `is_postload_builtin(name)` free predicate (`expr.h`, next to `is_aggregate_reducer`) covering
+  `{diff, integral, range, vec, mat, matmul, det, inv, transpose}` — names resolved by post-load
+  passes or the simplifier, NOT by cross-file resolution. A new `catch (const StrictIncludeError&)`
+  arm in `extract_positional_calls` (`system.h`) leaves these inline builtins alone (returns the
+  node for the post-load pass) and RETHROWS for genuine un-`@include`'d cross-file calls so the
+  "add `@include`" hint surfaces. Catch-site discriminator (not a guard-site exclusion) so the
+  legacy `matmul`-shadow self-load test still probes cross-file under `--legacy-implicit`.
+- `examples/rectangle.fw` gained an explicit `[rectangle(width, height) -> area]` header;
+  `examples/box.fw` gained `@include "rectangle.fw"`; `examples/factorial.fw` stays flat (its
+  usage comment now requires `--legacy-implicit`). `stdlib/combinatorics/hyp_pmf.fw` gained
+  `@include "nCr.fw"`.
+- ~32 `tests.cpp` cross-file fixtures migrated (bucket 1: header'd callee + `@include` in caller;
+  bucket 2: legacy mutual-cycle / self-load-shadow / self-recursive-flat / COEXIST fixtures kept on
+  `strict_includes_ = false`). B18 acceptance test (`test_include_m3`) pins the flipped default.
+- 3 new asserts (`test_include_m3`); 4011 tests pass; sanitize + analyze-fast clean.
 
 **M2 SHIPPED 2026-06-23 (opt-in `--strict-includes`, default-OFF — zero breaking changes).** Delivered:
 - `strict_includes_` bool on `FormulaSystem` (default `false`), propagated via `copy_metadata_to_sub`
@@ -1232,12 +1253,27 @@ result = n if n <= 1
   base_dir auto-probe is unchanged (removal is M3).
 - 12 new tests (`test_include_m1`). All 4000 tests pass; sanitize + analyze-fast clean.
 
-**STILL PENDING:**
-- **M3**: migrate `examples/box.fw` + `stdlib/combinatorics/hyp_pmf.fw` (add `@include`); add
-  explicit headers to flat callable example files; migrate ~32 `tests.cpp` cross-file fixtures;
-  flip `strict_includes_` default to `true`; add the `--legacy-implicit` opt-out flag (deferred
-  from M2 — load-bearing only after the default flips); remove implicit base_dir auto-probe +
-  flat-file-as-implicit-system; close #80 DONE. See the staging design for the full plan.
+**PARKED follow-ups (post-M3):**
+- **Remove `--legacy-implicit`** (one-release backward-compat window). The flag and the
+  `strict_includes_ = false` branch in `load_sub_system` exist only to ease migration off the
+  implicit base_dir co-location probe. **Trigger:** next breaking-change release, or ~6 months
+  post-M3 ship (≈2026-12). When removed, the bucket-2 test fixtures (mutual-cycle, self-load
+  shadow, self-recursive flat, COEXIST) and `examples/factorial.fw`'s flat form must be migrated
+  or retired.
+- **`is_postload_builtin` is a maintenance point.** Any NEW simplifier / post-load builtin that
+  takes the `FUNC_CALL` shape (a sibling of diff/integral/vec/mat/…) must be added to
+  `is_postload_builtin` (`expr.h`), or strict mode will mistake an inline use of it for a missing
+  cross-file call and throw `StrictIncludeError`. Low-churn, but easy to forget; flagged here so a
+  future builtin author finds it.
+- **Named-arg no-`?` path StrictIncludeError discriminator (NOT yet needed).** `try_extract_named_call`
+  (`system.h`) catches only `std::runtime_error` around its `load_sub_system` probe. An inline
+  builtin in the no-`?` named-binding form (e.g. `f = diff(target=expr, var=x)`) under strict mode
+  would let `StrictIncludeError` escape. No test or stdlib file exercises this shape today, so the
+  discriminator was deliberately NOT added (avoid speculative code). **Trigger:** a user reports an
+  inline post-load builtin in no-`?` named-binding form aborting under strict mode — then apply the
+  same `catch (const StrictIncludeError&) { if (is_postload_builtin(name)) return nullopt; throw; }`
+  arm there.
+- **#F-M3a — Guard postload-builtins at `extract_positional_calls` to avoid per-node throw/catch at load in strict mode.** Currently, under `strict_includes_=true`, every FUNC_CALL node for a post-load builtin (e.g. `diff(…)`) triggers a `StrictIncludeError` throw in `load_sub_system`, caught by the discriminator arm in `extract_positional_calls`. In files with many such nodes this is a throw/catch on every call site at load time. A guard (check `is_postload_builtin(name)` BEFORE calling `load_sub_system`) would short-circuit the throw path entirely. **Trigger:** ≥50 post-load-builtin FUNC_CALL nodes in one file, OR load latency measured at >100 ms in a perf-auditor sample.
 
 **Surfaced 2026-05-13** during Units cycle 3 implementation. The implementer flagged: docs/Language.md previously documented `fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)` as a CLI usage pattern, but the current CLI accepts exactly ONE filename. `main.cpp:129` concatenates non-flag args into a single `query_str` and `parse_cli_query` takes a single filename. The multi-file form silently fails. Cycle 3 worked around this by inlining the SI-base bindings into `stdlib/physics/mechanics.fw`. Cycle 4 retracted the misleading example in docs/Language.md.
 
