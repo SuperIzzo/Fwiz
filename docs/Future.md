@@ -1190,7 +1190,28 @@ result = n if n <= 1
 
 **NOT proposed**: ad-hoc type-position arithmetic (`v:length/time` directly in annotation without prior `:=` declaration). Speculative; meta-trigger ("evaluate after #81 ships"). May surface organically post-#81 — re-propose then.
 
-## 80. Multi-file CLI load / `@include` directive — IN-PROGRESS (M1 shipped 2026-06-23)
+## 80. Multi-file CLI load / `@include` directive — IN-PROGRESS (M1+M2 shipped 2026-06-23)
+
+**M2 SHIPPED 2026-06-23 (opt-in `--strict-includes`, default-OFF — zero breaking changes).** Delivered:
+- `strict_includes_` bool on `FormulaSystem` (default `false`), propagated via `copy_metadata_to_sub`
+  so a strict parent's sub-systems inherit strict resolution.
+- `--strict-includes` CLI flag (`main.cpp`) → sets `sys.strict_includes_ = true` before load.
+- `load_sub_system` strict gate: in strict mode the base_dir filesystem auto-probe is SKIPPED
+  entirely. A cross-file call resolves ONLY via (a) the in-system / `custom_function_defs_` `@def:`
+  cache, (b) the `@include` allow-list (`resolve_from_included()` — stem-scan of `included_files_`),
+  or (c) the `-I`/`FWIZ_PATH` search path (`resolve_file_path(..., exclude_base_dir=true)` — base_dir
+  excluded so co-location alone is not a channel).
+- Explicit-systems model (Option C second layer): a strict-mode callable system MUST declare an
+  explicit `[name(args)->ret]` section. A FLAT `@include`'d file (bare equations, no header) merges
+  its equations but is NOT callable by stem — the strict gate throws when the resolved file has no
+  named section.
+- `StrictIncludeError` sibling exception (NOT derived from `std::runtime_error`) so the helpful
+  "add `@include`" message propagates past the solver's silent `catch (const std::runtime_error&)`
+  sites instead of being downgraded to "Cannot solve for X". `build_strict_include_error()` names
+  the call, lists the searched dirs, and lists currently-`@include`'d stems.
+- 8 new asserts (`test_include_m2`). All 4008 tests pass; sanitize + analyze-fast clean.
+- `--legacy-implicit` flag DEFERRED to M3 — it only becomes load-bearing once the default flips
+  (a no-op stub now would be dead surface).
 
 **M1 SHIPPED 2026-06-23 (COEXIST infra, additive — zero breaking changes).** Delivered:
 - `include_dirs` (`std::vector<std::string>`) + `included_files_` (`std::set<std::string>`)
@@ -1212,12 +1233,11 @@ result = n if n <= 1
 - 12 new tests (`test_include_m1`). All 4000 tests pass; sanitize + analyze-fast clean.
 
 **STILL PENDING:**
-- **M2**: `--strict-includes` flag + `strict_includes_` bool + `resolve_from_included()` allow-list
-  enforcement + "Add `@include`" error message + `--legacy-implicit` stub.
 - **M3**: migrate `examples/box.fw` + `stdlib/combinatorics/hyp_pmf.fw` (add `@include`); add
   explicit headers to flat callable example files; migrate ~32 `tests.cpp` cross-file fixtures;
-  flip `strict_includes_` default to `true`; remove implicit base_dir auto-probe + flat-file-as-
-  implicit-system; close #80 DONE. See `.fwiz-workflow/design-proposal.md` for the full staging.
+  flip `strict_includes_` default to `true`; add the `--legacy-implicit` opt-out flag (deferred
+  from M2 — load-bearing only after the default flips); remove implicit base_dir auto-probe +
+  flat-file-as-implicit-system; close #80 DONE. See the staging design for the full plan.
 
 **Surfaced 2026-05-13** during Units cycle 3 implementation. The implementer flagged: docs/Language.md previously documented `fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)` as a CLI usage pattern, but the current CLI accepts exactly ONE filename. `main.cpp:129` concatenates non-flag args into a single `query_str` and `parse_cli_query` takes a single filename. The multi-file form silently fails. Cycle 3 worked around this by inlining the SI-base bindings into `stdlib/physics/mechanics.fw`. Cycle 4 retracted the misleading example in docs/Language.md.
 

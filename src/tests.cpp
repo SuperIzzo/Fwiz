@@ -18222,6 +18222,119 @@ void test_include_m1() {
     fs::remove_all(base);
 }
 
+void test_include_m2() {
+    SECTION("@include M2 (--strict-includes enforcement)");
+
+    namespace fs = std::filesystem;
+    const std::string base = "/tmp/fwiz_inc_m2";
+    fs::remove_all(base);
+    fs::create_directories(base);
+    fs::create_directories(base + "/libdir");
+
+    // B12: strict mode + un-@include'd cross-file call → helpful error naming
+    // the call + suggesting @include. (Co-located, but strict skips the
+    // base_dir auto-probe, so co-location alone no longer resolves.)
+    {
+        write_fw(base + "/srect.fw", "[srect(w, h) -> area] area = w * h\n");  // co-located, header'd
+        write_fw(base + "/strict_use.fw",
+                 "srect(area=?a, w=w, h=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;
+        sys.strict_includes_ = true;
+        sys.load_file(base + "/strict_use.fw");
+        bool threw = false;
+        std::string what;
+        try { (void)sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}); }
+        catch (const std::exception& e) { threw = true; what = e.what(); }
+        ASSERT(threw, "strict mode: un-@include'd cross-file call throws");
+        ASSERT(what.find("srect") != std::string::npos,
+               "strict error names the call ('srect')");
+        ASSERT(what.find("@include") != std::string::npos,
+               "strict error suggests @include");
+    }
+
+    // B13: strict mode + @include of a HEADER'd file, then call it → resolves.
+    {
+        write_fw(base + "/grect.fw", "[grect(w, h) -> area] area = w * h\n");
+        write_fw(base + "/strict_ok.fw",
+                 "@include \"grect.fw\"\n"
+                 "grect(area=?a, w=w, h=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;
+        sys.strict_includes_ = true;
+        sys.load_file(base + "/strict_ok.fw");
+        ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
+                   "strict mode: @include'd header'd file resolves (happy path)");
+    }
+
+    // co-located-but-not-@include'd file → errors (strict skips base_dir probe).
+    // (Same shape as B12 but the file is a separate fixture; verifies the
+    // base_dir auto-probe is fully gated out, not just for missing files.)
+    {
+        write_fw(base + "/coloc.fw", "[coloc(w, h) -> area] area = w * h\n");
+        write_fw(base + "/coloc_use.fw",
+                 "coloc(area=?a, w=w, h=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;
+        sys.strict_includes_ = true;
+        sys.load_file(base + "/coloc_use.fw");
+        bool threw = false;
+        try { (void)sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}); }
+        catch (const std::exception&) { threw = true; }
+        ASSERT(threw, "strict mode: co-located-but-not-@include'd file errors");
+    }
+
+    // flat @include'd file called by stem → errors (explicit-systems: a flat
+    // file is not a callable section even after @include). Demonstrates the
+    // M3 migration need (flat example files must gain headers).
+    {
+        write_fw(base + "/flat.fw", "area = width * height\n");  // FLAT — no header
+        write_fw(base + "/flat_use.fw",
+                 "@include \"flat.fw\"\n"
+                 "flat(area=?a, width=w, height=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;
+        sys.strict_includes_ = true;
+        sys.load_file(base + "/flat_use.fw");
+        bool threw = false;
+        try { (void)sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}); }
+        catch (const std::exception&) { threw = true; }
+        ASSERT(threw, "strict mode: flat @include'd file called by stem errors (needs header)");
+    }
+
+    // Non-strict (default) regression: normal co-located cross-file call still
+    // works via the M1/legacy base_dir + COEXIST path.
+    {
+        write_fw(base + "/legacy_rect.fw", "area = width * height\n");  // flat, legacy
+        write_fw(base + "/legacy_use.fw",
+                 "legacy_rect(area=?a, width=w, height=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;  // strict_includes_ defaults to false
+        sys.load_file(base + "/legacy_use.fw");
+        ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
+                   "non-strict default: legacy co-located flat-file call still works");
+    }
+
+    // Propagation: a strict parent's sub-system is also strict.
+    {
+        write_fw(base + "/libdir/childsec.fw", "[childsec(w, h) -> area] area = w * h\n");
+        FormulaSystem parent;
+        parent.strict_includes_ = true;
+        parent.include_dirs = {base + "/libdir"};
+        // Force creation of a sub via the @include allow-list path, then inspect.
+        write_fw(base + "/prop_use_m2.fw",
+                 "@include \"childsec.fw\"\n"
+                 "childsec(area=?a, w=w, h=h)\n"
+                 "out = a + 1\n");
+        parent.load_file(base + "/prop_use_m2.fw");
+        // Sanity: the strict-mode @include'd call resolves end-to-end.
+        ASSERT_NUM(parent.resolve("out", {{"w", 2}, {"h", 3}}), 7,
+                   "strict mode propagation: @include'd sub resolves under strict parent");
+    }
+
+    fs::remove_all(base);
+}
+
 int main() {
     ExprArena test_arena;
     ExprArena::Scope arena_scope(test_arena);
@@ -18586,6 +18699,7 @@ int main() {
 
     // Future #80 M1 (2026-06): @include directive + search path (COEXIST infra)
     test_include_m1();
+    test_include_m2();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

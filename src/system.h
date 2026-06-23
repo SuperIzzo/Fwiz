@@ -81,6 +81,19 @@ struct CrossFileResolutionCycleError : std::exception {
     [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
 };
 
+// Thrown when a cross-file formula call cannot be resolved in --strict-includes
+// mode (Future #80 M2). Intentionally NOT derived from std::runtime_error so the
+// many `catch (const std::runtime_error&)` sites in the solver
+// (extract_positional_calls, unfold_formula_call_body, ...) don't swallow it —
+// the helpful "add @include" message must propagate to the top-level caller
+// instead of being downgraded to a generic "Cannot solve for X". Sibling of
+// CrossFileResolutionCycleError.
+struct StrictIncludeError : std::exception {
+    std::string msg;
+    explicit StrictIncludeError(std::string m) : msg(std::move(m)) {}
+    [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
+};
+
 // Thrown when `formula_depth_` reaches `max_formula_depth`. Replaces the
 // stringly-typed `msg.find("depth") != std::string::npos` substring match
 // pre-cycle-3j at the two depth-aware catch sites in solve_recursive
@@ -354,6 +367,16 @@ public:
     // can use it as the cross-file-call allow-list. In M1 (COEXIST) it is
     // populated but not yet gating. Propagated via copy_metadata_to_sub.
     std::set<std::string> included_files_;
+    // Future #80 M2: explicit-include enforcement flag (default false). When
+    // true, cross-file formula-call resolution in load_sub_system SKIPS the
+    // base_dir filesystem auto-probe entirely — a call resolves ONLY via the
+    // in-system / custom @def: cache, the @include allow-list (included_files_),
+    // or the -I/FWIZ_PATH search path. An unresolved strict-mode call throws
+    // StrictIncludeError naming the call and suggesting @include. Set by the
+    // CLI `--strict-includes` flag; propagated via copy_metadata_to_sub so a
+    // strict parent's sub-systems inherit strict resolution. Default flips to
+    // true in M3 (with a --legacy-implicit opt-out).
+    bool strict_includes_ = false;
     // Human-readable source label — file stem for load_file, the passed
     // `label` argument for load_string, or empty for a fresh-constructed
     // system. Used by build_alias_table() as the stem qualifier on
@@ -1283,9 +1306,15 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // first existing match, or "" on miss. Every directory probed is appended
     // to `searched` (if non-null) so the caller can build a "not found" error
     // that names the searched locations.
+    //
+    // `exclude_base_dir` (Future #80 M2): when true, step (2) is skipped so the
+    // base_dir co-location auto-probe does NOT participate. Used by strict-mode
+    // cross-file resolution, where co-location alone is not a valid channel —
+    // only the -I/FWIZ_PATH search path and the @include allow-list are.
     [[nodiscard]] std::string resolve_file_path(
             const std::string& ref, bool is_literal,
-            std::vector<std::string>* searched = nullptr) const {
+            std::vector<std::string>* searched = nullptr,
+            bool exclude_base_dir = false) const {
         std::string name = ref;
         if (!is_literal && name.find('.') == std::string::npos) name += ".fw";
 
@@ -1306,8 +1335,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             if (searched) searched->push_back(name);
             return try_path(name);
         }
-        // (2) Relative to the including file's directory.
-        {
+        // (2) Relative to the including file's directory (skipped in strict mode).
+        if (!exclude_base_dir) {
             const std::string dir = base_dir.empty() ? "." : base_dir;
             const std::string candidate = dir + "/" + name;
             if (searched) searched->push_back(candidate);
@@ -1321,6 +1350,45 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             if (std::string hit = try_path(candidate); !hit.empty()) return hit;
         }
         return "";
+    }
+
+    // Future #80 M2: strict-mode cross-file resolution. Scans the @include
+    // allow-list (included_files_) for an entry whose filename stem matches
+    // `stem`, returning its canonical abs_path or "" on miss. This is the ONLY
+    // filesystem channel a strict-mode formula call may use (the base_dir
+    // auto-probe is gated out); the search path is consulted separately by
+    // load_sub_system via resolve_file_path.
+    [[nodiscard]] std::string resolve_from_included(const std::string& stem) const {
+        auto inc = std::find_if(included_files_.begin(), included_files_.end(),
+            [&](const std::string& p) {
+                return std::filesystem::path(p).stem().string() == stem;
+            });
+        return inc != included_files_.end() ? *inc : std::string{};
+    }
+
+    // Future #80 M2: comma-joined stems of every @include'd file, for the
+    // strict-mode "currently included" diagnostic. Empty string when nothing
+    // has been @include'd yet.
+    [[nodiscard]] std::string list_included_stems() const {
+        std::string out;
+        for (const auto& p : included_files_) {
+            if (!out.empty()) out += ", ";
+            out += std::filesystem::path(p).stem().string();
+        }
+        return out;
+    }
+
+    // Future #80 M2: the helpful strict-mode resolution error. Names the call,
+    // explains why it failed, and tells the user exactly how to fix it.
+    [[nodiscard]] std::string build_strict_include_error(const std::string& file_part) const {
+        std::string searched_dirs = base_dir.empty() ? "." : base_dir;
+        for (const auto& dir : include_dirs)
+            if (!dir.empty()) searched_dirs += ", " + dir;
+        const std::string included = list_included_stems();
+        return "Cannot resolve cross-file call '" + file_part
+             + "' (strict-includes mode): add @include \"" + file_part
+             + ".fw\" or place it on the include path (searched: " + searched_dirs + ")"
+             + (included.empty() ? "" : ". Currently @include'd: " + included);
     }
 
     [[nodiscard]] static bool is_include_line(const std::string& line) {
@@ -3773,6 +3841,7 @@ private:
         sub.set_definitions_ = set_definitions_;
         sub.include_dirs = include_dirs;          // Future #80 M1: @include search path
         sub.included_files_ = included_files_;    // Future #80 M1: include allow-list
+        sub.strict_includes_ = strict_includes_;  // Future #80 M2: strict-mode propagation
     }
 
     [[nodiscard]] const FormulaSystem& load_sub_system(const std::string& file_stem) const {
@@ -3807,34 +3876,42 @@ private:
         else if (auto bit = builtins.find(file_part); bit != builtins.end())
             def_source = &bit->second;
 
-        // base_dir probe (pre-existing behavior). The canonicalized path is the
-        // primary cache key; it is used even if the file does not exist (a
-        // missing file surfaces later as "Cannot open file").
-        std::string path = base_dir + "/" + file_part;
-        if (path.find('.') == std::string::npos) path += ".fw";
         std::string abs_path;
-        try { abs_path = std::filesystem::weakly_canonical(path).string(); }
-        catch (const std::filesystem::filesystem_error&) { abs_path = path; }
+        if (strict_includes_ && !def_source) {
+            // Future #80 M2 (strict-includes mode): the base_dir filesystem
+            // auto-probe is SKIPPED entirely. A cross-file call may resolve ONLY
+            // via the @def: cache (handled above), the @include allow-list, or
+            // the -I/FWIZ_PATH search path. Co-location alone is no longer
+            // enough — the user must declare the dependency with @include.
+            abs_path = resolve_from_included(file_part);
+            if (abs_path.empty())
+                abs_path = resolve_file_path(file_part, /*is_literal=*/false,
+                                             /*searched=*/nullptr, /*exclude_base_dir=*/true);
+            if (abs_path.empty())
+                throw StrictIncludeError(build_strict_include_error(file_part));
+        } else {
+            // COEXIST / @def: path. base_dir probe (pre-existing behavior). The
+            // canonicalized path is the primary cache key; it is used even if the
+            // file does not exist (a missing file surfaces as "Cannot open file").
+            std::string path = base_dir + "/" + file_part;
+            if (path.find('.') == std::string::npos) path += ".fw";
+            try { abs_path = std::filesystem::weakly_canonical(path).string(); }
+            catch (const std::filesystem::filesystem_error&) { abs_path = path; }
 
-        // Future #80 M1 (COEXIST): if the base_dir probe does not point at an
-        // existing file, fall back to the @include search path so that a
-        // formula call resolves a section file found via `-I`/FWIZ_PATH (or a
-        // file previously pulled in by @include) WITHOUT requiring co-location.
-        // This is additive — the base_dir path above is unchanged; only the
-        // not-found case widens. Skipped for @def: cache entries (def_source).
-        if (!def_source) {
-            std::error_code ec;
-            if (!std::filesystem::exists(abs_path, ec)) {
-                std::string search_hit = resolve_file_path(file_part, /*is_literal=*/false);
-                if (search_hit.empty()) {
-                    // Then try the @include allow-list by stem.
-                    auto inc = std::find_if(included_files_.begin(), included_files_.end(),
-                        [&](const std::string& p) {
-                            return std::filesystem::path(p).stem().string() == file_part;
-                        });
-                    if (inc != included_files_.end()) search_hit = *inc;
+            // Future #80 M1 (COEXIST): if the base_dir probe does not point at an
+            // existing file, fall back to the @include search path so that a
+            // formula call resolves a section file found via `-I`/FWIZ_PATH (or a
+            // file previously pulled in by @include) WITHOUT requiring co-location.
+            // This is additive — the base_dir path above is unchanged; only the
+            // not-found case widens. Skipped for @def: cache entries (def_source).
+            if (!def_source) {
+                std::error_code ec;
+                if (!std::filesystem::exists(abs_path, ec)) {
+                    std::string search_hit = resolve_file_path(file_part, /*is_literal=*/false);
+                    if (search_hit.empty())
+                        search_hit = resolve_from_included(file_part);
+                    if (!search_hit.empty()) abs_path = search_hit;
                 }
-                if (!search_hit.empty()) abs_path = search_hit;
             }
         }
 
@@ -3896,6 +3973,24 @@ private:
                 sub->load_string(*def_source, "@def:" + file_part);
             }
         }
+        // Future #80 M2 (explicit-systems model): in strict mode a callable
+        // cross-file system MUST be an explicit `[name(args) -> ret]` section.
+        // A FLAT .fw file (bare equations, no header) that was @include'd merges
+        // its equations but is NOT callable by stem — calling it errors with the
+        // same helpful "add a header / @include" guidance. This is the second
+        // layer Option C removes (the first being the base_dir auto-probe). The
+        // gate is strict-mode-only and runs before the auto-select reload, so it
+        // inspects the file's own declared sections. Skipped for @def: cache
+        // entries (in-system / builtin sections are callable by construction)
+        // and for dotted `file.section` calls (explicit section selection).
+        if (strict_includes_ && !def_source && section.empty()) {
+            const bool has_named_section = std::any_of(
+                sub->sections_.begin(), sub->sections_.end(),
+                [](const Section& s) { return !s.name.empty(); });
+            if (!has_named_section)
+                throw StrictIncludeError(build_strict_include_error(file_part));
+        }
+
         // Auto-select section: if no equations loaded and file has exactly one
         // named section, load that section (common for single-function .fw files)
         if (sub->equations.empty() && section.empty()) {
