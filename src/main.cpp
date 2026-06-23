@@ -39,6 +39,8 @@ int main(int argc, const char* argv[]) {
                   << "  --table        evaluate across range inputs, emit TSV\n"
                   << "                 ranges: a=[1..10], a=[0..1 @ 0.1], a=[1..5, 7..10]\n"
                   << "  --zip          with --table: zip ranges element-wise (default: cartesian)\n"
+                  << "  -I <dir>       add a directory to the @include / cross-file search path\n"
+                  << "                 (repeatable; FWIZ_PATH env var dirs are searched after)\n"
                   << "\n"
                   << "Example: fwiz physics(force=?, mass=10)\n"
                   << "         fwiz --explore triangle(a=?, b=?, c=?, A=40, B=80)\n"
@@ -66,6 +68,7 @@ int main(int argc, const char* argv[]) {
         std::string verify_arg;
         std::string output_file;
         std::string query_str;
+        std::vector<std::string> include_dirs;  // Future #80: -I dirs (order-preserving)
 
         for (int i = 1; i < argc; i++) {
             const std::string arg = argv[i];
@@ -126,6 +129,14 @@ int main(int argc, const char* argv[]) {
                 if (i + 1 < argc) verify_arg = argv[++i];
                 else { std::cerr << "Error: --verify requires an argument (all or var1,var2,...)\n"; return 1; }
             }
+            else if (arg == "-I") {
+                // Future #80: @include / cross-file search directory (repeatable).
+                if (i + 1 < argc) include_dirs.emplace_back(argv[++i]);
+                else { std::cerr << "Error: -I requires a directory\n"; return 1; }
+            }
+            else if (arg.rfind("-I", 0) == 0 && arg.size() > 2) {
+                include_dirs.emplace_back(arg.substr(2));  // attached form: -Idir
+            }
             else    { if (!query_str.empty()) query_str += ' '; query_str += arg; }
         }
 
@@ -162,6 +173,24 @@ int main(int argc, const char* argv[]) {
         sys.approximate_mode = approximate_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
+
+        // Future #80: @include / cross-file search path. -I dirs first (CLI
+        // order), then FWIZ_PATH dirs (split on ':' and ';' for portability),
+        // appended after. base_dir (the file's own directory) is always tried
+        // before either inside resolve_file_path.
+        sys.include_dirs = include_dirs;
+        if (const char* fwiz_path = std::getenv("FWIZ_PATH")) {
+            const std::string envp = fwiz_path;
+            std::string cur;
+            for (char ch : envp) {
+                if (ch == ':' || ch == ';') {
+                    if (!cur.empty()) { sys.include_dirs.push_back(cur); cur.clear(); }
+                } else {
+                    cur += ch;
+                }
+            }
+            if (!cur.empty()) sys.include_dirs.push_back(cur);
+        }
 
         // ExprArena scope for parse_cli_query is required by Future #21
         // (nested form): a nested-call binding like `inner(p=3)` parses

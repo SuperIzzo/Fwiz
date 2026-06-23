@@ -18088,6 +18088,140 @@ void test_checked_type() {
     { Checked<double> c{std::numeric_limits<double>::quiet_NaN()}; ASSERT(!c.has_value(), "NaN-in -> empty"); }
 }
 
+// ──────────────── @include (Future #80, M1 — COEXIST) ────────────────
+void test_include_m1() {
+    SECTION("@include M1 (COEXIST infra)");
+
+    namespace fs = std::filesystem;
+    // Fresh-env: remove every path this test reads/writes so a stale artifact
+    // from a prior run can never mask a regression.
+    const std::string base = "/tmp/fwiz_inc";
+    fs::remove_all(base);
+    fs::create_directories(base);                 // including-file dir
+    fs::create_directories(base + "/libdir");     // -I dir
+    fs::create_directories(base + "/fpath");      // FWIZ_PATH dir
+
+    // B1/B2: file-relative @include merges the included file's definitions.
+    {
+        write_fw(base + "/consts.fw", "g = 100\n");
+        write_fw(base + "/uses.fw", "@include \"consts.fw\"\nx = g + 5\n");
+        FormulaSystem sys;
+        sys.load_file(base + "/uses.fw");
+        ASSERT_NUM(sys.resolve("x", {}), 105, "file-relative @include merges constant");
+    }
+
+    // @include via -I / include_dirs (file NOT co-located with the includer).
+    {
+        write_fw(base + "/libdir/libconst.fw", "k = 7\n");
+        write_fw(base + "/uses2.fw", "@include \"libconst.fw\"\ny = k * 2\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/libdir"};
+        sys.load_file(base + "/uses2.fw");
+        ASSERT_NUM(sys.resolve("y", {}), 14, "@include resolved via include_dirs (-I)");
+    }
+
+    // @include via FWIZ_PATH dir (modeled here through include_dirs, which is
+    // exactly what main.cpp populates from the env var).
+    {
+        write_fw(base + "/fpath/fp.fw", "m = 3\n");
+        write_fw(base + "/uses3.fw", "@include \"fp.fw\"\nz = m + 1\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/fpath"};  // FWIZ_PATH channel (appended after -I in main)
+        sys.load_file(base + "/uses3.fw");
+        ASSERT_NUM(sys.resolve("z", {}), 4, "@include resolved via FWIZ_PATH dir");
+    }
+
+    // B5: transitive includes — A includes B includes C.
+    {
+        write_fw(base + "/cc.fw", "c3 = 1000\n");
+        write_fw(base + "/bb.fw", "@include \"cc.fw\"\nb2 = c3 + 100\n");
+        write_fw(base + "/aa.fw", "@include \"bb.fw\"\na1 = b2 + 10\n");
+        FormulaSystem sys;
+        sys.load_file(base + "/aa.fw");
+        ASSERT_NUM(sys.resolve("a1", {}), 1110, "transitive @include (A->B->C) merges all");
+    }
+
+    // B6: include CYCLE (a includes b, b includes a) throws a clear error.
+    {
+        write_fw(base + "/cyc_a.fw", "@include \"cyc_b.fw\"\nva = 1\n");
+        write_fw(base + "/cyc_b.fw", "@include \"cyc_a.fw\"\nvb = 2\n");
+        bool threw = false;
+        std::string what;
+        try { FormulaSystem sys; sys.load_file(base + "/cyc_a.fw"); }
+        catch (const std::runtime_error& e) { threw = true; what = e.what(); }
+        ASSERT(threw, "@include cycle throws (not a crash)");
+        ASSERT(what.find("cycle") != std::string::npos, "cycle error message mentions 'cycle'");
+    }
+
+    // B10: file-not-found names the searched dirs.
+    {
+        write_fw(base + "/missing_includer.fw", "@include \"does_not_exist.fw\"\nq = 1\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/libdir"};
+        bool threw = false;
+        std::string what;
+        try { sys.load_file(base + "/missing_includer.fw"); }
+        catch (const std::runtime_error& e) { threw = true; what = e.what(); }
+        ASSERT(threw, "@include of missing file throws");
+        ASSERT(what.find("not found") != std::string::npos, "not-found message present");
+        ASSERT(what.find("libdir") != std::string::npos, "not-found message names searched include_dir");
+    }
+
+    // B7: base_dir restored after @include — formula calls in the INCLUDING
+    // file still resolve relative to its own directory afterward. Here the
+    // includer pulls in a constant from /libdir but ALSO makes a cross-file
+    // formula call to a co-located section file; both must resolve.
+    {
+        write_fw(base + "/inc_rect.fw", "area = width * height\n");  // co-located w/ includer
+        write_fw(base + "/libdir/inc_k.fw", "kk = 9\n");             // in -I dir
+        write_fw(base + "/uses4.fw",
+                 "@include \"inc_k.fw\"\n"
+                 "inc_rect(area=?a, width=w, height=h)\n"
+                 "tot = a + kk\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/libdir"};
+        sys.load_file(base + "/uses4.fw");
+        // a = 4*3 = 12, kk = 9, tot = 21. inc_rect co-located resolves AFTER
+        // @include processed inc_k from /libdir — base_dir must be restored.
+        ASSERT_NUM(sys.resolve("tot", {{"w", 4}, {"h", 3}}), 21,
+                   "base_dir restored: co-located formula call resolves after @include from -I dir");
+    }
+
+    // COEXIST: cross-file formula call resolves via include_dirs even WITHOUT
+    // @include and WITHOUT co-location — proving include_dirs feeds
+    // load_sub_system as a fallback.
+    {
+        write_fw(base + "/libdir/coex_rect.fw", "area = width * height\n");  // ONLY in -I dir
+        write_fw(base + "/coex_use.fw",
+                 "coex_rect(area=?a, width=w, height=h)\n"
+                 "vol = a * d\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/libdir"};   // NOT @include'd, NOT co-located
+        sys.load_file(base + "/coex_use.fw");
+        ASSERT_NUM(sys.resolve("vol", {{"w", 2}, {"h", 5}, {"d", 3}}), 30,
+                   "COEXIST: formula call resolves via include_dirs (no @include, no co-location)");
+    }
+
+    // copy_metadata_to_sub propagation: a sub-system inherits include_dirs and
+    // included_files_ (so transitive cross-file calls keep the search path).
+    {
+        write_fw(base + "/libdir/leaf.fw", "area = width * height\n");
+        write_fw(base + "/libdir/mid.fw",  "leaf(area=?a, width=w, height=h)\nout = a + 1\n");
+        write_fw(base + "/prop_use.fw",
+                 "mid(out=?o, w=w, h=h)\n"
+                 "res = o * 2\n");
+        FormulaSystem sys;
+        sys.include_dirs = {base + "/libdir"};
+        sys.load_file(base + "/prop_use.fw");
+        // mid resolves via include_dirs; inside mid, leaf must also resolve via
+        // the inherited include_dirs. a = 2*3 = 6, out = 7, res = 14.
+        ASSERT_NUM(sys.resolve("res", {{"w", 2}, {"h", 3}}), 14,
+                   "include_dirs propagates to sub-systems (nested cross-file call)");
+    }
+
+    fs::remove_all(base);
+}
+
 int main() {
     ExprArena test_arena;
     ExprArena::Scope arena_scope(test_arena);
@@ -18449,6 +18583,9 @@ int main() {
     test_aggregation_binder_scoping();
     test_combinatorics_stdlib();
     test_expectation_stdlib();
+
+    // Future #80 M1 (2026-06): @include directive + search path (COEXIST infra)
+    test_include_m1();
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run

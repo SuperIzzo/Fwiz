@@ -342,6 +342,18 @@ public:
     std::map<std::string, std::string> custom_function_defs_;  // name → .fw definition
 
     std::string base_dir;
+    // @include search path (Future #80, M1 — COEXIST infra). Populated from
+    // the CLI `-I <dir>` flag (order-preserving) then `FWIZ_PATH` env-var dirs.
+    // Searched AFTER the file-relative `base_dir` by both `@include` resolution
+    // (process_includes / resolve_file_path) and — as a COEXIST fallback —
+    // cross-file formula-call resolution (load_sub_system). Propagated to
+    // sub-systems via copy_metadata_to_sub.
+    std::vector<std::string> include_dirs;
+    // Canonical abs_paths registered by @include directives (Future #80, M1).
+    // Records every file pulled in by process_includes so strict-mode (M2/M3)
+    // can use it as the cross-file-call allow-list. In M1 (COEXIST) it is
+    // populated but not yet gating. Propagated via copy_metadata_to_sub.
+    std::set<std::string> included_files_;
     // Human-readable source label — file stem for load_file, the passed
     // `label` argument for load_string, or empty for a fresh-constructed
     // system. Used by build_alias_table() as the stem qualifier on
@@ -1258,8 +1270,127 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         set_definitions_[s.name] = std::move(sd);
     }
 
+    // ──────────────── @include support (Future #80, M1 — COEXIST) ────────────────
+    //
+    // Resolve a file reference against the search path. When `is_literal` is
+    // true (used by `@include "path.fw"`) the reference is used verbatim — no
+    // `.fw` is appended. When false (used by cross-file formula-call stem
+    // lookup) `.fw` is appended if the reference has no extension dot.
+    //
+    // Search order: (1) absolute path used directly; (2) relative to base_dir
+    // (the including file's directory); (3) each include_dirs entry in order
+    // (-I dirs then FWIZ_PATH dirs). Returns the canonical abs_path of the
+    // first existing match, or "" on miss. Every directory probed is appended
+    // to `searched` (if non-null) so the caller can build a "not found" error
+    // that names the searched locations.
+    [[nodiscard]] std::string resolve_file_path(
+            const std::string& ref, bool is_literal,
+            std::vector<std::string>* searched = nullptr) const {
+        std::string name = ref;
+        if (!is_literal && name.find('.') == std::string::npos) name += ".fw";
+
+        auto try_path = [&](const std::string& candidate) -> std::string {
+            std::error_code ec;
+            const std::filesystem::path p(candidate);
+            if (std::filesystem::exists(p, ec) && !std::filesystem::is_directory(p, ec)) {
+                std::string abs;
+                try { abs = std::filesystem::weakly_canonical(p).string(); }
+                catch (const std::filesystem::filesystem_error&) { abs = candidate; }
+                return abs;
+            }
+            return "";
+        };
+
+        // (1) Absolute path: use verbatim.
+        if (std::filesystem::path(name).is_absolute()) {
+            if (searched) searched->push_back(name);
+            return try_path(name);
+        }
+        // (2) Relative to the including file's directory.
+        {
+            const std::string dir = base_dir.empty() ? "." : base_dir;
+            const std::string candidate = dir + "/" + name;
+            if (searched) searched->push_back(candidate);
+            if (std::string hit = try_path(candidate); !hit.empty()) return hit;
+        }
+        // (3) Each include_dirs entry (-I dirs, then FWIZ_PATH dirs).
+        for (const auto& dir : include_dirs) {
+            if (dir.empty()) continue;
+            const std::string candidate = dir + "/" + name;
+            if (searched) searched->push_back(candidate);
+            if (std::string hit = try_path(candidate); !hit.empty()) return hit;
+        }
+        return "";
+    }
+
+    [[nodiscard]] static bool is_include_line(const std::string& line) {
+        const std::string t = trim(line);
+        // "@include" followed by end-of-token (space or quote) — guards against
+        // a hypothetical "@includeX" annotation.
+        if (t.rfind("@include", 0) != 0) return false;
+        if (t.size() == 8) return true;  // bare "@include" (no path — caught later)
+        const char c = t[8];
+        return c == ' ' || c == '\t' || c == '"';
+    }
+
+    [[nodiscard]] static std::string extract_include_path(const std::string& line) {
+        std::string p = trim(trim(line).substr(8));  // strip "@include"
+        // Strip a single pair of surrounding double-quotes (quoted form
+        // primary; unquoted tolerated after the trim above).
+        if (p.size() >= 2 && p.front() == '"' && p.back() == '"')
+            p = p.substr(1, p.size() - 2);
+        return trim(p);
+    }
+
+    // Pre-pass: resolve and merge every `@include` directive, then blank the
+    // line so the downstream section splitter / line loader ignore it. Each
+    // included file is loaded into *this (its equations/constants merge into the
+    // parent namespace) and recorded in `included_files_`. Cycle detection
+    // reuses a thread-local set (distinct from load_sub_system's
+    // `currently_loading`); base_dir is saved/restored around each recursive
+    // load (load_file overwrites base_dir, which would otherwise break the
+    // parent's subsequent file-relative formula-call resolution).
+    void process_includes(std::vector<std::string>& lines) {
+        static thread_local std::set<std::string> currently_including;
+        // RAII restore of base_dir around the recursive load_file (R1).
+        struct BaseDirGuard {
+            FormulaSystem& sys; std::string saved;
+            explicit BaseDirGuard(FormulaSystem& s) : sys(s), saved(s.base_dir) {}
+            ~BaseDirGuard() { sys.base_dir = saved; }
+        };
+        struct IncludeGuard {
+            std::set<std::string>& s; const std::string& k;
+            ~IncludeGuard() { s.erase(k); }
+        };
+        for (auto& line : lines) {
+            if (!is_include_line(line)) continue;
+            const std::string raw_path = extract_include_path(line);
+            if (raw_path.empty())
+                throw std::runtime_error("@include with no path");
+            std::vector<std::string> searched;
+            const std::string abs_path = resolve_file_path(raw_path, /*is_literal=*/true, &searched);
+            if (abs_path.empty()) {
+                std::string msg = "@include \"" + raw_path + "\": file not found. Searched:";
+                for (const auto& s : searched) msg += "\n  " + s;
+                throw std::runtime_error(msg);
+            }
+            if (currently_including.count(abs_path))
+                throw std::runtime_error("@include cycle detected: " + abs_path);
+            currently_including.insert(abs_path);
+            const IncludeGuard _ig{currently_including, abs_path};
+            {
+                const BaseDirGuard _bd{*this};  // restores base_dir on scope exit
+                load_file(abs_path);            // merges content; overwrites base_dir
+            }
+            included_files_.insert(abs_path);
+            line.clear();  // blank so split_sections / load_lines skip it
+        }
+    }
+
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
-        sections_ = split_sections(all_lines);
+        auto filtered = all_lines;        // mutable copy; @include lines blanked in-place
+        process_includes(filtered);       // Future #80 M1: resolve + merge @include directives
+        sections_ = split_sections(filtered);
         // gen-3 cycle 2 (2026-05-14) / gen-5 cycle 3a (2026-05-15): walk
         // sections BEFORE top-level/section load so type_map_ is populated
         // before any equation that references a dim-section variable is
@@ -1285,7 +1416,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             if (!s.name.empty() && is_function_section(s))
                 register_function_section(s);
         if (sections_.size() <= 1 && section.empty())
-            load_lines(all_lines);
+            load_lines(filtered);  // @include lines blanked by process_includes
         else
             load_section(section);
         resolve_positional_calls();
@@ -3640,6 +3771,8 @@ private:
         sub.custom_functions_ = custom_functions_;
         sub.type_map_ = type_map_;
         sub.set_definitions_ = set_definitions_;
+        sub.include_dirs = include_dirs;          // Future #80 M1: @include search path
+        sub.included_files_ = included_files_;    // Future #80 M1: include allow-list
     }
 
     [[nodiscard]] const FormulaSystem& load_sub_system(const std::string& file_stem) const {
@@ -3674,11 +3807,36 @@ private:
         else if (auto bit = builtins.find(file_part); bit != builtins.end())
             def_source = &bit->second;
 
+        // base_dir probe (pre-existing behavior). The canonicalized path is the
+        // primary cache key; it is used even if the file does not exist (a
+        // missing file surfaces later as "Cannot open file").
         std::string path = base_dir + "/" + file_part;
         if (path.find('.') == std::string::npos) path += ".fw";
         std::string abs_path;
         try { abs_path = std::filesystem::weakly_canonical(path).string(); }
         catch (const std::filesystem::filesystem_error&) { abs_path = path; }
+
+        // Future #80 M1 (COEXIST): if the base_dir probe does not point at an
+        // existing file, fall back to the @include search path so that a
+        // formula call resolves a section file found via `-I`/FWIZ_PATH (or a
+        // file previously pulled in by @include) WITHOUT requiring co-location.
+        // This is additive — the base_dir path above is unchanged; only the
+        // not-found case widens. Skipped for @def: cache entries (def_source).
+        if (!def_source) {
+            std::error_code ec;
+            if (!std::filesystem::exists(abs_path, ec)) {
+                std::string search_hit = resolve_file_path(file_part, /*is_literal=*/false);
+                if (search_hit.empty()) {
+                    // Then try the @include allow-list by stem.
+                    auto inc = std::find_if(included_files_.begin(), included_files_.end(),
+                        [&](const std::string& p) {
+                            return std::filesystem::path(p).stem().string() == file_part;
+                        });
+                    if (inc != included_files_.end()) search_hit = *inc;
+                }
+                if (!search_hit.empty()) abs_path = search_hit;
+            }
+        }
 
         // Cache key: defined functions use name directly, files use abs path
         const std::string cache_key = def_source

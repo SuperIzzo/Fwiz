@@ -1190,7 +1190,34 @@ result = n if n <= 1
 
 **NOT proposed**: ad-hoc type-position arithmetic (`v:length/time` directly in annotation without prior `:=` declaration). Speculative; meta-trigger ("evaluate after #81 ships"). May surface organically post-#81 — re-propose then.
 
-## 80. Multi-file CLI load / `@include` directive — PARKED
+## 80. Multi-file CLI load / `@include` directive — IN-PROGRESS (M1 shipped 2026-06-23)
+
+**M1 SHIPPED 2026-06-23 (COEXIST infra, additive — zero breaking changes).** Delivered:
+- `include_dirs` (`std::vector<std::string>`) + `included_files_` (`std::set<std::string>`)
+  fields on `FormulaSystem`, both propagated via `copy_metadata_to_sub`.
+- `-I <dir>` CLI flag (repeatable, order-preserving; attached `-Idir` form also accepted)
+  and `FWIZ_PATH` env var (split on `:`/`;`, appended after `-I` dirs) → populate `include_dirs`.
+- `@include "path.fw"` directive: `process_includes()` pre-pass in `load_with_sections()`
+  (runs before `split_sections`), resolves each path via search order, recursively `load_file`s
+  it (merging definitions into the current system), records the abs_path in `included_files_`,
+  and blanks the line. Quoted form primary; unquoted tolerated. `BaseDirGuard` RAII restores
+  `base_dir` around each recursive load; `currently_including` thread-local + RAII guard detect
+  include cycles (distinct from #69's `currently_loading`).
+- Search order: (1) file-relative (`base_dir`), (2) each `-I` dir, (3) each `FWIZ_PATH` dir.
+  File-not-found error names every searched directory.
+- COEXIST hook: `include_dirs` ALSO feeds `load_sub_system` as a fallback (only when the
+  base_dir probe points at a missing file), so a cross-file formula call resolves a section
+  file found via `-I`/`FWIZ_PATH` WITHOUT co-location and WITHOUT `@include`. The pre-existing
+  base_dir auto-probe is unchanged (removal is M3).
+- 12 new tests (`test_include_m1`). All 4000 tests pass; sanitize + analyze-fast clean.
+
+**STILL PENDING:**
+- **M2**: `--strict-includes` flag + `strict_includes_` bool + `resolve_from_included()` allow-list
+  enforcement + "Add `@include`" error message + `--legacy-implicit` stub.
+- **M3**: migrate `examples/box.fw` + `stdlib/combinatorics/hyp_pmf.fw` (add `@include`); add
+  explicit headers to flat callable example files; migrate ~32 `tests.cpp` cross-file fixtures;
+  flip `strict_includes_` default to `true`; remove implicit base_dir auto-probe + flat-file-as-
+  implicit-system; close #80 DONE. See `.fwiz-workflow/design-proposal.md` for the full staging.
 
 **Surfaced 2026-05-13** during Units cycle 3 implementation. The implementer flagged: docs/Language.md previously documented `fwiz stdlib/units/si-minimal.fw my_formula.fw(mass=?, length=9km)` as a CLI usage pattern, but the current CLI accepts exactly ONE filename. `main.cpp:129` concatenates non-flag args into a single `query_str` and `parse_cli_query` takes a single filename. The multi-file form silently fails. Cycle 3 worked around this by inlining the SI-base bindings into `stdlib/physics/mechanics.fw`. Cycle 4 retracted the misleading example in docs/Language.md.
 
