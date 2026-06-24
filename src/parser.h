@@ -69,6 +69,23 @@ private:
         return Expr::Call("range", args);
     }
 
+    // Brace-delimited range `{lo..hi}` / `{lo..hi @ step}` (gen-6 arc cycle 1).
+    // Identical to parse_range_literal except the closing token is RBRACE. Emits
+    // the SAME FUNC_CALL("range", ...) node — the ordered-vs-unordered semantic
+    // distinction is ontological, not structural, so extract_range_values and the
+    // aggregate machinery work on {} ranges unchanged.
+    ExprPtr parse_range_literal_brace(ExprPtr lo) {
+        expect(TokenType::DOTDOT, "Expected '..' in range literal");
+        auto hi = parse_expr();
+        std::vector<ExprPtr> args = {lo, hi};
+        if (is(TokenType::AT)) {
+            advance();
+            args.push_back(parse_expr());   // step
+        }
+        expect(TokenType::RBRACE, "Expected '}' to close range literal");
+        return Expr::Call("range", args);
+    }
+
     // Parse one FUNC_CALL argument, recognizing the iterator clause
     // `var in [range]` used by aggregates (gen-6 cycle 1). When `IDENT in` is
     // seen, push Var(iter) into `args` and return the range descriptor parsed by
@@ -251,6 +268,24 @@ private:
                 }
             }
             return Expr::Call(all_vec ? "mat" : "vec", elems);
+        }
+        // Ordered-collection literal: `{a, b, c}` -> seq(a, b, c); `{lo..hi}` ->
+        // range(...) (gen-6 arc cycle 1). Mirrors the LBRACKET branch minus the
+        // mat promotion (seq is 1D; nested `{{1,2},{3,4}}` -> seq(seq(1,2),
+        // seq(3,4))). `seq` is DELIBERATELY a distinct name from `vec`: vec
+        // participates in try_simplify_vec_mat_binop / try_dispatch_vec_mat_builtin
+        // (element-wise add, scalar-mul, matmul/det/inv). Reusing vec for `{}`
+        // would make `{1,2,3}+{4,5,6}` silently element-wise-add and collide with
+        // fold semantics — see the seq passthrough guard in expr.h simplify.
+        if (is(TokenType::LBRACE)) {
+            advance();
+            if (is(TokenType::RBRACE)) { advance(); return Expr::Call("seq", {}); }
+            auto first = parse_expr();
+            if (is(TokenType::DOTDOT)) return parse_range_literal_brace(first);
+            std::vector<ExprPtr> elems = {first};
+            { while (is(TokenType::COMMA)) { advance(); elems.push_back(parse_expr()); } }
+            expect(TokenType::RBRACE, "Expected '}'");
+            return Expr::Call("seq", elems);
         }
         throw std::runtime_error("Unexpected token: '" + peek().text + "'");
     }

@@ -62,7 +62,7 @@ multi-branch formula calls.
 
 **Surfaced gen-6 cycle 2 (2026-06-22).** The aggregate-unroll post-load pass resolves formula calls registered in the SAME system (`custom_function_defs_`/sections), but a cross-file callee is resolved later via `load_sub_system`. The aggregate unrolls at load time before that cross-file sub exists, so `sum(hyp_pmf(N=N,..., result=?p), j in [kmin..n])` fails with "no value for 'p'". Workaround used: hyp_at_least.fw inlines the PMF term as nested products — a single self-contained bounded aggregation that unrolls cleanly.
 
-**Trigger:** reopen when the aggregate-unroll pass is taught to defer / re-run after cross-file sub-systems load, OR when a user reports a tail-sum of a sibling stdlib function not folding.
+**Trigger:** reopen after Collections Cycle 3 equivalence proof ships (the remaining gap is `try_unroll_aggregate_with_calls` Shape B multi-range extension), OR when a user reports a tail-sum of a sibling stdlib function not folding.
 
 ## 104. Iterator named `i` collides with imaginary unit in non-linear aggregation bodies — PARKED
 
@@ -75,6 +75,42 @@ multi-branch formula calls.
 **Surfaced gen-6 cycle 3 (2026-06-22).** A semicolon `;` is a statement separator anywhere in fwiz (documented). The comment-stripping does not protect text after a `;` on the same line. A comment like `# draw; with k = 1` silently creates a default equation `k = 1` because the post-`;` text `with k = 1` parses as a valid statement. Workaround: avoid `; var = value` shaped prose inside comments. The combinatorics files use `;` in comments harmlessly (the post-`;` text is non-parseable prose); only `var = value`-shaped post-`;` text triggers it. Reproducer: `printf '# foo; with k = 1\n[f(N,n,k)->result]\nresult=k*(N+1)/(n+1)\n'` then resolve `f(N=9,n=4,k=3)` → returns 1 instead of 6.
 
 **Trigger:** user reports a stray binding from a comment, OR a comment-lexer hardening cycle. Fix: teach the lexer to consume the rest of a `#`-comment line including any `;` so post-semicolon prose inside comments is inert.
+
+## 106. `foldr` stdlib definition — PARKED
+
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** `foldr(xs, op, init) = foldl(reverse(xs), op, init)` — right-fold as a stdlib derivation. Requires `reverse` on `seq` nodes (element order inversion) and an alias `foldr` section wrapping `foldl`. No C++ changes; pure `.fw`.
+
+**Trigger:** user needs right-fold semantics, OR Collections Cycle 3 max/min `.fw` spec needs tail-recursion with `foldr`.
+
+## 107. `{1..6}` range notation — eager `seq` materialization — PARKED
+
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** Today `{1..6}` parses to `range(1,6)` (the same internal node as `[1..6]`), not a materialized `seq(1,2,3,4,5,6)`. As an iterator domain this is transparent (reducers call `extract_range_values` on either form). As a first-class collection value assigned to a variable, it stays as the `range` FUNC_CALL rather than a concrete `seq`. Users expecting `{1..6}` to behave like `{1,2,3,4,5,6}` for downstream operations (e.g., `foldl({1..6}, add, 0)`) will see unevaluated forms.
+
+**Trigger:** user reports friction where `{lo..hi}` as a collection value is not automatically materialized, OR a foldl over a brace-range stays unevaluated.
+
+## 108. `+`/`*` operator sugar in `foldl` op position — PARKED
+
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** `foldl(xs, +, 0)` using `+` directly as the op would require a new grammar production — `+` is a PLUS token, not an IDENT. Grammar ambiguity: inside `foldl(a, +, 0)`, the `+` is a bare token that the parser could misread as infix on the preceding expression. A design cycle is needed to define the grammar unambiguously (e.g., quoting: `foldl(xs, "+", 0)`).
+
+**Trigger:** user request for `+`/`*` shorthand in foldl op position.
+
+## 109. `head`/`tail`/`xs[i]` indexing on `seq` nodes — PARKED
+
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** Collections Cycle 2 `.fw` specs for `max_of`/`min_of` require element-access primitives to implement pairwise head+tail recursion. Currently no mechanism exists to extract the first element or the rest of a `seq` collection. Needed for general max/min `.fw` definitions that don't rely on fixed-size explicit unroll.
+
+**Trigger:** Collections Cycle 2 `max_of`/`min_of` spec requires element access, OR user reports inability to index into a `seq` value.
+
+## 110. Multi-section `@include` persistence (AE-3) — PARKED
+
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** Sections in an `@include`'d file are not persisted by section-name into `custom_function_defs_` beyond the one-arg function-section case (`sections_` is overwritten on each load). A multi-section utility file like `stdlib/collections/operators.fw` (defining both `add` and `mul`) cannot have its sections resolved by name from a different file — only one-section-per-file (where the file stem matches the section name, M3-aligned) or inline definitions work. Workaround: one-section-per-file (`add.fw`, `mul.fw`) or inline the section body. Proper fix: persist ALL `@include`'d sections (any arity) by section-name into `custom_function_defs_` at `@include` load time, so `foldl(xs, add, 0)` from a file that `@include`s `operators.fw` can resolve `add` via by-name lookup.
+
+**Trigger:** a multi-section utility file needs by-name section resolution from a foldl or other higher-order combinator (e.g., Collections Cycle 2 stdlib path where `operators.fw` defines `max2`/`min2`).
+
+## 111. `lookup_binary_op_body` op-body cache — PARKED
+
+**Surfaced gen-6 Collections Cycle 1, perf-auditor (2026-06-24).** `lookup_binary_op_body` builds a throwaway `FormulaSystem` per `foldl` node that lacks an in-system op match (i.e., when the op section is not in `custom_function_defs_` but must be discovered via cross-file resolution). For a file with many `foldl` calls over a shared operator, this produces one throw-away load per call. Cache the op-body expression keyed on `(op_name, acc_param, elem_param)` — a small `std::map` on `FormulaSystem` or a function-local static — so repeated folds over the same operator pay one lookup cost.
+
+**Trigger:** 50+ `foldl` equations over a shared op in a single system, OR a foldl-heavy stdlib module with 10+ section-referencing foldl sites, OR measured load latency attributable to repeated op-body lookups.
 
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 

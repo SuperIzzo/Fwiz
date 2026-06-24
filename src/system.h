@@ -494,6 +494,10 @@ public:
     // unrolls formula-bodied aggregations (sum(score(roll), …)) into N concrete
     // FormulaCall terms after positional/diff/integral passes.
     size_t agg_resolved_up_to_ = 0;
+    // Symmetric dirty-flags for the gen-6 cycle-1 collection passes. Order in
+    // load_with_sections is map -> foldl -> aggregate (load-bearing, gate-(a)).
+    size_t map_resolved_up_to_ = 0;
+    size_t foldl_resolved_up_to_ = 0;
 
     [[nodiscard]] std::set<std::string> all_variables() const {
         std::set<std::string> vars;
@@ -1498,6 +1502,13 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         compute_rewrite_groups();  // regroup after user rules loaded
         resolve_diff_in_equations();  // Future #6: rewrite diff(...) calls
         resolve_integral_in_equations();  // Future #16 (M1): rewrite integral(...) calls
+        // gen-6 cycle 1 collection passes — ORDER IS LOAD-BEARING (gate-(a)):
+        // map FIRST (materialize map(score(i),...) -> seq before any reducer sees
+        // it), then foldl (fold a materialized seq via its op section), then the
+        // aggregate pass (now sees sum(seq(...)) and folds). aggregate-before-map
+        // BREAKS the formula-bodied sum(map(score(i), ...)) case.
+        resolve_map_in_equations();
+        resolve_foldl_in_equations();
         resolve_aggregate_in_equations();  // gen-6 Step C: unroll formula-bodied aggregations
         trace_loaded();
     }
@@ -1586,6 +1597,148 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         });
     }
 
+    // Post-load map unroll (gen-6 cycle 1). The simplify-time map dispatch
+    // (expr.h) materializes maps whose body is a pure expression. When the body
+    // contains a cross-file formula call (map(score(i), i in [1..3])), the call
+    // cannot be extracted until the sub-system is loaded — this pass handles it.
+    // Runs BEFORE the aggregate pass (load-bearing, visionary gate-(a)): a
+    // formula-bodied sum(map(score(i), ...)) needs the inner map materialized to
+    // seq(...) FIRST so the aggregate pass then sees sum(seq(...)) and folds.
+    void resolve_map_in_equations() {
+        resolve_at_load(
+            [this](ExprPtr e) { return resolve_map_calls(e); },
+            map_resolved_up_to_);
+    }
+
+    [[nodiscard]] ExprPtr resolve_map_calls(ExprPtr e) {
+        return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+            if (node->type != ExprType::FUNC_CALL || node->name != "map")
+                return node;
+            return try_unroll_map_with_calls(node);
+        });
+    }
+
+    // Unroll one map(body, Var(iter), range) node whose body may contain formula
+    // calls -> seq(term0, term1, ...). Shape A only (explicit iterator). Shares
+    // per-term production with the aggregate Shape-A path via unroll_term_with_calls.
+    // Symbolic domain -> returns the node unchanged (re-folded once bound).
+    [[nodiscard]] ExprPtr try_unroll_map_with_calls(ExprPtr node) {
+        if (node->args.size() != 3 || !is_var(node->args[1])) return node;
+        std::vector<double> values;
+        if (!extract_range_values(node->args[2], values)) return node;  // symbolic
+        const std::string iter_var = node->args[1]->name;
+        const ExprPtr body = node->args[0];
+        std::vector<ExprPtr> elems;
+        elems.reserve(values.size());
+        // not std::transform: unroll_term_with_calls has a side effect (it
+        // registers extracted FormulaCalls into the captured formula_calls vector)
+        for (double v : values)
+            // cppcheck-suppress useStlAlgorithm
+            elems.push_back(unroll_term_with_calls(body, iter_var, v));
+        return Expr::Call("seq", std::move(elems));
+    }
+
+    // Post-load foldl resolution (gen-6 cycle 1). foldl is POST-LOAD-ONLY, ONE
+    // uniform path: for each foldl(seq(...), Var(op), init) node, look up the
+    // `op` SECTION and thread (acc, elem) through its body per seq element
+    // (left-fold; acc=first positional arg, elem=second). add/mul/any user op
+    // all resolve identically — no hardcoded op list. Runs AFTER the map pass
+    // (so foldl(map(...), op, init) sees a materialized seq) and BEFORE the
+    // aggregate pass.
+    void resolve_foldl_in_equations() {
+        resolve_at_load(
+            [this](ExprPtr e) { return resolve_foldl_calls(e); },
+            foldl_resolved_up_to_);
+    }
+
+    [[nodiscard]] ExprPtr resolve_foldl_calls(ExprPtr e) {
+        return tree_map(e, [&](ExprPtr node) -> ExprPtr {
+            if (node->type != ExprType::FUNC_CALL || node->name != "foldl")
+                return node;
+            return try_resolve_foldl(node);
+        });
+    }
+
+    // Thread (acc, elem) through the `op` section body per seq element. Returns
+    // the node unchanged when the shape is unsupported, the collection is not a
+    // materialized seq, or the op section is missing / not a 2-arg section
+    // (graceful-degrade: an unresolved foldl stays a FUNC_CALL, never mis-folds).
+    [[nodiscard]] ExprPtr try_resolve_foldl(ExprPtr node) {
+        if (node->args.size() != 3 || !is_var(node->args[1])) return node;
+        const ExprPtr coll = node->args[0];
+        if (coll->type != ExprType::FUNC_CALL || coll->name != "seq") return node;
+        const std::string& op_name = node->args[1]->name;
+
+        // Resolve the op section to (acc_param, elem_param, body_rhs). The body
+        // is the RHS of the section's return_var equation, with the two
+        // positional args as substitutable placeholders.
+        std::string acc_param, elem_param;
+        ExprPtr op_body = lookup_binary_op_body(op_name, acc_param, elem_param);
+        if (!op_body) return node;  // unknown / non-binary op -> unevaluated
+
+        ExprPtr acc = node->args[2];  // init seed
+        for (ExprPtr elem : coll->args) {
+            ExprPtr step = substitute(op_body, acc_param, acc);
+            step = substitute(step, elem_param, elem);
+            acc = simplify(step);
+        }
+        return acc;
+    }
+
+    // Find the binary-op section `name` (2 positional args + return_var) and
+    // return the RHS expression of its return_var equation, plus the two arg
+    // names. Returns nullptr when no such section exists or it is not a 2-arg
+    // section. The section may live in this system's sections_ OR be loadable
+    // as a sub-system (stdlib @include / custom_function_defs_). Self-contained:
+    // builds a throwaway sub-system from the section lines and reads the equation.
+    [[nodiscard]] ExprPtr lookup_binary_op_body(
+            const std::string& name, std::string& acc_param, std::string& elem_param) {
+        const Section* sec = nullptr;
+        for (const auto& s : sections_)
+            // cppcheck-suppress useStlAlgorithm
+            if (s.name == name) { sec = &s; break; }
+
+        std::shared_ptr<FormulaSystem> owned;
+        if (!sec) {
+            // Try loading as a sub-system (stdlib / custom_function_defs_).
+            // Catch std::exception (covers both std::runtime_error AND the
+            // sibling StrictIncludeError, which is NOT a runtime_error): an
+            // un-findable op section degrades to nullptr -> unevaluated foldl,
+            // never a thrown load-time error.
+            try {
+                const FormulaSystem& sub = load_sub_system(name);
+                for (const auto& s : sub.sections_)
+                    // cppcheck-suppress useStlAlgorithm
+                    if (s.name == name) { sec = &s; break; }
+            } catch (const std::exception&) {
+                return nullptr;
+            }
+        }
+        if (!sec || sec->positional_args.size() != 2 || sec->return_var.empty())
+            return nullptr;
+        acc_param  = sec->positional_args[0];
+        elem_param = sec->positional_args[1];
+
+        // Build a throwaway sub-system from the section body (applying the
+        // return_var `=`-sugar) and read the RHS of the return_var equation.
+        owned = std::make_shared<FormulaSystem>();
+        auto sugared = sec->lines;
+        for (auto& ln : sugared) {
+            auto t = trim(ln);
+            if (!t.empty() && t[0] == '=')
+                ln = sec->return_var + " " + t;
+        }
+        try {
+            owned->load_lines(sugared);
+        } catch (const std::runtime_error&) {
+            return nullptr;
+        }
+        for (const auto& eq : owned->equations)
+            // cppcheck-suppress useStlAlgorithm
+            if (eq.lhs_var == sec->return_var) return eq.rhs;
+        return nullptr;
+    }
+
     // Clone a pre-extracted FormulaCall for one aggregate domain value: fresh
     // output_var (_fcN), and `var → Num(v)` substituted into EVERY binding value
     // (so `atk=Var("f")` becomes `atk=Num(v)`, and compound bindings like
@@ -1632,8 +1785,45 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // contains a reducer for a numeric-bound formula body (graceful-degrade:
     // missing sub-systems become unresolved FUNC_CALLs in the fold, not a
     // surviving sum() that simplify-unroll would mis-fold as N*body(last)).
+    // Produce ONE per-domain term for a formula-bodied iteration (gen-6 cycle 1,
+    // shared between the aggregate Shape-A fold and the map materialization).
+    // Substitutes `iter_var -> Num(v)` into `body`, then runs
+    // extract_positional_calls so any nested formula call (score(v)) becomes a
+    // FormulaCall registered in formula_calls. The aggregate pass folds the
+    // returned terms; the map pass wraps them in seq(...).
+    [[nodiscard]] ExprPtr unroll_term_with_calls(
+            const ExprPtr& body, const std::string& iter_var, double v) {
+        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+        std::vector<FormulaCall> term_calls;
+        term = extract_positional_calls(term, term_calls);
+        // not std::transform: move-append into a different container
+        for (auto& c : term_calls)
+            // cppcheck-suppress useStlAlgorithm
+            formula_calls.push_back(std::move(c));
+        return term;
+    }
+
     [[nodiscard]] ExprPtr try_unroll_aggregate_with_calls(ExprPtr node) {
         const std::string& name = node->name;
+
+        // Shape S (gen-6 cycle 1): arity-1 reducer over a materialized seq —
+        // `sum(seq(_fc0, _fc1, _fc2))`. This is the shape produced when an inner
+        // map materializes inside a reducer (gate-(a): sum(map(score(i), ...))).
+        // Fold the seq elements directly via the shared fold-policy table; the
+        // elements may be _fcN Vars referencing FormulaCalls, which the solver
+        // resolves in the folded ADD/MUL tree. count(seq(...)) -> |elements|.
+        if (node->args.size() == 1
+                && node->args[0]->type == ExprType::FUNC_CALL
+                && node->args[0]->name == "seq") {
+            const std::vector<ExprPtr>& elems = node->args[0]->args;
+            if (name == "count")
+                return Expr::Num(static_cast<double>(elems.size()));
+            std::vector<double> idx(elems.size());
+            for (size_t k = 0; k < elems.size(); ++k) idx[k] = static_cast<double>(k);
+            ExprPtr folded = fold_aggregate(name, idx,
+                [&](double k) { return elems[static_cast<size_t>(k)]; });
+            return folded ? folded : node;
+        }
 
         // Shape A: explicit iterator (bodied 3-arg, or count 2-arg body-free).
         const bool is_count = (name == "count");
@@ -1686,14 +1876,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 ExprPtr folded = fold_aggregate(name, values,
                     is_count ? std::function<ExprPtr(double)>(nullptr)
                              : std::function<ExprPtr(double)>([&](double v) {
-                        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
-                        std::vector<FormulaCall> term_calls;
-                        term = extract_positional_calls(term, term_calls);
-                        // not std::transform: move-append into a different container
-                        for (auto& c : term_calls)
-                            // cppcheck-suppress useStlAlgorithm
-                            formula_calls.push_back(std::move(c));
-                        return term;
+                        return unroll_term_with_calls(body, iter_var, v);
                     }));
                 return folded ? folded : node;
             }
@@ -3248,6 +3431,11 @@ public:
                     // first inner comma. Reviewer Cycle B 2026-05-10.
                     else if (tok[expr_end].type == TokenType::LBRACKET) pd++;
                     else if (tok[expr_end].type == TokenType::RBRACKET) pd--;
+                    // {} collection literals (gen-6 cycle 1) embed COMMAs too:
+                    // `f(xs={1, 2, 3}, result=?)` must not truncate at the first
+                    // inner comma. Any bracket pair the lexer emits must be tracked.
+                    else if (tok[expr_end].type == TokenType::LBRACE) pd++;
+                    else if (tok[expr_end].type == TokenType::RBRACE) pd--;
                     else if (tok[expr_end].type == TokenType::COMMA && pd == 0) break;
                     expr_end++;
                 }
@@ -3277,10 +3465,11 @@ public:
     }
 
     // Scan tok[from, to) for EQUALS at paren/bracket depth == 0 relative to
-    // `from`. Bracket-symmetric (LBRACKET/RBRACKET tracked alongside paren) so
-    // a binding like `f(v=[1, 2, 3])` does not see the `[` as opening a depth
-    // level that would mask its inner contents. Mirrors the depth-tracking
-    // pattern used by parse_call_args' binding sub-loop (system.h:2791-2798).
+    // `from`. Bracket-symmetric (LBRACKET/RBRACKET AND LBRACE/RBRACE tracked
+    // alongside paren) so a binding like `f(v=[1, 2, 3])` or `f(xs={1, 2, 3})`
+    // does not see the `[`/`{` as opening a depth level that would mask its inner
+    // contents — any bracket pair the lexer emits must appear here. Mirrors the
+    // depth-tracking pattern used by parse_call_args' binding sub-loop.
     [[nodiscard]] static bool has_named_eq_in_range(const std::vector<Token>& tok, size_t from, size_t to) {
         int pd = 0;
         // justified: token-cursor with paren-depth state — std::any_of would not carry the depth across iterations
@@ -3290,6 +3479,8 @@ public:
             else if (tok[k].type == TokenType::RPAREN) pd--;
             else if (tok[k].type == TokenType::LBRACKET) pd++;
             else if (tok[k].type == TokenType::RBRACKET) pd--;
+            else if (tok[k].type == TokenType::LBRACE) pd++;
+            else if (tok[k].type == TokenType::RBRACE) pd--;
             else if (tok[k].type == TokenType::EQUALS && pd == 0) return true;
         }
         return false;

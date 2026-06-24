@@ -26,10 +26,17 @@ enum class TokenType : uint8_t {
     // lexed in tokenize() before the number-start dispatch; AT is a single_char.
     DOTDOT,
     AT,
+    // LBRACE (`{`) / RBRACE (`}`): ordered-collection literal delimiters
+    // `{1, 2, 3}` -> seq(...) and `{lo..hi}` -> range(...) (gen-6 arc cycle 1).
+    // Single-char tokens; any new bracket pair the lexer emits must also be
+    // tracked by the depth scanners in system.h (has_named_eq_in_range,
+    // parse_call_args binding sub-loop) — see those sites.
+    LBRACE,
+    RBRACE,
     END,
     COUNT_
 };
-static_assert(static_cast<int>(TokenType::COUNT_) == 19,
+static_assert(static_cast<int>(TokenType::COUNT_) == 21,
     "TokenType count drift — update lexer dispatch table if adding/removing tokens.");
 
 struct Token {
@@ -91,6 +98,7 @@ private:
             case ']': return TokenType::RBRACKET; case '=': return TokenType::EQUALS;
             case '?': return TokenType::QUESTION; case ',': return TokenType::COMMA;
             case ':': return TokenType::COLON;  case '@': return TokenType::AT;
+            case '{': return TokenType::LBRACE; case '}': return TokenType::RBRACE;
             default:  return std::nullopt;
         }
     }

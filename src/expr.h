@@ -774,6 +774,26 @@ inline void collect_vars(const Expr& e, std::set<std::string>& out) {
         case ExprType::BINOP:     collect_vars(*e.left, out); collect_vars(*e.right, out); break;
         case ExprType::UNARY_NEG: collect_vars(*e.child, out); break;
         case ExprType::FUNC_CALL:
+            // map(body, Var(iter), range): the iterator is a BINDER (gen-6 cycle 1),
+            // not a free variable of the map expression. Local-scope exclusion,
+            // mirroring the aggregate-reducer guard below.
+            if (e.name == "map" && e.args.size() == 3
+                    && e.args[1]->type == ExprType::VAR) {
+                std::set<std::string> local;
+                for (const auto* a : e.args) collect_vars(*a, local);
+                local.erase(e.args[1]->name);  // iter is bound
+                out.insert(local.begin(), local.end());
+                break;
+            }
+            // foldl(collection, Var(op), init): the op-name is a SECTION reference
+            // (gen-6 cycle 1), not a free numeric variable. Collect free vars of
+            // the collection and init only; skip arg[1] (the op-name).
+            if (e.name == "foldl" && e.args.size() == 3
+                    && e.args[1]->type == ExprType::VAR) {
+                collect_vars(*e.args[0], out);  // collection
+                collect_vars(*e.args[2], out);  // init
+                break;
+            }
             // A reducer's iterator (the Var arg) is a BINDER local to this subtree —
             // arg layout (from the aggregation primitive): count is {Var(iter), range},
             // the bodied reducers are {body, Var(iter), range}. Collect the free vars
@@ -2826,7 +2846,20 @@ constexpr size_t MATRIX_3X3_DIM = 3;
 // unevaluated per reducer.
 [[nodiscard]] inline bool extract_range_values(
         const ExprPtr& rng, std::vector<double>& out) {
-    if (!rng || rng->type != ExprType::FUNC_CALL || rng->name != "range") return false;
+    if (!rng || rng->type != ExprType::FUNC_CALL) return false;
+    // seq(e0, e1, ...) materialized {} collection as an iterator domain
+    // (gen-6 cycle 1): `sum(i, i in {1,3,5,7})`. All elements must be numeric;
+    // a symbolic element -> false -> aggregate stays unevaluated. An empty
+    // seq() is a successful empty extraction (caller decides identity).
+    if (rng->name == "seq") {
+        out.clear();
+        for (const Expr* a : rng->args) {
+            if (!is_num(a)) return false;
+            out.push_back(a->num);
+        }
+        return true;
+    }
+    if (rng->name != "range") return false;
     const size_t ra = rng->args.size();
     if (ra != 2 && ra != 3) return false;
     if (!is_num(rng->args[0]) || !is_num(rng->args[1])) return false;  // symbolic → unevaluated
@@ -2857,7 +2890,12 @@ constexpr size_t MATRIX_3X3_DIM = 3;
 [[nodiscard]] inline bool is_postload_builtin(const std::string& name) {
     return name == "diff" || name == "integral" || name == "range"
         || name == "vec" || name == "mat" || name == "matmul"
-        || name == "det" || name == "inv" || name == "transpose";
+        || name == "det" || name == "inv" || name == "transpose"
+        // gen-6 arc cycle 1: collection primitives. seq is a first-class node;
+        // map materializes at simplify-time; foldl resolves in a post-load pass.
+        // All three take the FUNC_CALL shape and must NOT be mistaken for
+        // cross-file calls in strict-include mode.
+        || name == "seq" || name == "map" || name == "foldl";
 }
 
 // ── fold_aggregate — the single fold-policy table ─────────────────────────────
@@ -2933,6 +2971,20 @@ constexpr size_t MATRIX_3X3_DIM = 3;
 
 [[nodiscard]] inline ExprPtr try_unroll_aggregate(
         const std::string& name, const std::vector<ExprPtr>& sa) {
+    // Shape S (gen-6 cycle 1): arity-1 reducer over a materialized seq —
+    // `sum(seq(1, 4, 9))`. Produced when an inner map materializes inside a
+    // reducer (sum(map(...))). Fold the seq elements directly. Symbolic elements
+    // -> extract_range_values fails -> unevaluated (max/min still try evaluate).
+    if (is_aggregate_reducer(name) && sa.size() == 1
+            && sa[0]->type == ExprType::FUNC_CALL && sa[0]->name == "seq") {
+        const std::vector<ExprPtr>& elems = sa[0]->args;
+        if (name == "count")
+            return Expr::Num(static_cast<double>(elems.size()));
+        std::vector<double> idx(elems.size());
+        for (size_t k = 0; k < elems.size(); ++k) idx[k] = static_cast<double>(k);
+        return fold_aggregate(name, idx,
+            [&](double k) { return elems[static_cast<size_t>(k)]; });
+    }
     // count is body-free: {Var(iter), range}. The others carry a body first.
     if (name == "count") {
         if (sa.size() != 2) return nullptr;      // {iter, range}
@@ -2990,6 +3042,30 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
             // non-reducer name and for symbolic bounds → falls through to
             // existing dispatch.
             if (auto agg = try_unroll_aggregate(e->name, sa)) return agg;
+
+            // seq(...) is a first-class ordered-collection node (gen-6 cycle 1),
+            // not a function to evaluate. Return it with elements already
+            // simplified; the seq node itself is the value. Guard MUST precede
+            // the lookup_function call below so seq(1, 2) never hits it.
+            if (e->name == "seq") return Expr::Call("seq", sa);
+
+            // map(body, Var(iter), range) -> seq(term0, term1, ...) when the
+            // domain is static and numeric (gen-6 cycle 1). Materializes the map
+            // as a first-class collection. Symbolic domain (extract_range_values
+            // fails) -> fall through to unevaluated map(...), re-folded by the
+            // simplify fixpoint once the bound resolves. Formula-call bodies are
+            // handled by the post-load resolve_map_in_equations pass (system.h).
+            if (e->name == "map" && sa.size() == 3 && is_var(sa[1])) {
+                std::vector<double> values;
+                if (extract_range_values(sa[2], values)) {
+                    const std::string& iter = sa[1]->name;
+                    std::vector<ExprPtr> elems;
+                    elems.reserve(values.size());
+                    std::transform(values.begin(), values.end(), std::back_inserter(elems),
+                        [&](double v) { return simplify(substitute(sa[0], iter, Expr::Num(v))); });
+                    return Expr::Call("seq", std::move(elems));
+                }
+            }
 
             auto s = Expr::Call(e->name, sa);
             if (all_num && lookup_function(e->name)) return evaluate_symbolic(*s);

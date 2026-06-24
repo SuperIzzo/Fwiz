@@ -1,0 +1,14 @@
+# Canonical fold-operator sections for foldl(collection, op, init).
+# Each is a two-argument step function [op(acc, elem) -> result]: foldl threads
+# (acc, elem) through the body per collection element (left-fold). foldl(xs, add, 0)
+# and foldl(xs, mul, 1) are the canonical sum and product over a seq collection.
+#
+# foldl resolves the op by SECTION lookup at post-load time (one uniform path);
+# add/mul/any user-defined op all resolve identically. No C++ op allowlist.
+# These sections are self-contained (no cross-file calls), so no @include needed.
+
+[add(acc, elem) -> result]
+result = acc + elem
+
+[mul(acc, elem) -> result]
+result = acc * elem

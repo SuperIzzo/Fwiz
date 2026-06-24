@@ -28,6 +28,7 @@ For a gentle introduction, see [../README.md](../README.md).
 16. [Complex Numbers](#16-complex-numbers)
 17. [Dimension Annotations](#17-dimension-annotations)
 18. [Bounded Aggregation](#18-bounded-aggregation)
+19. [Ordered Collections (`{}`, `map`, `foldl`)](#19-ordered-collections--map-foldl)
 
 ---
 
@@ -1096,9 +1097,95 @@ Use `resolve_all` (the `x=?` query form) for piecewise-body aggregations — `re
 
 ### 18.7 Planned / Deferred
 
-The full collection ontology is designed but only `[..]` ranges are implemented this cycle:
-
-- `{}` ordered array/sequence literals — not yet implemented
 - Boundary brackets `[`/`(`/`]`/`)` for open/closed intervals — designed, not yet parsed
-- Multi-iterator cartesian and dependent ranges (`sum(f(i,j), j in [1..6], i in [j..6])`) — deferred to a later cycle
+- Multi-iterator cartesian and dependent ranges (`sum(f(i,j), j in [1..6], i in [j..6])`) — deferred to a later cycle (Future #103)
 - Solve-for-the-range-bound (`sum(i in [1..n]) = 15`, solve `n`) — deferred
+
+---
+
+## 19. Ordered Collections (`{}`, `map`, `foldl`)
+
+Since gen-6 Collections Cycle 1 (2026-06-24), fwiz supports first-class ordered collections and functional combinators.
+
+### 19.1 Collection Literals `{}`
+
+`{expr, expr, ...}` produces an ordered collection (internally `FUNC_CALL("seq", {...})`):
+
+```
+xs = {1, 2, 3}               # seq(1, 2, 3) — ordered collection literal
+ys = {a, b+1, c^2}          # symbolic elements supported
+empty = {}                   # empty collection
+```
+
+`{lo..hi}` and `{lo..hi @ step}` desugar to the same range node as `[lo..hi]`:
+
+```
+r = {1..6}                   # range(1, 6) — same as [1..6] as an iterator domain
+```
+
+**`{}` vs `[]`:** `{}` is an ordered sequence (collection ontology); `[]` is an unordered set / range. Both share `..` range syntax. `{}` is distinct from `[1,2,3]` (which is a row-vector, `FUNC_CALL("vec", {...})`); vec participates in element-wise matrix dispatch, seq does not.
+
+Seq literals can be used as iterator domains in any reducer:
+
+```
+sum(i, i in {1, 3, 5, 7})   # 16
+product(i, i in {2, 3, 4})  # 24
+max(i, i in {3, 1, 4, 9})   # 9
+```
+
+### 19.2 `map` — Materialize a Collection
+
+`map(body, var in domain)` evaluates `body` for each domain value and returns an ordered collection:
+
+```
+xs = map(i^2, i in [1..5])  # seq(1, 4, 9, 16, 25)
+ys = map(i+a, i in [1..3])  # seq(1+a, 2+a, 3+a)  — symbolic a stays symbolic
+```
+
+`map` is resolved at simplify-time for numeric domains. Symbolic domains stay unevaluated until the bound becomes concrete. Formula-call bodies are resolved by a post-load pass (`resolve_map_in_equations`):
+
+```
+[score(x) -> result]
+result = x^2
+
+scores = map(score(i), i in [1..3])   # resolved post-load → seq(1, 4, 9)
+```
+
+### 19.3 `foldl` — Left-Fold a Collection
+
+`foldl(collection, op, init)` folds an ordered collection left-to-right using a named binary section:
+
+```
+xs = {1, 2, 3, 4, 5}
+total = foldl(xs, add, 0)     # 15   (0 + 1 + 2 + 3 + 4 + 5)
+prod  = foldl(xs, mul, 1)     # 120
+
+# Composed:
+result = foldl(map(i, i in [1..100]), add, 0)   # 5050
+```
+
+`op` must be a named two-parameter section `[op(acc, elem) -> result]`. The canonical operators live in `stdlib/collections/operators.fw`:
+
+```fw
+@include "stdlib/collections/operators.fw"   # provides add and mul
+
+[add(acc, elem) -> result]
+result = acc + elem
+
+[mul(acc, elem) -> result]
+result = acc * elem
+```
+
+**Cross-file invariant:** the op section must be in the same file as the `foldl` call (or pre-registered via `@include`). Cross-file op resolution requires a named section to be in scope at fold time (see Future #110).
+
+`foldl` is resolved by the `resolve_foldl_in_equations` post-load pass. A `foldl` over an unresolved symbolic collection stays unevaluated until the collection materializes.
+
+### 19.4 Post-Load Pass Ordering
+
+The three collection post-load passes run in this order inside `load_with_sections`:
+
+1. **`resolve_map_in_equations`** — materializes formula-bodied `map(score(i), i in [1..n])` calls to `seq(...)`.
+2. **`resolve_foldl_in_equations`** — folds `foldl(seq(...), op, init)` nodes using the named op section.
+3. **`resolve_aggregate_in_equations`** — unrolls `sum(map(...), ...)` and other reducer-over-collection forms.
+
+This order is load-bearing: aggregate must run last so that a `sum(map(score(i), i in [1..3]))` can see the materialized `seq` from the map pass before folding.

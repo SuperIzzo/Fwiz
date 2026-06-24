@@ -1476,7 +1476,8 @@ void test_lexer_garbage() {
     expect_throw("x ~ y", "tilde");
     expect_throw("x ` y", "backtick");
     expect_throw("x < y", "angle bracket");
-    expect_throw("{x}", "curly brace");
+    // `{`/`}` are valid tokens since gen-6 arc cycle 1 — `{1,2,3}` collection
+    // literals. See test_collections_c1_literal for positive coverage.
     // [x] is now a valid 1-element vec literal — see test_vec_mat_type for positive coverage.
     expect_throw("x!", "exclamation");
 
@@ -16686,8 +16687,8 @@ void test_gen5_cycle3f_infix_in() {
     // ---- C2: TokenType::COUNT_ cross-check at runtime ----
     {
         // static_assert lives in lexer.h; runtime mirror for visibility.
-        ASSERT(static_cast<int>(TokenType::COUNT_) == 19,
-               "C2: TokenType::COUNT_ == 19 (DOTDOT + AT added in gen-6 cycle 1)");
+        ASSERT(static_cast<int>(TokenType::COUNT_) == 21,
+               "C2: TokenType::COUNT_ == 21 (LBRACE + RBRACE added in gen-6 arc cycle 1)");
     }
 
     // ---- C3: `in` in expression context raises parse error ----
@@ -17462,7 +17463,7 @@ void test_bounded_aggregation_step_a() {
         ASSERT(t[2].type == TokenType::NUMBER && std::abs(t[2].numval - 2) < 1e-9, "L4: t[2] NUMBER(2)");
     }
     {
-        ASSERT(static_cast<int>(TokenType::COUNT_) == 19, "L5: TokenType::COUNT_ == 19 (DOTDOT + AT added)");
+        ASSERT(static_cast<int>(TokenType::COUNT_) == 21, "L5: TokenType::COUNT_ == 21 (LBRACE + RBRACE added)");
     }
     {
         // Critic change 5: scientific-notation adjacency. `1e2` is 100, then DOTDOT.
@@ -17973,6 +17974,219 @@ void test_aggregation_binder_scoping() {
         sys.custom_function_defs_["cnt"] = cnt_def;
         sys.load_string("y = cnt(n=5, result=?)\n");
         ASSERT_NUM(sys.resolve("y", {}), 5.0, "A6: count(1..5) via binding path = 5");
+    }
+}
+
+// ============================================================================
+//  gen-6 arc Cycle 1: {} collections + map + foldl primitives
+// ============================================================================
+
+// C1.1 — {} literal end-to-end: LBRACE/RBRACE tokens, primary() seq parse,
+// {1..6} -> range, bracket-symmetry in call-arg scanning.
+void test_collections_c1_literal() {
+    SECTION("gen-6 cycle 1 C1.1: {} collection literal end-to-end");
+
+    // [BLOCKING] braces lex without "Unexpected character".
+    {
+        auto tokens = Lexer("{1,2,3}").tokenize();
+        ASSERT(tokens[0].type == TokenType::LBRACE, "C1.1: { is LBRACE");
+        ASSERT(tokens[1].type == TokenType::NUMBER, "C1.1: 1 is NUMBER");
+        ASSERT(tokens[6].type == TokenType::RBRACE, "C1.1: } is RBRACE");
+        ASSERT(tokens[7].type == TokenType::END, "C1.1: END after }");
+    }
+
+    // [BLOCKING] {1,2,3} parses to seq(1, 2, 3).
+    ASSERT_EQ(ps("{1, 2, 3}"), "seq(1, 2, 3)", "C1.1: {1,2,3} -> seq(1, 2, 3)");
+    // [BLOCKING] empty {} -> seq().
+    ASSERT_EQ(ps("{}"), "seq()", "C1.1: {} -> seq()");
+    // [BLOCKING] {1..5} -> range(1, 5) (same range node as [1..5]).
+    ASSERT_EQ(ps("{1..5}"), "range(1, 5)", "C1.1: {1..5} -> range(1, 5)");
+    // [BLOCKING] {1..10 @ 2} -> range(1, 10, 2).
+    ASSERT_EQ(ps("{1..10 @ 2}"), "range(1, 10, 2)", "C1.1: {1..10 @ 2} -> range(1, 10, 2)");
+    // [DESIRABLE] symbolic elements supported.
+    ASSERT_EQ(ps("{a, b+1, c}"), "seq(a, b + 1, c)", "C1.1: symbolic seq elements");
+
+    // [BLOCKING] sizeof(Expr) invariant — no new ExprType.
+    ASSERT(sizeof(Expr) == 96, "C1.1: sizeof(Expr) == 96 (no new ExprType)");
+
+    // [BLOCKING] seq passthrough: simplify(seq(1,2,3)) stays seq(1, 2, 3).
+    ASSERT_EQ(ss("{1, 2, 3}"), "seq(1, 2, 3)", "C1.1: simplify seq passthrough");
+
+    // [BLOCKING] B10: {} as a formula-call binding PARSES correctly — the
+    // bracket-symmetry fix means the inner commas of `xs={1,2,3}` do not
+    // truncate the binding. The binding value is captured as seq(1, 2, 3).
+    // (D3 — end-to-end fold-through-call — is DESIRABLE and deferred: a foldl
+    // inside a sub-system body does not re-resolve after the seq binding
+    // substitutes through the cross-file call, because the sub's foldl pass runs
+    // at the sub's load time when xs is still a free Var.)
+    {
+        const std::string sumc_def = "[sumc(xs) -> result]\nresult = foldl(xs, add, 0)\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["sumc"] = sumc_def;
+        sys.load_string("y = sumc(xs={1,2,3}, result=?)\n");
+        bool found = false;
+        for (const auto& fc : sys.formula_calls) {
+            auto it = fc.bindings.find("xs");
+            if (it != fc.bindings.end()) {
+                ASSERT_EQ(expr_to_string(it->second), "seq(1, 2, 3)",
+                          "C1.1/B10: xs binding parses as seq(1, 2, 3)");
+                found = true;
+            }
+        }
+        ASSERT(found, "C1.1/B10: sumc call has an xs binding");
+    }
+}
+
+// C1.2 — map simplify-time unroll -> materialized seq; extract_range_values
+// recognizes seq nodes; strict-includes does not reject map/foldl/seq.
+void test_collections_c1_map() {
+    SECTION("gen-6 cycle 1 C1.2: map materialization + seq-as-domain");
+
+    // [BLOCKING] map(i^2, i in [1..3]) -> seq(1, 4, 9).
+    ASSERT_EQ(ss("map(i^2, i in [1..3])"), "seq(1, 4, 9)", "C1.2: map(i^2,1..3) -> seq(1,4,9)");
+    // [BLOCKING] map(i^2, i in [1..5]) -> seq(1, 4, 9, 16, 25).
+    ASSERT_EQ(ss("map(i^2, i in [1..5])"), "seq(1, 4, 9, 16, 25)",
+              "C1.2: map(i^2,1..5) -> seq(1,4,9,16,25)");
+    // [BLOCKING] map over a {} brace-range domain.
+    ASSERT_EQ(ss("map(i, i in {1..3})"), "seq(1, 2, 3)", "C1.2: map over {1..3} domain");
+    // [DESIRABLE] symbolic body: map(i+a, i in [1..3]) -> seq(1+a, 2+a, 3+a).
+    ASSERT_EQ(ss("map(i+a, i in [1..3])"), "seq(a + 1, a + 2, a + 3)",
+              "C1.2: symbolic-body map materializes per element");
+    // [DESIRABLE] symbolic domain stays unevaluated map.
+    ASSERT_EQ(ss("map(i, i in [1..n])"), "map(i, i, range(1, n))",
+              "C1.2: symbolic-domain map stays unevaluated");
+
+    // [BLOCKING] B6: seq node works as iterator domain in the six C++ reducers.
+    ASSERT_NUM(ev("sum(i, i in {1, 3, 5, 7})"), 16.0, "C1.2/B6: sum over {1,3,5,7} = 16");
+    ASSERT_NUM(ev("product(i, i in {2, 3, 4})"), 24.0, "C1.2: product over {2,3,4} = 24");
+    ASSERT_NUM(ev("max(i, i in {3, 1, 4, 1, 5, 9})"), 9.0, "C1.2: max over seq = 9");
+    ASSERT_NUM(ev("count(i in {10, 20, 30})"), 3.0, "C1.2: count over seq = 3");
+    // symbolic seq element -> aggregate stays unevaluated.
+    ASSERT_EQ(ss("sum(i, i in {1, a, 3})"), "sum(i, i, seq(1, a, 3))",
+              "C1.2: symbolic seq domain -> unevaluated sum");
+
+    // [BLOCKING] B9: strict-includes mode does not reject map/foldl/seq.
+    {
+        bool ok = true;
+        try { FormulaSystem sys; sys.load_string("xs = map(i^2, i in [1..5])\n"); }  // strict_includes_ defaults true
+        catch (const std::exception&) { ok = false; }
+        ASSERT(ok, "C1.2/B9: strict mode accepts map(...)");
+    }
+    {
+        bool ok = true;
+        try { FormulaSystem sys; sys.load_string("xs = {1, 2, 3}\n"); }
+        catch (const std::exception&) { ok = false; }
+        ASSERT(ok, "C1.2/B9: strict mode accepts seq literal");
+    }
+}
+
+// C1.3 — foldl post-load-only (resolve_foldl_in_equations) + collect_vars
+// binder guards (map iterator; foldl op-var).
+void test_collections_c1_foldl() {
+    SECTION("gen-6 cycle 1 C1.3: foldl post-load fold + binder scoping");
+
+    const std::string ops_def =
+        "[add(acc, elem) -> result]\nresult = acc + elem\n"
+        "[mul(acc, elem) -> result]\nresult = acc * elem\n";
+
+    // [BLOCKING] foldl(seq(1,4,9,16,25), add, 0) -> 55.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = ops_def;
+        sys.custom_function_defs_["mul"] = ops_def;
+        sys.load_string("y = foldl({1,4,9,16,25}, add, 0)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 55.0, "C1.3: foldl(seq, add, 0) = 55");
+    }
+    // [BLOCKING] foldl(seq(1,2,3,4,5), mul, 1) -> 120.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = ops_def;
+        sys.custom_function_defs_["mul"] = ops_def;
+        sys.load_string("y = foldl({1,2,3,4,5}, mul, 1)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 120.0, "C1.3: foldl(seq, mul, 1) = 120");
+    }
+    // [BLOCKING] composition: foldl(map(i, i in [1..5]), add, 0) -> 15.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = ops_def;
+        sys.load_string("y = foldl(map(i, i in [1..5]), add, 0)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 15.0, "C1.3: foldl(map(i,1..5), add, 0) = 15");
+    }
+    // [BLOCKING] larger composition: foldl(map(i, i in [1..100]), add, 0) -> 5050.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = ops_def;
+        sys.load_string("y = foldl(map(i, i in [1..100]), add, 0)\n");
+        ASSERT_NUM(sys.resolve("y", {}), 5050.0, "C1.3: foldl(map(i,1..100), add, 0) = 5050");
+    }
+    // [DESIRABLE] unknown op stays unevaluated (no section) — clean, no crash.
+    {
+        FormulaSystem sys;
+        sys.strict_includes_ = false;  // allow unresolved op-name without throw
+        sys.load_string("y = foldl({1,2}, no_such_op, 0)\n");
+        bool threw = false;
+        double got = std::numeric_limits<double>::quiet_NaN();
+        try { got = sys.resolve("y", {}); }
+        catch (const std::exception&) { threw = true; }
+        ASSERT(threw || std::isnan(got), "C1.3: unknown foldl op -> unevaluated/clean");
+    }
+
+    // [BLOCKING] B7: collect_vars(map(i^2, i in [1..n])) excludes i.
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("map(i^2, i in [1..n])"), vars);
+        ASSERT(vars.count("n"), "C1.3/B7: map free var n");
+        ASSERT(vars.count("i") == 0, "C1.3/B7: map iterator i is a binder");
+        ASSERT(vars.size() == 1, "C1.3/B7: exactly {n}");
+    }
+    // [BLOCKING] B8: collect_vars(foldl(xs, add, 0)) excludes add.
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("foldl(xs, add, 0)"), vars);
+        ASSERT(vars.count("xs"), "C1.3/B8: foldl free var xs");
+        ASSERT(vars.count("add") == 0, "C1.3/B8: foldl op-name add is a section ref");
+        ASSERT(vars.size() == 1, "C1.3/B8: exactly {xs}");
+    }
+    // foldl op-var binder composes with map binder.
+    {
+        std::set<std::string> vars;
+        collect_vars(parse("foldl(map(i, i in [1..n]), add, 0)"), vars);
+        ASSERT(vars.count("n"), "C1.3: nested free var n");
+        ASSERT(vars.count("i") == 0 && vars.count("add") == 0, "C1.3: i and add both bound");
+        ASSERT(vars.size() == 1, "C1.3: exactly {n}");
+    }
+}
+
+// C1.4 — post-load pass order map -> foldl -> aggregate. The gate-(a)
+// regression proof: a formula-bodied sum(map(score(i), ...)) MUST fold.
+void test_collections_c1_gate_a() {
+    SECTION("gen-6 cycle 1 C1.4: gate-(a) formula-bodied map-feeds-reducer");
+
+    // [BLOCKING] gate-(a): sum(map(score(i), i in [1..3])) where score is a
+    // small section. Under aggregate->map ordering the sum is visited before
+    // the map materializes and survives unevaluated; under map->foldl->aggregate
+    // the map materializes to seq(score(1), score(2), score(3)) first, then the
+    // aggregate folds. score(i) = i*i, so sum = 1 + 4 + 9 = 14.
+    {
+        const std::string score_def = "[score(i) -> r]\nr = i*i\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.load_string("total = sum(map(score(i), i in [1..3]))\n");
+        ASSERT_NUM(sys.resolve("total", {}), 14.0,
+                   "C1.4/gate-a: sum(map(score(i),1..3)) = 14");
+    }
+
+    // [DESIRABLE] D2: map(score(i), i in [1..3]) as a standalone collection
+    // resolves to the per-element scores summing to 14 via foldl(add).
+    {
+        const std::string score_def = "[score(i) -> r]\nr = i*i\n";
+        const std::string ops_def = "[add(acc, elem) -> result]\nresult = acc + elem\n";
+        FormulaSystem sys;
+        sys.custom_function_defs_["score"] = score_def;
+        sys.custom_function_defs_["add"] = ops_def;
+        sys.load_string("total = foldl(map(score(i), i in [1..3]), add, 0)\n");
+        ASSERT_NUM(sys.resolve("total", {}), 14.0,
+                   "C1.4/D2: foldl(map(score(i),1..3), add, 0) = 14");
     }
 }
 
@@ -18840,6 +19054,10 @@ int main() {
     test_bounded_aggregation_step_c();
     test_bounded_aggregation_step_d();
     test_aggregation_binder_scoping();
+    test_collections_c1_literal();
+    test_collections_c1_map();
+    test_collections_c1_foldl();
+    test_collections_c1_gate_a();
     test_combinatorics_stdlib();
     test_expectation_stdlib();
 
