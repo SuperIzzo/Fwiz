@@ -18226,6 +18226,231 @@ void test_collections_reducer_wrappers() {
     }
 }
 
+// ============================================================================
+// Cycle 2b — the EQUIVALENCE PROOF (AC8 keystone).
+//
+// AC8 invariant: a `.fw` fold computes EXACTLY what the C++ fast-path reducer
+// computes. We prove it on the WORKING direct foldl path — `foldl(seq, op, init)`,
+// the expression a user writes — vs the built-in C++ reducer (`sum`/`product`/
+// `count`/`mean` over an aggregation iterator). The named-section wrappers
+// (`sum_of(xs)` called WITH a collection arg) are BLOCKED on collections-as-
+// call-arguments (sub-bindings are numeric-only) and are NOT proven here; the
+// 4 wrapper .fw files are kept on disk as inert spec.
+//
+// Oracles (per the brief's "use the approach that fits"):
+//   * CONCRETE inputs (L1 empty identities, L2 differential sweep): both forms
+//     collapse to a scalar, so NUMERIC equality is the equivalence oracle.
+//     fingerprint_expr is a Schwartz-Zippel numeric-eval oracle; for a 0-free-var
+//     concrete expression it degenerates to a single numeric sample, so direct
+//     numeric equality is the same oracle without the substitution machinery.
+//   * EXACT-RATIONAL mean (L1): both forms carry a structural rational; compare
+//     simplified structural STRINGS (foldl(add)/count -> "5 / 2" == C++ mean).
+//   * SYMBOLIC free-var bodies (L3): the foldl resolves to a symbolic expression
+//     (`foldl({a,b,c}, add, 0)` -> `a + b + c`); compared to the C++ sum's
+//     equivalent (`a + b + c`) via fingerprint_expr at prime test points.
+// ============================================================================
+
+namespace {
+
+// The three canonical fold-operator sections, mirroring stdlib/collections/.
+const char* const kFoldOps =
+    "[add(acc, elem) -> result]\nresult = acc + elem\n"
+    "[mul(acc, elem) -> result]\nresult = acc * elem\n"
+    "[count_op(acc, elem) -> result]\nresult = acc + 1\n";
+
+// Resolve `foldl(<seqlit>, <op>, <init>)` to a double via the .fw path.
+double foldl_resolve(const std::string& seqlit, const std::string& op,
+                     const std::string& init) {
+    FormulaSystem sys;
+    sys.custom_function_defs_["add"] = kFoldOps;
+    sys.custom_function_defs_["mul"] = kFoldOps;
+    sys.custom_function_defs_["count_op"] = kFoldOps;
+    sys.load_string("y = foldl(" + seqlit + ", " + op + ", " + init + ")\n");
+    return sys.resolve("y", {});
+}
+
+// Build the seq literal "{body[i:=1], ..., body[i:=N]}" by substituting each
+// 'i' token in `body` with the literal index (parenthesised so `2*i` -> `2*(3)`
+// and `i^2` -> `(3)^2` keep their precedence). Constant bodies (no 'i') repeat.
+std::string seq_of_body(const std::string& body, int N) {
+    std::string out = "{";
+    for (int i = 1; i <= N; i++) {
+        if (i > 1) out += ",";
+        for (char c : body) {
+            if (c == 'i') { out += "("; out += std::to_string(i); out += ")"; }
+            else out += c;
+        }
+    }
+    out += "}";
+    return out;
+}
+
+}  // namespace
+
+void test_collections_cycle2b_equivalence_proof() {
+    SECTION("gen-6 cycle 2b: foldl == C++ reducer equivalence proof (AC8)");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // ---- L1 [BLOCKING]: empty-domain identities match the C++ empty identities.
+    // C++: sum over empty -> 0; product over empty -> 1; count over empty -> 0.
+    // foldl over an empty seq returns the seed; the seed IS the identity.
+    {
+        const double cpp_sum_empty     = ev("sum(i, i in [5..1])");      // empty asc range
+        const double cpp_product_empty = ev("product(i, i in [5..1])");
+        const double cpp_count_empty   = ev("count(i in [5..1])");
+        ASSERT_NUM(foldl_resolve("{}", "add", "0"), cpp_sum_empty,
+                   "L1: foldl(seq(), add, 0) == C++ sum over empty (= 0)");
+        ASSERT_NUM(foldl_resolve("{}", "mul", "1"), cpp_product_empty,
+                   "L1: foldl(seq(), mul, 1) == C++ product over empty (= 1)");
+        ASSERT_NUM(foldl_resolve("{}", "count_op", "0"), cpp_count_empty,
+                   "L1: foldl(seq(), count_op, 0) == C++ count over empty (= 0)");
+        // absolute identity values (the seeds), for self-documentation
+        ASSERT_NUM(cpp_sum_empty, 0.0, "L1: C++ sum empty identity = 0");
+        ASSERT_NUM(cpp_product_empty, 1.0, "L1: C++ product empty identity = 1");
+        ASSERT_NUM(cpp_count_empty, 0.0, "L1: C++ count empty identity = 0");
+    }
+
+    // ---- L1 [BLOCKING]: EXACT-RATIONAL mean. foldl(add)/count is a structural
+    // rational, NOT a float. simplify(10 / 4) == "5 / 2" == C++ mean(i, i in [1..4]).
+    {
+        // foldl mean over {1,2,3,4}: build the structural quotient and simplify it.
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = kFoldOps;
+        sys.custom_function_defs_["count_op"] = kFoldOps;
+        sys.load_string(
+            "y = foldl({1,2,3,4}, add, 0) / foldl({1,2,3,4}, count_op, 0)\n");
+        ExprPtr fold_mean_rhs = nullptr;
+        for (auto& eq : sys.equations)
+            if (eq.lhs_var == "y") fold_mean_rhs = eq.rhs;
+        ASSERT(fold_mean_rhs != nullptr, "L1: foldl-mean equation present");
+        const std::string fold_mean_str =
+            fold_mean_rhs ? expr_to_string(simplify(fold_mean_rhs)) : "";
+        const std::string cpp_mean_str = ss("mean(i, i in [1..4])");
+        ASSERT_EQ(cpp_mean_str, "5 / 2",
+                  "L1: C++ mean(i, i in [1..4]) is exact rational 5 / 2");
+        ASSERT_EQ(fold_mean_str, cpp_mean_str,
+                  "L1: foldl(add)/count == C++ mean structurally (exact 5 / 2, NOT 2.5)");
+        // and the numeric collapse agrees too
+        ASSERT_NUM(sys.resolve("y", {}), ev("mean(i, i in [1..4])"),
+                   "L1: foldl-mean numeric == C++ mean numeric (2.5)");
+    }
+
+    // ---- L2 [BLOCKING]: differential sweep.
+    // reducer in {sum/add, product/mul, count, mean} x N in {1,3,10}
+    //   x element-bodies {i, i+1, i^2, 2*i, 3} over i in [1..N].
+    // For each cell: build seq(body[1..N]); compare foldl(seq,op,init) to the
+    // C++ reducer over the same body/domain. Oracle: numeric equality (both
+    // collapse to a scalar for concrete inputs).
+    {
+        const std::vector<int> Ns = {1, 3, 10};
+        const std::vector<std::string> bodies = {"i", "i+1", "i^2", "2*i", "3"};
+        int cells = 0;
+        for (int N : Ns) {
+            for (const auto& body : bodies) {
+                const std::string seqlit = seq_of_body(body, N);
+                const std::string dom =
+                    "(" + body + ", i in [1.." + std::to_string(N) + "])";
+
+                // sum == foldl(add, 0)
+                ASSERT_NUM(foldl_resolve(seqlit, "add", "0"),
+                           ev("sum" + dom),
+                           "L2 sum: foldl(seq(" + body + "[1.." +
+                               std::to_string(N) + "]), add, 0) == C++ sum");
+                // product == foldl(mul, 1)
+                ASSERT_NUM(foldl_resolve(seqlit, "mul", "1"),
+                           ev("product" + dom),
+                           "L2 product: foldl(seq(" + body + "[1.." +
+                               std::to_string(N) + "]), mul, 1) == C++ product");
+                // count == foldl(count_op, 0)  (body-independent, = N)
+                ASSERT_NUM(foldl_resolve(seqlit, "count_op", "0"),
+                           ev("count(i in [1.." + std::to_string(N) + "])"),
+                           "L2 count: foldl(seq(" + body + "[1.." +
+                               std::to_string(N) + "]), count_op, 0) == C++ count");
+                // mean == foldl(add,0)/foldl(count_op,0)
+                ASSERT_NUM(foldl_resolve(seqlit, "add", "0") /
+                               foldl_resolve(seqlit, "count_op", "0"),
+                           ev("mean" + dom),
+                           "L2 mean: foldl(add)/count over seq(" + body + "[1.." +
+                               std::to_string(N) + "]) == C++ mean");
+                cells++;
+            }
+        }
+        ASSERT(cells == 15, "L2: differential sweep covered 3 N x 5 bodies = 15 cells");
+    }
+
+    // ---- L3 [DESIRABLE]: symbolic free-var bodies. foldl({a,b,c}, add, 0)
+    // resolves to the symbolic expression `a + b + c` (the C++ sum of symbolic
+    // elements). Compared via fingerprint_expr at prime test points.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = kFoldOps;
+        sys.custom_function_defs_["mul"] = kFoldOps;
+        sys.load_string("y = foldl({a,b,c}, add, 0)\n");
+        ExprPtr fold_sym = nullptr;
+        for (auto& eq : sys.equations)
+            if (eq.lhs_var == "y") fold_sym = eq.rhs;
+        ASSERT(fold_sym != nullptr, "L3: symbolic foldl(add) equation present");
+
+        ExprPtr cpp_sum_sym = parse("a + b + c");
+        std::vector<std::string> free_vars = {"a", "b", "c"};
+        std::vector<std::map<std::string, double>> pts = {
+            {{"a", 2.0}, {"b", 3.0}, {"c", 5.0}},
+            {{"a", 7.0}, {"b", 11.0}, {"c", 13.0}},
+            {{"a", 17.0}, {"b", 19.0}, {"c", 23.0}},
+        };
+        auto fp_fold = fingerprint_expr(fold_sym, free_vars, pts);
+        auto fp_cpp = fingerprint_expr(cpp_sum_sym, free_vars, pts);
+        ASSERT(!fp_fold.empty() && fp_fold.size() == pts.size(),
+               "L3: symbolic foldl fingerprint has 3 finite samples");
+        ASSERT(fp_fold == fp_cpp,
+               "L3: foldl({a,b,c}, add, 0) fingerprint == (a+b+c) at prime points");
+
+        // product over symbolic elements: foldl(mul, 1) == a*b*c
+        FormulaSystem sysm;
+        sysm.custom_function_defs_["mul"] = kFoldOps;
+        sysm.load_string("z = foldl({a,b,c}, mul, 1)\n");
+        ExprPtr fold_prod = nullptr;
+        for (auto& eq : sysm.equations)
+            if (eq.lhs_var == "z") fold_prod = eq.rhs;
+        auto fp_prod = fingerprint_expr(fold_prod, free_vars, pts);
+        auto fp_prod_cpp = fingerprint_expr(parse("a * b * c"), free_vars, pts);
+        ASSERT(!fp_prod.empty() && fp_prod == fp_prod_cpp,
+               "L3: foldl({a,b,c}, mul, 1) fingerprint == (a*b*c) at prime points");
+    }
+
+    // ---- Metamorphic [DESIRABLE]: structural laws the sum fold must obey,
+    // each cross-checked against the C++ reducer where applicable.
+    {
+        // Commutativity: reordering the seq elements does not change the sum.
+        const double s_abc = foldl_resolve("{1,4,9,16,25}", "add", "0");
+        const double s_perm = foldl_resolve("{25,1,16,4,9}", "add", "0");
+        ASSERT_NUM(s_abc, s_perm,
+                   "Metamorphic: foldl(add) is order-invariant (commutativity)");
+        ASSERT_NUM(s_abc, ev("sum(i^2, i in [1..5])"),
+                   "Metamorphic: the commuted sum still == C++ sum(i^2,1..5) = 55");
+
+        // Additivity: split the domain; the part-sums add to the whole-sum.
+        const double whole = foldl_resolve("{1,2,3,4,5,6}", "add", "0");
+        const double part1 = foldl_resolve("{1,2,3}", "add", "0");
+        const double part2 = foldl_resolve("{4,5,6}", "add", "0");
+        ASSERT_NUM(whole, part1 + part2,
+                   "Metamorphic: foldl(add) additive over split domains");
+        ASSERT_NUM(whole, ev("sum(i, i in [1..6])"),
+                   "Metamorphic: the whole-domain sum == C++ sum(i,1..6) = 21");
+
+        // Product multiplicativity: split-domain products multiply to the whole.
+        const double pw = foldl_resolve("{1,2,3,4}", "mul", "1");
+        const double pp1 = foldl_resolve("{1,2}", "mul", "1");
+        const double pp2 = foldl_resolve("{3,4}", "mul", "1");
+        ASSERT_NUM(pw, pp1 * pp2,
+                   "Metamorphic: foldl(mul) multiplicative over split domains");
+        ASSERT_NUM(pw, ev("product(i, i in [1..4])"),
+                   "Metamorphic: the whole-domain product == C++ product(i,1..4) = 24");
+    }
+}
+
 // C1.4 — post-load pass order map -> foldl -> aggregate. The gate-(a)
 // regression proof: a formula-bodied sum(map(score(i), ...)) MUST fold.
 void test_collections_c1_gate_a() {
@@ -19128,6 +19353,7 @@ int main() {
     test_collections_c1_foldl();
     test_collections_c1_gate_a();
     test_collections_reducer_wrappers();
+    test_collections_cycle2b_equivalence_proof();
     test_combinatorics_stdlib();
     test_expectation_stdlib();
 

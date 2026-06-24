@@ -1,0 +1,9 @@
+# Inert until collections-as-call-arguments lands (sub-bindings are numeric-only) — see Future.md. The fold itself is proven equivalent to the C++ reducer (tests.cpp).
+# mean_of(xs) — arithmetic mean of a seq collection, composed from sum_of and
+# count_of. SPEC definition; coexists with the C++ `mean` fast-path and is proven
+# equivalent. Yields an EXACT structural rational (mean_of({1,2,3,4}) -> 5/2),
+# never a float, matching the C++ `mean` rational path.
+@include "sum_of.fw"
+@include "count_of.fw"
+[mean_of(xs) -> result]
+result = sum_of(xs) / count_of(xs)

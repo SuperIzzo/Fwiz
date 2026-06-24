@@ -1,0 +1,7 @@
+# Inert until collections-as-call-arguments lands (sub-bindings are numeric-only) — see Future.md. The fold itself is proven equivalent to the C++ reducer (tests.cpp).
+# count_of(xs) — element count of a seq collection, as a foldl that increments
+# the accumulator by 1 per element. SPEC definition; coexists with the C++
+# `count` fast-path and is proven equivalent. Empty collection -> 0.
+@include "count_op.fw"
+[count_of(xs) -> result]
+result = foldl(xs, count_op, 0)
