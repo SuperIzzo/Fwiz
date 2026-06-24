@@ -1,0 +1,6 @@
+# Binary fold-operator section: counting step for foldl(collection, count_op, 0).
+# Increments the accumulator by 1 per element, ignoring the element value, so
+# foldl(xs, count_op, 0) yields the element count of a seq collection.
+# One-section-per-file (stem == section name) for @include + foldl op-lookup.
+[count_op(acc, elem) -> r]
+r = acc + 1

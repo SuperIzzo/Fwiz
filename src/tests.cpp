@@ -18078,6 +18078,17 @@ void test_collections_c1_map() {
         catch (const std::exception&) { ok = false; }
         ASSERT(ok, "C1.2/B9: strict mode accepts seq literal");
     }
+    // [BLOCKING] B9 (cycle-1 review deferred fix): foldl in strict-includes mode
+    // must NOT throw StrictIncludeError at load time. foldl is a post-load
+    // builtin (is_postload_builtin), so even with an unresolved op-name the load
+    // is clean (the foldl simply stays unevaluated until a later pass / resolve).
+    {
+        bool ok = true;
+        try { FormulaSystem sys; sys.load_string("y = foldl({1, 2, 3}, add, 0)\n"); }
+        catch (const StrictIncludeError&) { ok = false; }
+        catch (const std::exception&) { /* other load issues are not the B9 concern */ }
+        ASSERT(ok, "C1.2/B9: strict mode accepts foldl(...) (no StrictIncludeError)");
+    }
 }
 
 // C1.3 — foldl post-load-only (resolve_foldl_in_equations) + collect_vars
@@ -18119,16 +18130,20 @@ void test_collections_c1_foldl() {
         sys.load_string("y = foldl(map(i, i in [1..100]), add, 0)\n");
         ASSERT_NUM(sys.resolve("y", {}), 5050.0, "C1.3: foldl(map(i,1..100), add, 0) = 5050");
     }
-    // [DESIRABLE] unknown op stays unevaluated (no section) — clean, no crash.
+    // [DESIRABLE] unknown op over a CONCRETE seq is a LOUD GUARD (gen-6 cycle 2,
+    // visionary B-2): rather than degrade silently to inert (the Cycle-1 behavior),
+    // a named op that resolves to no 2-arg section THROWS at the post-load foldl
+    // pass — surfaced so a silent-degrade cannot masquerade as a successful fold.
     {
         FormulaSystem sys;
-        sys.strict_includes_ = false;  // allow unresolved op-name without throw
-        sys.load_string("y = foldl({1,2}, no_such_op, 0)\n");
+        sys.strict_includes_ = false;  // isolate the missing-op failure (no @include noise)
         bool threw = false;
-        double got = std::numeric_limits<double>::quiet_NaN();
-        try { got = sys.resolve("y", {}); }
-        catch (const std::exception&) { threw = true; }
-        ASSERT(threw || std::isnan(got), "C1.3: unknown foldl op -> unevaluated/clean");
+        std::string msg;
+        try { sys.load_string("y = foldl({1,2}, no_such_op, 0)\n"); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "C1.3: unknown foldl op over concrete seq THROWS (loud guard)");
+        ASSERT(msg.find("no_such_op") != std::string::npos,
+               "C1.3: loud-guard error names the missing op");
     }
 
     // [BLOCKING] B7: collect_vars(map(i^2, i in [1..n])) excludes i.
@@ -18154,6 +18169,60 @@ void test_collections_c1_foldl() {
         ASSERT(vars.count("n"), "C1.3: nested free var n");
         ASSERT(vars.count("i") == 0 && vars.count("add") == 0, "C1.3: i and add both bound");
         ASSERT(vars.size() == 1, "C1.3: exactly {n}");
+    }
+}
+
+// Cycle 2 — reducer-wrapper end-to-end fold. The keystone: a foldl whose
+// collection is a VARIABLE that becomes a concrete seq only after the variable
+// is resolved (inline `xs = {...}` or a cross-file wrapper binding `sum_of(xs=..)`).
+void test_collections_reducer_wrappers() {
+    SECTION("gen-6 cycle 2: reducer-wrapper foldl over a variable-bound seq");
+
+    const std::string add_def = "[add(acc, elem) -> r]\nr = acc + elem\n";
+
+    // [BLOCKING] inline: xs = {1,2,3,4}; result = foldl(xs, add, 0) -> 10.
+    // The collection is a Var resolved to seq(...) by its own equation; the
+    // foldl must re-fold over that seq at resolve time.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = add_def;
+        sys.load_string("xs = {1,2,3,4}\nresult = foldl(xs, add, 0)\n");
+        ASSERT_NUM(sys.resolve("result", {}), 10.0,
+                   "Cycle2: inline foldl(xs={1,2,3,4}, add, 0) = 10");
+    }
+
+    // [BLOCKING] empty identity: xs = {}; foldl(xs, add, 0) -> 0 (the seed).
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = add_def;
+        sys.load_string("xs = {}\nresult = foldl(xs, add, 0)\n");
+        ASSERT_NUM(sys.resolve("result", {}), 0.0,
+                   "Cycle2: inline foldl(xs={}, add, 0) = 0 (empty identity)");
+    }
+
+    // [BLOCKING] composition: xs is a map; foldl(xs, add, 0) folds the materialized seq.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["add"] = add_def;
+        sys.load_string("xs = map(i, i in [1..5])\nresult = foldl(xs, add, 0)\n");
+        ASSERT_NUM(sys.resolve("result", {}), 15.0,
+                   "Cycle2: inline foldl(xs=map(i,1..5), add, 0) = 15");
+    }
+
+    // [BLOCKING] LOUD GUARD (visionary B-2): a CONCRETE seq + NAMED op that does
+    // not resolve to a 2-arg section must THROW, not silently degrade to inert.
+    // This makes a silent-degrade impossible to masquerade as a successful fold.
+    {
+        FormulaSystem sys;
+        sys.strict_includes_ = false;  // isolate the missing-op failure (no @include noise)
+        sys.load_string("xs = {1,2,3}\nresult = foldl(xs, missing_op, 0)\n");
+        bool threw = false;
+        std::string msg;
+        try { (void)sys.resolve("result", {}); }
+        catch (const std::exception& e) { threw = true; msg = e.what(); }
+        ASSERT(threw, "Cycle2: missing foldl op over concrete seq THROWS (loud guard)");
+        ASSERT(msg.find("missing_op") != std::string::npos,
+               "Cycle2: loud-guard error names the missing op");
     }
 }
 
@@ -19058,6 +19127,7 @@ int main() {
     test_collections_c1_map();
     test_collections_c1_foldl();
     test_collections_c1_gate_a();
+    test_collections_reducer_wrappers();
     test_combinatorics_stdlib();
     test_expectation_stdlib();
 

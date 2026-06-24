@@ -1,0 +1,5 @@
+# Binary fold-operator section: multiplication step for foldl(collection, mul, init).
+# One-section-per-file (stem == section name) so @include + foldl op-lookup
+# resolve it by name under the strict-includes default.
+[mul(acc, elem) -> r]
+r = acc * elem

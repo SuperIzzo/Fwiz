@@ -94,6 +94,20 @@ struct StrictIncludeError : std::exception {
     [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
 };
 
+// Thrown when a foldl over a CONCRETE seq names an operator that cannot be
+// resolved to a 2-arg `[op(acc, elem) -> r]` section (gen-6 cycle 2 loud guard).
+// Intentionally NOT a std::runtime_error so the solver's `catch
+// (std::runtime_error&)` sites (solve_all, try_resolve, ...) do not swallow it
+// and downgrade a genuine "op named but not found" into a silent "Cannot solve"
+// — a silent degrade-to-inert would be indistinguishable from "the fold never
+// fired". Sibling of StrictIncludeError. Distinct from the legitimate "op or
+// collection still symbolic" defer (which returns the node unevaluated, no throw).
+struct FoldOperatorError : std::exception {
+    std::string msg;
+    explicit FoldOperatorError(std::string m) : msg(std::move(m)) {}
+    [[nodiscard]] const char* what() const noexcept override { return msg.c_str(); }
+};
+
 // Thrown when `formula_depth_` reaches `max_formula_depth`. Replaces the
 // stringly-typed `msg.find("depth") != std::string::npos` substring match
 // pre-cycle-3j at the two depth-aware catch sites in solve_recursive
@@ -1651,7 +1665,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             foldl_resolved_up_to_);
     }
 
-    [[nodiscard]] ExprPtr resolve_foldl_calls(ExprPtr e) {
+    [[nodiscard]] ExprPtr resolve_foldl_calls(ExprPtr e) const {
         return tree_map(e, [&](ExprPtr node) -> ExprPtr {
             if (node->type != ExprType::FUNC_CALL || node->name != "foldl")
                 return node;
@@ -1663,7 +1677,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // the node unchanged when the shape is unsupported, the collection is not a
     // materialized seq, or the op section is missing / not a 2-arg section
     // (graceful-degrade: an unresolved foldl stays a FUNC_CALL, never mis-folds).
-    [[nodiscard]] ExprPtr try_resolve_foldl(ExprPtr node) {
+    [[nodiscard]] ExprPtr try_resolve_foldl(ExprPtr node) const {
         if (node->args.size() != 3 || !is_var(node->args[1])) return node;
         const ExprPtr coll = node->args[0];
         if (coll->type != ExprType::FUNC_CALL || coll->name != "seq") return node;
@@ -1674,7 +1688,20 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // positional args as substitutable placeholders.
         std::string acc_param, elem_param;
         ExprPtr op_body = lookup_binary_op_body(op_name, acc_param, elem_param);
-        if (!op_body) return node;  // unknown / non-binary op -> unevaluated
+        if (!op_body) {
+            // LOUD GUARD (visionary B-2): the collection is a CONCRETE seq and the
+            // op is NAMED, yet no binary-op section resolves. This is a genuine
+            // resolve-time error (op named but not found / not a 2-arg section),
+            // NOT the legitimate "op/collection still symbolic" defer (that path
+            // returns early above on a non-seq collection). Surfacing it makes a
+            // silent-degrade-to-inert impossible to masquerade as a successful
+            // fold — see lookup_binary_op_body for why a missing op section can
+            // arise (op file not @include'd under the strict-includes default).
+            throw FoldOperatorError(
+                "foldl: collection is concrete but operator section '" + op_name
+                + "' could not be resolved (not a 2-arg [" + op_name
+                + "(acc, elem) -> r] section, or its file is not @include'd)");
+        }
 
         ExprPtr acc = node->args[2];  // init seed
         for (ExprPtr elem : coll->args) {
@@ -1692,25 +1719,32 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // as a sub-system (stdlib @include / custom_function_defs_). Self-contained:
     // builds a throwaway sub-system from the section lines and reads the equation.
     [[nodiscard]] ExprPtr lookup_binary_op_body(
-            const std::string& name, std::string& acc_param, std::string& elem_param) {
+            const std::string& name, std::string& acc_param, std::string& elem_param) const {
         const Section* sec = nullptr;
         for (const auto& s : sections_)
             // cppcheck-suppress useStlAlgorithm
             if (s.name == name) { sec = &s; break; }
 
-        std::shared_ptr<FormulaSystem> owned;
+        std::shared_ptr<FormulaSystem> parse_sub;
         if (!sec) {
             // Try loading as a sub-system (stdlib / custom_function_defs_).
-            // Catch std::exception (covers both std::runtime_error AND the
-            // sibling StrictIncludeError, which is NOT a runtime_error): an
-            // un-findable op section degrades to nullptr -> unevaluated foldl,
-            // never a thrown load-time error.
+            // Two catch clauses (not a wide catch(std::exception&)) so that
+            // std::bad_alloc and other non-resolution failures are NOT swallowed:
+            //  - std::runtime_error: the legacy "file not found / cannot open"
+            //    family from load_sub_system.
+            //  - StrictIncludeError: the sibling exception (NOT a runtime_error)
+            //    thrown under the strict-includes default when the op file was
+            //    not @include'd.
+            // Either way an un-findable op section degrades to nullptr ->
+            // unevaluated foldl, never a thrown load-time error.
             try {
                 const FormulaSystem& sub = load_sub_system(name);
                 for (const auto& s : sub.sections_)
                     // cppcheck-suppress useStlAlgorithm
                     if (s.name == name) { sec = &s; break; }
-            } catch (const std::exception&) {
+            } catch (const std::runtime_error&) {
+                return nullptr;
+            } catch (const StrictIncludeError&) {
                 return nullptr;
             }
         }
@@ -1719,9 +1753,16 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         acc_param  = sec->positional_args[0];
         elem_param = sec->positional_args[1];
 
-        // Build a throwaway sub-system from the section body (applying the
+        // Build a throwaway parse sub-system from the section body (applying the
         // return_var `=`-sugar) and read the RHS of the return_var equation.
-        owned = std::make_shared<FormulaSystem>();
+        // Arena lifetime: `parse_sub->load_lines` does NOT open its own
+        // ExprArena::Scope, so the parsed equation Expr nodes are allocated in
+        // the CALLER's currently-active arena (the foldl pass runs under THIS
+        // system's `ExprArena::Scope`). The returned `eq.rhs` therefore points
+        // into the caller's arena, which outlives `parse_sub` — SAFE. `parse_sub`
+        // itself is a throwaway holding only the equations vector; it is
+        // destroyed at function return, but the Expr nodes it references are not.
+        parse_sub = std::make_shared<FormulaSystem>();
         auto sugared = sec->lines;
         for (auto& ln : sugared) {
             auto t = trim(ln);
@@ -1729,11 +1770,11 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 ln = sec->return_var + " " + t;
         }
         try {
-            owned->load_lines(sugared);
+            parse_sub->load_lines(sugared);
         } catch (const std::runtime_error&) {
             return nullptr;
         }
-        for (const auto& eq : owned->equations)
+        for (const auto& eq : parse_sub->equations)
             // cppcheck-suppress useStlAlgorithm
             if (eq.lhs_var == sec->return_var) return eq.rhs;
         return nullptr;
@@ -5251,17 +5292,77 @@ private:
         throw std::runtime_error("Cannot solve for '" + target + "'");
     }
 
+    // Resolve a free variable to its concrete seq value, if it has one. A var is
+    // "seq-valued" when its defining equation's RHS simplifies to a seq(...) node
+    // (e.g. `xs = {1,2,3}`). Returns the seq ExprPtr or nullptr. `visited` guards
+    // against self-reference. Pure query — reads `equations`, allocates only via
+    // simplify.
+    [[nodiscard]] ExprPtr seq_value_of(const std::string& v,
+                                       const std::set<std::string>& visited) const {
+        if (visited.count(v)) return nullptr;
+        for (const auto& eq : equations) {
+            if (eq.lhs_var != v || eq.condition) continue;
+            ExprPtr s = simplify(eq.rhs);
+            if (s->type == ExprType::FUNC_CALL && s->name == "seq") return s;
+        }
+        return nullptr;
+    }
+
+    // Substitute every seq-valued free var in `expr` with its concrete seq, then
+    // re-fold any now-concrete foldl via the post-load op-lookup path. Returns
+    // `expr` unchanged (pointer-identity) when nothing applies. See try_resolve
+    // for the rationale (reducer-wrapper re-fold at the resolve boundary).
+    [[nodiscard]] ExprPtr refold_seq_valued_collections(
+            const ExprPtr& expr, const std::map<std::string, double>& bindings,
+            const std::set<std::string>& visited) const {
+        if (!contains_foldl(expr)) return expr;  // fast path: no foldl, nothing to do
+        std::set<std::string> vars;
+        collect_vars(expr, vars);
+        ExprPtr out = expr;
+        for (const auto& v : vars) {
+            if (bindings.count(v)) continue;  // already a numeric binding
+            if (ExprPtr seq = seq_value_of(v, visited))
+                out = substitute(out, v, seq);
+        }
+        if (out == expr) return expr;  // no seq-valued var substituted
+        return resolve_foldl_calls(out);
+    }
+
+    // True iff `expr` contains a foldl FUNC_CALL anywhere in its tree.
+    [[nodiscard]] static bool contains_foldl(const ExprPtr& expr) {
+        if (!expr) return false;
+        if (expr->type == ExprType::FUNC_CALL && expr->name == "foldl") return true;
+        return std::any_of(expr->args.begin(), expr->args.end(),
+                           [](const ExprPtr& a) { return contains_foldl(a); });
+    }
+
     [[nodiscard]] bool try_resolve(const ExprPtr& expr, const std::string& target,
                      std::map<std::string, double>& bindings,
                      std::set<std::string>& visited, int depth,
                      bool& had_nan_inf, std::set<std::string>& missing,
                      DeadEndSet& dead_ends) const {
         enforce_solve_budget(); // Part C: insurance — should never trip given Part A
-        // Resolve all free variables in the expression
-        std::set<std::string> vars;
-        collect_vars(expr, vars);
 
-        ExprPtr resolved = expr;
+        // Reducer-wrapper re-fold (gen-6 cycle 2): a `foldl(xs, op, init)` whose
+        // collection `xs` is a VARIABLE that resolves to a concrete seq (its own
+        // equation `xs = {...}`, or a call binding substituted in by the wrapper
+        // path) cannot be resolved numerically — `xs` is a collection, not a
+        // double, so the free-variable loop below would throw "no value for 'xs'".
+        // foldl is post-load-only by design, so the foldl pass already ran once at
+        // load time when `xs` was still a free Var (and stayed unevaluated). Here,
+        // at the resolve-time substitution boundary, substitute each seq-valued
+        // free var with its concrete seq SYMBOLICALLY, then re-fold via the SAME
+        // post-load path (resolve_foldl_calls -> try_resolve_foldl ->
+        // lookup_binary_op_body). This reuses the proven op-lookup machinery with
+        // no new state. The loud guard in try_resolve_foldl fires here if the op
+        // is named but unresolvable (see B-2). No-op (pointer-equality
+        // short-circuit) when `expr` contains no foldl over a seq-valued var.
+        ExprPtr resolved = refold_seq_valued_collections(expr, bindings, visited);
+
+        // Resolve all free variables in the (possibly re-folded) expression.
+        std::set<std::string> vars;
+        collect_vars(resolved, vars);
+
         for (auto& v : vars) {
             if (v == target) return false;
             if (auto it = bindings.find(v); it != bindings.end()) {

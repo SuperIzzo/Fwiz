@@ -1,0 +1,6 @@
+# Binary fold-operator section: addition step for foldl(collection, add, init).
+# One-section-per-file (stem == section name) so @include + foldl op-lookup
+# resolve it by name under the strict-includes default. foldl threads
+# (acc, elem) through this body per collection element (left-fold).
+[add(acc, elem) -> r]
+r = acc + elem
