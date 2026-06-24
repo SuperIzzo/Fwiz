@@ -18451,6 +18451,159 @@ void test_collections_cycle2b_equivalence_proof() {
     }
 }
 
+// ============================================================================
+// gen-6 Cycle 3 — collections-as-call-arguments + the NAMED-SECTION equivalence
+// proof (the arc keystone). Cycle 2b proved the WORKING direct-foldl path
+// (`foldl(seq, op, init)`) equivalent to the C++ reducers. This cycle wires
+// seq-shaped call arguments through the FORWARD-resolve path so the named .fw
+// wrappers (`sum_of(xs)`/`product_of`/`count_of`/`mean_of`) — called WITH a
+// collection arg — resolve, and EXTENDS the equivalence proof onto that named-
+// section path. The completion criterion: `[sum_of(xs)]=foldl(xs,add,0)`
+// callable AND proven equivalent to the C++ `sum` fast-path.
+//
+// The named reducers are loaded from the REAL stdlib/collections/*.fw files
+// (base_dir = "stdlib/collections", @include resolves add/mul/count_op/sum_of/
+// count_of), so this test pins the shipped spec, not an in-test mirror.
+// ============================================================================
+
+namespace {
+
+// Resolve `<reducer>(seq(<elems>))` via the real stdlib/collections/*.fw wrapper.
+// base_dir points at the stdlib dir so the wrapper's @include resolves. Returns
+// the numeric solution.
+double named_reducer_resolve(const std::string& reducer, const std::string& elems) {
+    FormulaSystem sys;
+    sys.base_dir = "stdlib/collections";
+    sys.load_string("@include \"" + reducer + ".fw\"\n"
+                    "y = " + reducer + "(seq(" + elems + "))\n", "<named-reducer>");
+    return sys.resolve("y", {});
+}
+
+// Comma-join the C++ aggregation domain "<elems>" into a seq literal body and
+// a matching `[1..N]`-style explicit sequence: we already have the literal
+// elements, so the C++ oracle uses an explicit seq via the aggregation iterator
+// `sum(e, e in {...})`? No — the C++ reducer takes a range/iterator. For the
+// equivalence oracle we instead compare the named reducer against the C++
+// reducer applied to the SAME explicit element multiset, which the aggregation
+// surface expresses as `sum(v, v in {e1,e2,...})` (array-literal domain).
+double cpp_reducer_over(const std::string& reducer, const std::string& elems) {
+    // C++ fast-path reducers over an explicit array-literal domain.
+    if (reducer == "count")
+        return ev("count(v in {" + elems + "})");
+    return ev(reducer + "(v, v in {" + elems + "})");
+}
+
+}  // namespace
+
+void test_collections_cycle3_named_reducers() {
+    SECTION("gen-6 cycle 3: collections-as-call-arguments + named-section equivalence");
+
+    ExprArena arena;
+    ExprArena::Scope scope(arena);
+
+    // ---- [BLOCKING] RED->GREEN keystone: the named .fw reducers, called WITH a
+    // seq collection, now resolve. (Baseline: "Cannot solve for 'y'".)
+    ASSERT_NUM(named_reducer_resolve("sum_of", "1,2,3"), 6.0,
+               "C3 keystone: sum_of(seq(1,2,3)) = 6");
+    ASSERT_NUM(named_reducer_resolve("product_of", "1,2,3,4"), 24.0,
+               "C3 keystone: product_of(seq(1,2,3,4)) = 24");
+    ASSERT_NUM(named_reducer_resolve("count_of", "1,2,3"), 3.0,
+               "C3 keystone: count_of(seq(1,2,3)) = 3");
+    ASSERT_NUM(named_reducer_resolve("mean_of", "1,2,3,4"), 2.5,
+               "C3 keystone: mean_of(seq(1,2,3,4)) numeric = 2.5");
+
+    // ---- [BLOCKING] mean_of is an EXACT structural rational, NOT a float. The
+    // composed wrapper (sum_of/count_of) collapses to 10/4 -> 5/2 via the exact
+    // rational path, matching the C++ mean fast-path. solved_symbolic_ carries
+    // the structural form.
+    {
+        FormulaSystem sys;
+        sys.base_dir = "stdlib/collections";
+        sys.load_string("@include \"mean_of.fw\"\ny = mean_of(seq(1,2,3,4))\n", "<mean>");
+        (void)sys.resolve("y", {});
+        auto it = sys.solved_symbolic_.find("y");
+        const bool has_sym = it != sys.solved_symbolic_.end() && it->second != nullptr;
+        ASSERT(has_sym, "C3: mean_of carries a structural symbolic form");
+        const std::string mean_str = has_sym ? expr_to_string(it->second) : "";
+        ASSERT_EQ(mean_str, "5 / 2",
+                  "C3 keystone: mean_of(seq(1,2,3,4)) is exact rational 5 / 2 (NOT 2.5)");
+        ASSERT_EQ(mean_str, ss("mean(v, v in {1,2,3,4})"),
+                  "C3: named mean_of == C++ mean structurally (5 / 2)");
+    }
+
+    // ---- [BLOCKING] NAMED-SECTION EQUIVALENCE PROOF (the arc completion
+    // criterion). Each named .fw reducer ≡ its C++ fast-path across the L1 edge
+    // cases + a representative L2 sweep. Oracle: numeric equality (concrete
+    // inputs collapse to a scalar). Pairs: sum_of≡sum, product_of≡product,
+    // count_of≡count, mean_of≡mean.
+    {
+        // L1 edge cases: singletons + the empty collection identities.
+        // sum_of/count_of empty -> 0; product_of empty -> 1.
+        ASSERT_NUM(named_reducer_resolve("sum_of", ""), 0.0,
+                   "L1: sum_of(seq()) == C++ sum empty identity (0)");
+        ASSERT_NUM(named_reducer_resolve("product_of", ""), 1.0,
+                   "L1: product_of(seq()) == C++ product empty identity (1)");
+        ASSERT_NUM(named_reducer_resolve("count_of", ""), 0.0,
+                   "L1: count_of(seq()) == C++ count empty identity (0)");
+        ASSERT_NUM(named_reducer_resolve("sum_of", "7"),
+                   cpp_reducer_over("sum", "7"), "L1: sum_of(seq(7)) == C++ sum");
+        ASSERT_NUM(named_reducer_resolve("product_of", "7"),
+                   cpp_reducer_over("product", "7"), "L1: product_of(seq(7)) == C++ product");
+        ASSERT_NUM(named_reducer_resolve("count_of", "7"),
+                   cpp_reducer_over("count", "7"), "L1: count_of(seq(7)) == C++ count");
+
+        // L2 sweep: a representative multiset across all 4 reducer pairs.
+        const std::vector<std::string> multisets = {
+            "1,2,3", "2,4,6,8", "1,1,1,1,1", "3,1,4,1,5,9", "10,20,30,40",
+        };
+        int cells = 0;
+        for (const auto& ms : multisets) {
+            ASSERT_NUM(named_reducer_resolve("sum_of", ms),
+                       cpp_reducer_over("sum", ms),
+                       "L2 sum_of≡sum over {" + ms + "}");
+            ASSERT_NUM(named_reducer_resolve("product_of", ms),
+                       cpp_reducer_over("product", ms),
+                       "L2 product_of≡product over {" + ms + "}");
+            ASSERT_NUM(named_reducer_resolve("count_of", ms),
+                       cpp_reducer_over("count", ms),
+                       "L2 count_of≡count over {" + ms + "}");
+            ASSERT_NUM(named_reducer_resolve("mean_of", ms),
+                       cpp_reducer_over("mean", ms),
+                       "L2 mean_of≡mean over {" + ms + "}");
+            cells++;
+        }
+        ASSERT(cells == 5, "L2: named-section sweep covered 5 multisets x 4 reducers");
+    }
+
+    // ---- [BLOCKING] LOUD GUARD: a seq-arg call to a section whose body cannot
+    // be inlined (its output equation does not define query_var) THROWS — it
+    // must never silently fall through to the numeric channel and yield a wrong
+    // answer. This guards the visionary B-2 invariant.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["badsec"] =
+            "[badsec(xs) -> result]\nother = foldl(xs, add, 0)\n";
+        sys.custom_function_defs_["add"] =
+            "[add(acc, elem) -> result]\nresult = acc + elem\n";
+        sys.load_string("y = badsec(seq(1,2,3))\n", "<badsec>");
+        bool threw = false;
+        try { (void)sys.resolve("y", {}); }
+        catch (const FoldOperatorError&) { threw = true; }
+        ASSERT(threw, "C3 loud-guard: non-inlinable seq-arg section throws FoldOperatorError (no silent numeric fallback)");
+    }
+
+    // ---- [REGRESSION] scalar-arg calls are UNTOUCHED by the seq guard (the
+    // guard fires only when a binding is seq-shaped). An ordinary numeric call
+    // still resolves through the numeric sub-binding channel.
+    {
+        FormulaSystem sys;
+        sys.custom_function_defs_["square"] = "[square(x) -> result]\nresult = x*x\n";
+        sys.load_string("y = square(5)\n", "<scalar>");
+        ASSERT_NUM(sys.resolve("y", {}), 25.0,
+                   "C3 regression: scalar-arg call square(5) = 25 (seq guard not fired)");
+    }
+}
+
 // C1.4 — post-load pass order map -> foldl -> aggregate. The gate-(a)
 // regression proof: a formula-bodied sum(map(score(i), ...)) MUST fold.
 void test_collections_c1_gate_a() {
@@ -19354,6 +19507,7 @@ int main() {
     test_collections_c1_gate_a();
     test_collections_reducer_wrappers();
     test_collections_cycle2b_equivalence_proof();
+    test_collections_cycle3_named_reducers();
     test_combinatorics_stdlib();
     test_expectation_stdlib();
 

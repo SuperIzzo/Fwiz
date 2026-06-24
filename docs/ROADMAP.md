@@ -9,65 +9,40 @@ Multi-cycle campaign planning for Fwiz. Active arc + queued arcs + completed arc
 > a single Future.md item, narrower than the project vision. Arcs sit between
 > tactics (single-cycle implementation) and vision (universal math inference engine).
 
-<!-- last-updated: 2026-06-23 -->
+<!-- last-updated: 2026-06-24 -->
 <!-- selected-by-cycle: 2026-06-23 (user-directed gen-6 continuation — "Collections & first-class aggregation": map/fold primitives + reducer stdlib defs + equivalence proof; coexist with C++ fast-paths) -->
 <!-- generation: 6 -->
 
 ## Active arc
 
-### Arc: Collections & first-class aggregation (gen-6 continuation)
-
-**Theme:** Complete the collection ontology designed alongside the bounded-aggregation arc.
-Introduce `map` (transform a domain → a `{}` collection) and a `fold`/`reduce` primitive, then
-DEFINE the six reducers (`sum`/`product`/`count`/`max`/`min`/`mean`) in `.fw` stdlib on top of them
-— and PROVE each `.fw` definition equivalent to its C++ fast-path. This turns cycle-3b's AC8
-assertion ("built-ins are optimized cases of what users can write") into a **tested invariant**: the
-C++ reducer table becomes a blessed optimization of a stdlib spec, with a proof the optimization is
-faithful (and a regression guard if `fold_aggregate` ever diverges from the spec).
-
-**Started:** 2026-06-23 (user-directed, design conversation)
-**Estimated cycles:** ~3 (provisional — DESIGN refines)
-**Status:** RESEARCH next
-
-**Locked decisions (user, 2026-06-23):**
-- **Coexist** — the C++ reducers STAY as the fast-path; they carry static-domain unroll + the
-  reverse-solve keystone + exact-rational mean (non-negotiable to keep).
-- **Complete stdlib** — `map` + `fold` ship; all six reducers get canonical `.fw` definitions.
-- **Prove equivalence** — `.fw` definition ≡ C++ fast-path, *tested* (differential sweep +
-  `fingerprint_expr` symbolic equality; MUST cover empty-domain identities (product→1, sum→0),
-  exact-rational mean (`mean(i,i in [1..4])` → `5/2` not `2.5`), and max/min-unevaluated-on-empty).
-
-**Provisional milestones (DESIGN refines):**
-- [ ] **Cycle 1 — `map` + `fold` primitives + `{}` collections.** `map(body, i in [dom])` → `{}`
-      collection (materialized — working hypothesis; design trio ratifies materialized-vs-fused);
-      `fold(coll, op, init)` / `reduce` collapse primitive; `{}` ordered-collection literal made
-      first-class (not yet implemented — only `[..]` ranges are). The iterator-form reducers desugar
-      to `reducer(map(...))`, with the C++ fast-path intercepting the six known reducers BEFORE the
-      desugar (keeps production fast + reverse-solvable).
-- [ ] **Cycle 2 — stdlib reducer definitions + equivalence proof.** `[sum(xs)] = fold(xs,+,0)`,
-      `[product(xs)] = fold(xs,*,1)`, `[mean(xs)] = sum(xs)/count(xs)`, etc. Each ships with a
-      differential equivalence test vs its C++ fast-path across a domain/body sweep + the edge cases.
-- [ ] **Cycle 3 (provisional) — cartesian / dependent iteration.** The harder collection-ontology
-      pieces (multi-iterator; `sum(combat(atk=[def..6], def=[1..6]))` dependent ranges) PNF multi-card
-      combinatorics needs. Scope confirmed at DESIGN; may split or defer.
-
-**Vision alignment:** STRONG. Reduces the C++ core's conceptual weight (the six reducers become
-provably-faithful optimizations of `.fw` definitions) while making the stdlib complete and
-self-describing — the canonical "tiny fast core, everything expressible in `.fw`" shape, now with a
-proof. `map`/`fold`/`{}` are the foundational primitives the rest of the collection ontology
-(cartesian, sequences) builds on.
-
-**Why this arc was chosen:** user-directed continuation of the gen-6 collection-ontology design
-(`map`/`{}`/cartesian were designed in the same conversation and parked as "master-plan cycles 2+").
-Classified as **gen-6 continuation, not a fresh gen-7 arc** — it completes that design rather than
-opening a new direction, so the `/blind-spot-sweep` precondition (scoped to new-direction work) does
-not gate it. The sweep stays queued before true-gen-7.
-
-**Reopen / extend trigger:** the **full-move** option (delete the C++ reducer table once `map`/`fold`
-demonstrably preserve unroll + reverse-solve + exact-mean with no perf regression) promotes if the
-equivalence proof shows the `.fw` path can carry the keystones.
+_(No active arc — Collections & first-class aggregation arc complete. Next: LLM-ergonomics benchmark or user direction.)_
 
 ## Recently completed
+
+### Arc: Collections & first-class aggregation (gen-6 continuation) ✓ COMPLETE 2026-06-24
+
+**Theme:** Complete the collection ontology by introducing `map` / `foldl` / `{}` literals, defining the six reducers in `.fw` stdlib on top of them, and PROVING each `.fw` definition equivalent to its C++ fast-path — elevating cycle-3b's AC8 assertion to a tested invariant.
+
+**Started:** 2026-06-23 (user-directed, design conversation)
+**Cycles:** 1 (Cycle 1) + 1 (Cycle 2a — foldl inliner + fold-expression AC8 proof) + 1 (Cycle 2b — equivalence proof, both fold-expression and named-section paths) + 1 (Cycle 3 — collections-as-call-arguments). Tests 3988 → 4176 (+188).
+**Status:** ✓ COMPLETE 2026-06-24
+
+**Milestones:**
+- [x] **Cycle 1 — `map` + `foldl` primitives + `{}` collections.** `seq` literal (`{1,2,3}` → FUNC_CALL "seq"), `map(body, i in [dom])` → materializes seq, `foldl(coll, op, init)` post-load fold via named binary section. `stdlib/collections/operators.fw` (`add`/`mul`). Post-load order: map → foldl → aggregate. All 6 named-reducer stdlib files defined (with "Inert until Cycle 3" headers).
+- [x] **Cycle 2a — equivalence proof (fold-expression path).** AC8 tested: `[sum_of(xs)] = foldl(xs, add, 0)` ≡ C++ `sum` via differential sweep across domain/body sweep + edge cases. `unfold_formula_call_body` extended to inline nested formula calls stored as `_fcN` placeholders.
+- [x] **Cycle 2b — equivalence proof (named-section path) + stdlib activation.** Named-section reducers callable with `{}` collections (`sum_of({1,2,3})` = 6; `mean_of({1,2,3,4})` = `5/2`). AC8 invariant tested on BOTH fold-expression and named-section paths. Stdlib "Inert" headers removed.
+- [x] **Cycle 3 — collections-as-call-arguments (arc completion keystone).** `call_has_seq_arg` gate + `unfold_formula_call_body` wired to forward-resolve paths in `solve_recursive` and `solve_all`. `FoldOperatorError` loud guard (never silent numeric fallback). Full named-section equivalence proof: `sum_of ≡ sum`, `product_of ≡ product`, `count_of ≡ count`, `mean_of ≡ mean`. `foldr` attempted and correctly diagnosed as non-equivalent to `foldl(reverse(xs), ...)` for non-commutative ops — deferred to Future #106.
+
+**Vision alignment:** STRONG. The six C++ reducers are now provably-faithful optimizations of user-writable `.fw` definitions — the canonical "tiny fast core, everything expressible in `.fw`" shape with a regression-guarded proof.
+
+**Deferred / out of scope:**
+- `foldr` → Future #106 (needs `flip`/swap-args combinator — see impl log AE-1).
+- `max_of`/`min_of` → Future #109 (need `head`/`tail` element access).
+- Cartesian / dependent iteration → Future #103.
+
+**Reopen / extend trigger:** the **full-move** option (delete the C++ reducer table once the `.fw` path demonstrably preserves unroll + reverse-solve + exact-mean with no perf regression) is the natural next step if the equivalence proof confidence warrants it.
+
+---
 
 ### Arc: Bounded aggregation & combinatorics (PNF-driven, gen-6) ✓ COMPLETE 2026-06-22
 
@@ -303,6 +278,7 @@ See `docs/COMPLETED.md` for the full arc-exit summary.
 - **Generation 5 arc complete (2026-06-06)**: Types as Named Sets shipped cycles 3a/3b/3c (+ 3d delivered via 3h/3i function-section reverse-solve). Future #7b FULL (dim exponent algebra), #82, #90/#91/#92 closed; #84 NumberDomain enum deleted in the 2026-06-21 consolidation cleanup cycle. Dims/sets/predicates/function-sections all unified under named-set membership. Only #81/#3e (named compound-dim aliases) remain deferred-pull. A consolidation/cleanup cycle (2026-06-21, counter=45) cleared accumulated debt (blind-spot sweep all-PASS, compact-pass, metrics-ledger anti-drift) before the next arc.
 - **Generation 6 (2026-06-21, user-directed from external requirements doc)**: Bounded aggregation & combinatorics arc selected — NOT via plan-ideator/plan-critic (the arc shape is externally fixed by `fwiz-feature-proposal.md`, a prioritized real-world requirements pitch from the PNF card-game project). First arc seeded by an outside consumer with concrete validation targets (the PNF Monte-Carlo sim). Two parallel researchers (internal substrate + external CAS/math) independently converged on the headline finding: **P0b arbitrary-precision integers is NOT needed** — every 54-card combinatorial value fits in double exactly (max C(54,27)≈1.95e15 < 2^53). The arc collapsed from the proposal's feared 4-5 cycles (incl. a big-int subsystem) to **3 cycles, ONE core addition** (P0a bounded aggregation as a vec/mat-style FUNC_CALL, eager-fold-then-standard-solver) + pure `.fw` stdlib (P1a combinatorics, P1b expectation). LLM-ergonomics benchmark stays queued (its "Types arc completes" trigger fired, but the user preempted with the PNF arc — more concrete external signal). RESEARCH complete; DESIGN next.
 - **Generation 6 arc complete + continuation selected (2026-06-23)**: Bounded aggregation & combinatorics arc shipped all cycles (1+2+2a+3); keystone dogfooded vs the PNF sim (exact). `@include` (Future #80, M1+M2+M3) shipped as an interleaved infrastructure side-quest (explicit-include default, `cd6867f`). User then directed a **gen-6 continuation arc — "Collections & first-class aggregation"** from a design conversation (not `/plan-campaign`; the shape was converged in-conversation, divergent ideation would be artificial). Decision locked: introduce `map` + `fold` primitives + first-class `{}` collections, define the six reducers in `.fw` stdlib on top, and PROVE each `.fw` def equivalent to its C++ fast-path (coexist, not full-move — the C++ reducers keep unroll + reverse-solve + exact-mean). Strengthens cycle-3b's AC8 from assertion to tested invariant. Classified as gen-6 continuation (map/`{}`/cartesian were designed in the gen-6 collection-ontology conversation and parked as master-plan cycles 2+), so the `/blind-spot-sweep` hard precondition (scoped to genuinely-new-direction gen-7 work) does not gate it; the sweep stays queued before true-gen-7. Open design question for the DESIGN trio: `map` materialized (`{}` collection — user/orch lean, "stdlib as complete as possible") vs fused (no materialization, closer to today's direct unroll).
+- **Generation 6 continuation arc complete (2026-06-24)**: Collections & first-class aggregation arc shipped 4 cycles (Cycle 1 seq/map/foldl primitives; Cycle 2a fold-expression AC8 proof; Cycle 2b named-section activation; Cycle 3 collections-as-call-arguments). Tests 3988 → 4176 (+188). Keystone: `sum_of({1,2,3}) = 6`, `mean_of({1,2,3,4}) = 5/2` (exact) — named-section reducers proven ≡ C++ fast-paths on BOTH fold-expression and named-section paths. `call_has_seq_arg` gate + `unfold_formula_call_body` wired to forward-resolve paths; `FoldOperatorError` loud guard; `prepare_sub_bindings` stays numeric-only by contract. `foldr` correctly diagnosed as non-equivalent to `foldl(reverse(xs))` for non-commutative ops — deferred to Future #106. Generation 6 now fully complete. Next candidates: `/blind-spot-sweep` (hard precondition before true gen-7 work) + LLM-ergonomics benchmark (queued arc, "Types arc completes" trigger already fired).
 
 ## Arc entry format
 

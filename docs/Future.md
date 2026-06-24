@@ -78,9 +78,9 @@ multi-branch formula calls.
 
 ## 106. `foldr` stdlib definition — PARKED
 
-**Surfaced gen-6 Collections Cycle 1 (2026-06-24).** `foldr(xs, op, init) = foldl(reverse(xs), op, init)` — right-fold as a stdlib derivation. Requires `reverse` on `seq` nodes (element order inversion) and an alias `foldr` section wrapping `foldl`. No C++ changes; pure `.fw`.
+**Surfaced gen-6 Collections Cycle 1 (2026-06-24); trigger refined Cycle 3 (2026-06-24).** True right-fold is NOT `foldl(reverse(xs), op, init)` — `reverse` only flips element order, not the `(acc op elem)` orientation. `foldr(sub, {1,2,3}, 0)` should give `1-(2-(3-0)) = 2`; `foldl(reverse({1,2,3}), sub, 0)` gives `((0-3)-2)-1 = -6`. A correct `foldr` requires `foldr(f, z, xs) = foldl(flip(f), z, reverse(xs))` — where `flip` swaps the accumulator and element arguments. The `reverse` builtin was prototyped and reverted (unused otherwise — would ship an untested primitive). No C++ changes needed; pure `.fw` once `flip`/swap-args is in scope.
 
-**Trigger:** user needs right-fold semantics, OR Collections Cycle 3 max/min `.fw` spec needs tail-recursion with `foldr`.
+**Trigger:** reopen when a `flip`/swap-args combinator OR a native right-fold is in scope; OR when a user reports that `foldl(reverse(xs), sub, 0)` gives a surprising result and expects true right-fold semantics.
 
 ## 107. `{1..6}` range notation — eager `seq` materialization — PARKED
 

@@ -1,8 +1,8 @@
-# Inert until collections-as-call-arguments lands (sub-bindings are numeric-only) — see Future.md. The fold itself is proven equivalent to the C++ reducer (tests.cpp).
 # sum_of(xs) — sum of a seq collection, as a foldl over the add operator.
-# This is the SPEC definition: it coexists with the C++ `sum` fast-path and is
-# proven equivalent to it (see the equivalence proof in src/tests.cpp). Empty
-# collection -> 0 (the add identity / fold seed).
+# Callable with a seq argument (collections-as-call-arguments, gen-6 cycle 3).
+# Coexists with the C++ `sum` fast-path and is proven equivalent to it (named-
+# section equivalence proof in src/tests.cpp). Empty collection -> 0 (the add
+# identity / fold seed).
 @include "add.fw"
 [sum_of(xs) -> result]
 result = foldl(xs, add, 0)

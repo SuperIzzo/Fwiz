@@ -2157,12 +2157,38 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // `iff` branches), only the FIRST matching equation is used. This
     // silently uses one branch's derivative. See Future #51 for the
     // multi-branch follow-up.
-    [[nodiscard]] ExprPtr unfold_formula_call_body(const FormulaCall& call) const {
+    [[nodiscard]] ExprPtr unfold_formula_call_body(
+            const FormulaCall& call,
+            bool inline_nested_collection_calls = false) const {
         try {
             auto& sub_sys = load_sub_system(call.file_stem);
             for (auto& eq : sub_sys.equations) {
                 if (eq.lhs_var != call.query_var) continue;
                 ExprPtr unfolded = eq.rhs;
+                // Re-inline any nested formula calls the sub captured at parse
+                // time (a COMPOSED body like mean_of's `sum_of(xs) / count_of(xs)`
+                // is stored as `_fc1 / _fc0` with the two calls in formula_calls).
+                // For each, propagate THIS call's bindings into the nested call's
+                // bindings (so `xs` resolves to the parent's seq), recursively
+                // unfold it, and substitute the body for its `_fcN` placeholder.
+                //
+                // GATED (gen-6 cycle 3 review fix B): this nested re-inline runs
+                // ONLY for the collection splice sites (try_formula / FORMULA_FWD),
+                // which pass `true`. The DERIVE callers (resolve_diff_calls /
+                // resolve_integral_calls) leave it `false` — they take the
+                // pre-cycle-3 single-equation unfold and must not silently gain
+                // composed-body re-inlining (a contract hazard once diff/integral
+                // learn foldl/collections).
+                if (inline_nested_collection_calls) {
+                    for (const auto& nested : sub_sys.formula_calls) {
+                        FormulaCall n = nested;
+                        for (auto& [nv, ne] : n.bindings)
+                            for (const auto& [sv, pe] : call.bindings)
+                                ne = substitute(ne, sv, pe);
+                        if (ExprPtr nbody = unfold_formula_call_body(n, true))
+                            unfolded = substitute(unfolded, nested.output_var, nbody);
+                    }
+                }
                 for (auto& [sv, pe] : call.bindings)
                     unfolded = substitute(unfolded, sv, pe);
                 for (auto& [k, v] : sub_sys.defaults) {
@@ -3317,6 +3343,35 @@ private:
                 try {
                     formula_depth_++;
                     struct DepthGuard { ~DepthGuard() { formula_depth_--; } } const guard;
+                    // Collections-as-call-arguments (gen-6 cycle 3): a seq-shaped
+                    // binding can't flow through the numeric sub-binding channel.
+                    // Inline the section body so the seq is carried as an ExprPtr,
+                    // re-fold the concrete foldl, then resolve in the parent scope.
+                    if (call_has_seq_arg(*c.call)) {
+                        ExprPtr body = unfold_formula_call_body(*c.call, true);
+                        if (!body)  // LOUD GUARD: never silent-fallback to numeric
+                            throw FoldOperatorError(c.call->file_stem + ": collection argument could "
+                                                    "not be inlined (no matching section output equation)");
+                        // unfold_formula_call_body(true) already re-inlined any
+                        // nested section calls (composed bodies like mean_of);
+                        // only the direct foldl(seq,op,init) remains to fold here.
+                        body = resolve_foldl_calls(body);
+                        bool nan_inf = false;
+                        auto b = bindings;
+                        if (try_resolve(body, target, b, visited, depth, nan_inf, missing, dead_ends)) {
+                            const double val = b.at(target);
+                            if (std::any_of(results.begin(), results.end(),
+                                    [val](double r) { return std::abs(r - val) < EPSILON_ZERO; }))
+                                return false;
+                            auto gb = bindings; gb[target] = val;
+                            if (std::any_of(global_conditions.begin(), global_conditions.end(),
+                                    [&gb](const Condition& gc) { return !check_condition(gc, gb); }))
+                                return false;
+                            results.push_back(val);
+                        }
+                        if (nan_inf) had_nan_inf = true;
+                        return false;
+                    }
                     auto sub_binds = prepare_sub_bindings(*c.call, bindings, visited, depth,
                                                           "", true, &dead_ends);
                     auto& sub_sys = load_sub_system(c.call->file_stem);
@@ -5137,6 +5192,23 @@ private:
             try {
                 formula_depth_++;
                 struct DepthGuard { ~DepthGuard() { formula_depth_--; } } const guard;
+                // Collections-as-call-arguments (gen-6 cycle 3): a seq-shaped
+                // binding cannot flow through the numeric sub-binding channel
+                // (prepare_sub_bindings would evaluate it to a double and drop
+                // it). Inline the section body so the seq is carried as an
+                // ExprPtr, then re-fold the now-concrete foldl(seq, op, init)
+                // and resolve in the parent scope.
+                if (call_has_seq_arg(call)) {
+                    ExprPtr body = unfold_formula_call_body(call, true);
+                    if (!body)  // LOUD GUARD: never silent-fallback to numeric
+                        throw FoldOperatorError(call.file_stem + ": collection argument could not be "
+                                                "inlined (no matching section output equation)");
+                    // unfold_formula_call_body(true) already re-inlined any nested
+                    // section calls (composed bodies like mean_of = sum_of/count_of);
+                    // only the direct foldl(seq,op,init) remains to fold here.
+                    body = resolve_foldl_calls(body);
+                    return try_resolve(body, target, bindings, visited, depth, had_nan_inf, missing, dead_ends);
+                }
                 auto sub_binds = prepare_sub_bindings(call, bindings, visited, depth, skip_var,
                                                       true, &dead_ends);
                 auto& sub_sys = load_sub_system(call.file_stem);
@@ -5306,6 +5378,30 @@ private:
             if (s->type == ExprType::FUNC_CALL && s->name == "seq") return s;
         }
         return nullptr;
+    }
+
+    // True iff any of `call`'s bindings is a seq-shaped argument (its expr
+    // simplifies to a `seq(...)` FUNC_CALL). Gate for the collections-as-call-
+    // arguments unfold path (gen-6 cycle 3): a seq binding cannot flow through
+    // the numeric sub-binding channel (prepare_sub_bindings evaluates each arg
+    // to a double and drops the seq), so such a call is inlined via
+    // unfold_formula_call_body instead. Scalar-only calls return false here and
+    // are untouched (zero regression on the numeric path).
+    [[nodiscard]] bool call_has_seq_arg(const FormulaCall& call) const {
+        return std::any_of(call.bindings.begin(), call.bindings.end(),
+            [this](const std::pair<const std::string, ExprPtr>& b) {
+                // Cheap structural pre-screen BEFORE simplify: only a `seq(...)`
+                // literal or a `map(...)` (which simplifies to a seq) can possibly
+                // be a collection. Scalar bindings (Num/Var/BinOp/other FUNC_CALLs)
+                // — the common case, including every recursive scalar program
+                // (fibonacci/factorial) — skip the O(rules) simplify no-op entirely.
+                const ExprPtr& e = b.second;
+                if (e->type != ExprType::FUNC_CALL ||
+                    (e->name != "seq" && e->name != "map"))
+                    return false;
+                ExprPtr s = simplify(e);
+                return s->type == ExprType::FUNC_CALL && s->name == "seq";
+            });
     }
 
     // Substitute every seq-valued free var in `expr` with its concrete seq, then

@@ -1,7 +1,7 @@
-# Inert until collections-as-call-arguments lands (sub-bindings are numeric-only) — see Future.md. The fold itself is proven equivalent to the C++ reducer (tests.cpp).
 # product_of(xs) — product of a seq collection, as a foldl over the mul operator.
-# SPEC definition; coexists with the C++ `product` fast-path and is proven
-# equivalent. Empty collection -> 1 (the mul identity / fold seed).
+# Callable with a seq argument (collections-as-call-arguments, gen-6 cycle 3).
+# Coexists with the C++ `product` fast-path and is proven equivalent. Empty
+# collection -> 1 (the mul identity / fold seed).
 @include "mul.fw"
 [product_of(xs) -> result]
 result = foldl(xs, mul, 1)

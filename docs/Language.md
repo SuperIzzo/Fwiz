@@ -1180,7 +1180,20 @@ result = acc * elem
 
 `foldl` is resolved by the `resolve_foldl_in_equations` post-load pass. A `foldl` over an unresolved symbolic collection stays unevaluated until the collection materializes.
 
-### 19.4 Post-Load Pass Ordering
+### 19.4 Named-Section Reducers (since gen-6 Collections Cycle 3, 2026-06-24)
+
+`stdlib/collections/` provides `.fw`-defined wrappers that are proven equivalent to the C++ built-in reducers. They accept `{}` ordered collections directly:
+
+```
+sum_of({1, 2, 3})         # 6
+product_of({1, 2, 3, 4})  # 24
+count_of({1, 2, 3})       # 3
+mean_of({1, 2, 3, 4})     # 5 / 2  (exact structural rational)
+```
+
+These are ordinary `.fw` sections (`[sum_of(xs) -> result]` with body `result = foldl(xs, add, 0)`) loaded from `stdlib/collections/{sum_of,product_of,count_of,mean_of}.fw`. Passing a `{}` collection into a section call works via parent-side body inlining (`unfold_formula_call_body` on the forward-resolve path, gated by `call_has_seq_arg`) — the `seq` is carried as an ExprPtr and never goes through the numeric binding channel. A non-inlinable seq-arg throws `FoldOperatorError` (loud, never silent fallback). See Developer.md §"Collections primitives" for the mechanism.
+
+### 19.5 Post-Load Pass Ordering
 
 The three collection post-load passes run in this order inside `load_with_sections`:
 
