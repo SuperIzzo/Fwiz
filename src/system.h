@@ -3277,6 +3277,14 @@ private:
         return bindings;
     }
 
+    // true iff `var` is some equation's lhs_var (an engine-derived variable, not
+    // a raw CLI input). Used by the F1 NUMERIC gate (resolve_all); full rationale
+    // lives at that gate (~3411).
+    [[nodiscard]] bool has_equation_definition(const std::string& var) const {
+        return std::any_of(equations.begin(), equations.end(),
+            [&var](const Equation& eq) { return eq.lhs_var == var; });
+    }
+
     // Like solve_recursive but collects ALL valid results instead of stopping at first
     [[nodiscard]] std::vector<double> solve_all(const std::string& target,
                                    std::map<std::string, double>& bindings,
@@ -3391,13 +3399,28 @@ private:
                 // NOLINTNEXTLINE(bugprone-empty-catch) — sub-system resolve failure → no result from this candidate
                 } catch (const std::runtime_error&) {}
             } else if (c.type == CandidateType::NUMERIC) {
-                // Skip multi-variable NUMERIC candidates unconditionally. The
-                // system-probe fallback is expensive and rarely helpful when
-                // multiple variables are still free; single-variable NUMERIC
-                // (cvars empty after erasures) still fires for transcendental
-                // fallback (e.g., x + sin(x) = 1) and as the under-constrained
-                // fast-fail gate (no single-variable candidate → no results →
-                // clean "Cannot solve" exit 1 instead of a budget breach).
+                // F1 NUMERIC gate (2026-06-25). Compute the residual `cvars`: the
+                // free vars of c.expr minus target, bound vars, builtin constants,
+                // and formula-call output placeholders. A candidate is admitted iff
+                // EVERY residual var has a defining equation (has_equation_definition):
+                // such a var is an engine-derived intermediate (e.g. `P` in `P=K+W`)
+                // that try_resolve_numeric's system-probe can forward-evaluate. A
+                // residual with NO defining equation is a raw under-determined input
+                // and the candidate is skipped (→ clean "Cannot solve", not a probe).
+                //
+                // CROSS-CYCLE COUPLING (load-bearing — do NOT trim): Soundness for
+                // the raw-input class is delegated to the probe_vars filter at
+                // ~system.h:5101: a raw CLI input has no defining equation so it's
+                // rejected here, AND that filter independently rejects non-equation-
+                // output probe targets. Do not relax the probe_vars filter at 5101
+                // without re-auditing this gate, and vice versa — F1 (2026-06-25)
+                // made this gate delegate raw-input rejection to that filter;
+                // reverting the nCr Fix (commit 32159d2) would re-open the explosion
+                // through this relaxed gate.
+                //
+                // nCr unchanged: for `out=?` the candidate is SUB(out, c) where `c`
+                // is a formula_call output, erased below BEFORE the predicate loop →
+                // cvars empty → predicate never runs → nCr gate behavior is identical.
                 std::set<std::string> cvars;
                 collect_vars(c.expr, cvars);
                 cvars.erase(target);
@@ -3408,7 +3431,10 @@ private:
                 // variables — they're bound by formula-call resolution. Exclude
                 // them from the residual.
                 for (auto& fc : formula_calls) cvars.erase(fc.output_var);
-                if (!cvars.empty()) return false; // multi-variable → skip
+                // raw under-determined input (a residual with no defining equation) → skip
+                if (std::any_of(cvars.begin(), cvars.end(),
+                        [this](const std::string& v) { return !has_equation_definition(v); }))
+                    return false;
                 // Cap numeric contributions to prevent explosion with trig equations
                 constexpr size_t MAX_NUMERIC_RESULTS = 50;
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
@@ -5091,6 +5117,11 @@ private:
                 if (bindings.count(eq.lhs_var))
                     probe_vars.push_back(eq.lhs_var);
             }
+            // SOUNDNESS BACKSTOP for the relaxed F1 NUMERIC gate (~system.h:3411,
+            // 2026-06-25): that gate admits residual vars that have a defining
+            // equation, delegating rejection of raw under-determined inputs to this
+            // filter. Do not relax this filter without re-auditing that gate.
+            //
             // NOTE: only equation-OUTPUT vars (eq.lhs_var, loop above) are valid
             // probe targets. A raw user/CLI-bound input with no defining equation
             // (e.g. nCr(n=N, k=5) with N bound) is structurally under-determined

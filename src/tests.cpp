@@ -7527,6 +7527,135 @@ void test_ncr_vararg_timeout() {
             if (std::abs((v + std::sin(v)) - 1.0) < 1e-4) found_root = true;
         ASSERT(found_root, "transcendental: numeric root for x+sin(x)=1 still found");
     }
+
+    // [BLOCKING B4] COMMENTARY: why the F1 gate relaxation (2026-06-25) leaves
+    // the nCr cases byte-for-byte unchanged. For varn/vark the target is `out`
+    // and the candidate is `out - c` (from `out = c`). `c` is a formula_call
+    // output var — erased at the fc-output erasure step (system.h ~3410) BEFORE
+    // the new has_equation_definition predicate loop. `cvars` is already empty
+    // after that erasure, so the gate passes exactly as it did pre-F1 without
+    // ever reaching the new predicate. The timing guards in (2)/(3) above are
+    // the BLOCKING regression guard for the explosion.
+}
+
+// F1 (2026-06-25): the single-variable NUMERIC gate (system.h ~3401-3411) was
+// relaxed so a continuous unknown buried behind a derived-variable indirection
+// (`K=?` where the constraint mentions `P=K+W`, not `K`) reverse-solves via the
+// existing system-probe root-finder. These tests pin the acceptance oracle, the
+// under-determined-skip semantics, and a recursive-residual clean breach.
+void test_f1_buried_numeric_solve() {
+    SECTION("F1: buried numeric reverse-solve via derived-var indirection");
+
+    // [BLOCKING B1/B2] Acceptance oracle (self-contained affordability shape):
+    // a derived var P = K + W feeds a numeric constraint can_pay; solving K=?
+    // given can_pay/W/D/h/r requires the gate to admit residual P (which has a
+    // defining equation P=K+W). The root is bracketed K17=0.5828 / K18=0.6187.
+    write_fw("/tmp/aff_f1.fw",
+        "P = K + W\n"
+        "can_pay = sum( product((P-k+i)/i, i in [1..k]) * "
+        "product((D-P-(h-k)+i)/i, i in [1..h-k]) / "
+        "product((D-h+i)/i, i in [1..h]), k in [r..h] )\n"
+        "cannot_pay = 1 - can_pay\n");
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/aff_f1.fw");
+        auto vs = sys.resolve_all("K", {{"can_pay", 0.6}, {"D", 54}, {"W", 2}, {"h", 5}, {"r", 2}});
+        ASSERT(!vs.empty(), "F1 B1: K=? must produce at least one result");
+        bool found_root = false;
+        for (double v : vs.discrete())
+            if (v > 16.5 && v < 19.0) found_root = true;
+        ASSERT(found_root, "F1 B1: K ~ 17.47 (in bracket 16.5..19.0)");
+        auto it = sys.numeric_results_.find("K");
+        ASSERT(it != sys.numeric_results_.end() && !it->second,
+            "F1 B2: K result flagged ~ (approximate)");
+    }
+
+    // [BLOCKING B3] Forward-bracket validation (works pre-fix; validates oracle).
+    {
+        FormulaSystem bracket_sys;
+        bracket_sys.numeric_mode = true;
+        bracket_sys.load_file("/tmp/aff_f1.fw");
+        double cp17 = bracket_sys.resolve("can_pay", {{"K", 17}, {"D", 54}, {"W", 2}, {"h", 5}, {"r", 2}});
+        double cp18 = bracket_sys.resolve("can_pay", {{"K", 18}, {"D", 54}, {"W", 2}, {"h", 5}, {"r", 2}});
+        ASSERT(cp17 < 0.6, "F1 B3a: can_pay(K=17) < 0.6");
+        ASSERT(cp18 > 0.6, "F1 B3b: can_pay(K=18) > 0.6");
+    }
+
+    // [BLOCKING B5] Under-determined: residual y has NO defining equation
+    // (genuinely free CLI var) → gate skips → clean "Cannot solve", no probe.
+    {
+        FormulaSystem sys3;
+        sys3.numeric_mode = true;
+        sys3.load_string("out = x + y\n");
+        bool threw = false;
+        try {
+            auto vs3 = sys3.resolve_all("x", {{"out", 5.0}});
+            (void)vs3;
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        ASSERT(threw, "F1 B5: x=? with free residual y must throw 'Cannot solve'");
+    }
+
+    // [BLOCKING B-1] Recursive-residual CLEAN BREACH: a residual whose defining
+    // equation is recursive (factorial-style) makes each probe point an
+    // expensive deep solve. The SolveBudgetExceededError (sibling of
+    // std::exception, not std::runtime_error) escapes the probe's NaN-catch
+    // CLEANLY — a thrown breach, not a hang. Assert bounded wall time and that
+    // any escape is the typed budget error (not an unbounded loop).
+    {
+        // out = fact(K); fact recursive on K; solve K from out → probe sweeps K,
+        // each point a deep recursive solve. Bounded by enforce_solve_budget.
+        write_fw("/tmp/f1_rec.fw",
+            "result = 1 if n =0\n"
+            "result = n * f1_rec(result=?prev, n=n-1) if n >0\n"
+            "out = result\n"
+            "n >= 0\nn <= 200\n");
+        FormulaSystem sys_rec;
+        sys_rec.numeric_mode = true;
+        sys_rec.strict_includes_ = false;
+        sys_rec.load_file("/tmp/f1_rec.fw");
+        const auto t0 = std::chrono::steady_clock::now();
+        bool clean = true;
+        try {
+            auto vsr = sys_rec.resolve_all("n", {{"out", 1e9}});
+            (void)vsr; // may legitimately find a root or none — either is fine
+        } catch (const SolveBudgetExceededError&) {
+            clean = true; // typed breach — clean
+        } catch (...) {
+            clean = false; // any other escape is a defect
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(t1 - t0).count();
+        ASSERT(clean, "F1 B-1: recursive-residual probe breaches cleanly (no foreign throw)");
+        ASSERT(secs < 10.0, "F1 B-1: recursive-residual probe is bounded (no hang)");
+    }
+
+    // [DESIRABLE D2] Multi-hop residual: a=b+1; c=a*2; out=c^3, solve b from
+    // out=27 → c=3 → a=1.5 → b=0.5. Exercises the has_formula_vars=false branch
+    // (solve_recursive("a",{out=27}) succeeds → pre-substituted residual).
+    {
+        FormulaSystem sys4;
+        sys4.numeric_mode = true;
+        sys4.load_string("a = b + 1\nc = a * 2\nout = c^3\n");
+        auto vs4 = sys4.resolve_all("b", {{"out", 27.0}});
+        ASSERT(!vs4.empty(), "F1 D2: multi-hop b=? with out=27 returns result");
+        bool found4 = false;
+        for (double v : vs4.discrete())
+            if (std::abs(v - 0.5) < 1e-4) found4 = true;
+        ASSERT(found4, "F1 D2: multi-hop b ~ 0.5 for out=27");
+    }
+
+    // [DESIRABLE D3] --steps smoke: gate fix does not crash trace mode.
+    {
+        FormulaSystem sys_trace;
+        sys_trace.numeric_mode = true;
+        sys_trace.trace.level = TraceLevel::STEPS;
+        sys_trace.load_file("/tmp/aff_f1.fw");
+        auto vs_trace = sys_trace.resolve_all("K", {{"can_pay", 0.6}, {"D", 54}, {"W", 2}, {"h", 5}, {"r", 2}});
+        ASSERT(!vs_trace.empty(), "F1 D3: --steps mode still resolves K");
+    }
 }
 
 void test_numeric_precision() {
@@ -11508,6 +11637,23 @@ void test_rational_arithmetic() {
     // Integer + Fraction
     ASSERT_EQ(ss("1 + 1/3"), "4 / 3", "1 + 1/3 = 4/3");
     ASSERT_EQ(ss("2 + 1/2"), "5 / 2", "2 + 1/2 = 5/2");
+
+    // Large-rational accumulator: the additive rational accumulator multiplies
+    // denominators term-by-term BEFORE reducing. With N ~ sqrt(int64max), the
+    // intermediate denominator product N*N exceeds int64 (signed-overflow UB)
+    // even though the REDUCED sum is a small exact rational. The __int128
+    // intermediate must (a) not overflow and (b) preserve exactness where the
+    // reduced result fits int64. 1/N + 1/N + 1/N = 3/N = 1/(N/3), N=3037000500.
+    ASSERT_EQ(ss("1/3037000500 + 1/3037000500 + 1/3037000500"),
+              "1 / 1012333500",
+              "large-rational sum: 3*(1/3037000500) = 1/1012333500 exact (no overflow)");
+
+    // Distinct-denominator overflow: N*M = 2.4e19 > int64max, but the reduced sum
+    // 1/4e9 + 1/6e9 = 1/2.4e9 fits int64 exactly. Proves the 128-bit GCD-reduce
+    // recovers a fitting exact result even when the raw denominator product overflows.
+    ASSERT_EQ(ss("1/4000000000 + 1/6000000000"),
+              "1 / 2400000000",
+              "large-rational sum: 1/4e9 + 1/6e9 = 1/2.4e9 exact (distinct denoms)");
 }
 
 void test_rational_derive() {
@@ -19468,6 +19614,7 @@ int main() {
     test_find_numeric_roots();
     test_numeric_integration();
     test_ncr_vararg_timeout();
+    test_f1_buried_numeric_solve();
     test_numeric_precision();
     test_numeric_edge_cases();
     test_numeric_binary_integration();
