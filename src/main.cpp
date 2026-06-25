@@ -251,6 +251,154 @@ int main(int argc, const char* argv[]) {
         for (auto& fc : query.nested_calls)
             sys.formula_calls.push_back(std::move(fc));
 
+        // --- F2 projection sweep (?max / ?min) ---
+        // Integer monotonic threshold search: the unknown is an aggregation
+        // range-bound (`sum(..., k in [r..h])`) — symbolic, won't unroll, so
+        // there is no f(r) to root-find. ENUMERATE: sweep the projection var
+        // over its explicit `in [lo..hi]` domain, forward-evaluate the
+        // constrained output var(s), and project the largest (?max) / smallest
+        // (?min) value for which ALL comparator constraints hold. Result is
+        // EXACT '=' (forward evaluation, not a root), with bracketing.
+        {
+            const auto proj_it = std::find_if(
+                query.queries.begin(), query.queries.end(),
+                [](const CLIQueryVar& qv) {
+                    return qv.projection != CLIQueryVar::Projection::NONE;
+                });
+            if (proj_it != query.queries.end()) {
+                // Mutually exclusive with the non-row solve modes (mirrors --table).
+                if (table_mode || derive_mode || has_verify || fit_mode
+                    || explore || explore_full) {
+                    std::cerr << "Error: ?max/?min projection is incompatible with "
+                                 "--table/--derive/--verify/--fit/--explore\n";
+                    return 1;
+                }
+                const CLIQueryVar& pv = *proj_it;
+                if (pv.sweep_values.empty())
+                    throw std::runtime_error(
+                        "?max/?min requires an explicit range (e.g. " + pv.variable
+                        + "=?max in [1..5])");
+
+                // Parse comparator constraints against the loaded system. Each
+                // condition's first clause LHS names the constrained output var
+                // to forward-evaluate per candidate.
+                const ExprArena::Scope proj_scope(sys.arena);
+                struct ParsedConstraint { Condition cond; std::string out_var; std::string raw; };
+                std::vector<ParsedConstraint> constraints;
+                for (const auto& cstr : query.constraints) {
+                    auto cond_opt = sys.parse_condition(cstr);
+                    if (!cond_opt || cond_opt->clauses.empty())
+                        throw std::runtime_error("Invalid constraint '" + cstr + "'");
+                    std::string out_var;
+                    const CondClause& cl0 = cond_opt->clauses.front();
+                    if (cl0.lhs && cl0.lhs->type == ExprType::VAR)
+                        out_var = cl0.lhs->name;
+                    else if (cl0.rhs && cl0.rhs->type == ExprType::VAR)
+                        out_var = cl0.rhs->name;
+                    if (out_var.empty())
+                        throw std::runtime_error(
+                            "Constraint '" + cstr + "' must compare a variable");
+                    constraints.push_back({std::move(*cond_opt), out_var, cstr});
+                }
+                if (constraints.empty())
+                    throw std::runtime_error(
+                        "?max/?min requires at least one comparator constraint "
+                        "(e.g. can_pay>=0.40)");
+
+                // Feasibility test for one candidate value of the projection var.
+                // Forward-evaluate each constrained output, bind it, check ALL
+                // constraints. Returns {feasible, first-constraint-output-value}.
+                auto eval_candidate = [&](double cand, double& out_val) -> bool {
+                    auto bindings = query.bindings;
+                    bindings[pv.variable] = cand;
+                    bool first = true;
+                    for (const auto& pc : constraints) {
+                        double ov = std::numeric_limits<double>::quiet_NaN();
+                        try {
+                            ov = sys.resolve(pc.out_var, bindings);
+                        } catch (const std::exception&) {
+                            return false;  // can't evaluate constraint output → infeasible
+                        }
+                        if (std::isnan(ov)) return false;
+                        if (first) { out_val = ov; first = false; }
+                        auto cbind = bindings;
+                        cbind[pc.out_var] = ov;
+                        if (!check_condition(pc.cond, cbind)) return false;
+                    }
+                    return true;
+                };
+
+                const bool want_max = (pv.projection == CLIQueryVar::Projection::MAX);
+                bool found = false;
+                double best_cand = 0.0, best_val = 0.0;
+                // bracketing: the value just past the boundary that fails.
+                bool have_bracket = false;
+                double bracket_cand = 0.0, bracket_val = 0.0;
+
+                // Sweep in domain order; track the projected (max/min) feasible
+                // candidate. For ?max the bracket is the next-higher infeasible
+                // value; for ?min the next-lower. We record per-candidate output
+                // values to construct the bracket after projecting.
+                std::vector<std::pair<double, double>> evaluated;  // (cand, out_val)
+                evaluated.reserve(pv.sweep_values.size());
+                for (const double cand : pv.sweep_values) {
+                    double ov = std::numeric_limits<double>::quiet_NaN();
+                    const bool ok = eval_candidate(cand, ov);
+                    evaluated.emplace_back(cand, ov);
+                    if (ok) {
+                        if (!found) { found = true; best_cand = cand; best_val = ov; }
+                        else if (want_max ? (cand > best_cand) : (cand < best_cand)) {
+                            best_cand = cand; best_val = ov;
+                        }
+                    }
+                }
+
+                const ExprArena::Scope proj_fmt_scope(sys.arena);
+                sys.populate_aliases_();
+                if (!found) {
+                    std::ostringstream rng;
+                    rng << '[' << fmt_num(pv.sweep_values.front()) << ".."
+                        << fmt_num(pv.sweep_values.back()) << ']';
+                    std::cout << "no value of " << pv.alias << " satisfies ";
+                    bool firstc = true;
+                    for (const auto& pc : constraints) {
+                        if (!firstc) std::cout << " && ";
+                        firstc = false;
+                        std::cout << pc.raw;
+                    }
+                    std::cout << " over " << rng.str() << '\n';
+                    return 0;
+                }
+
+                // Bracket: the NEAREST value just past the boundary (in the
+                // projection direction) that was evaluated and failed — for
+                // ?max the smallest cand > boundary; for ?min the largest
+                // cand < boundary. This is the value that demonstrates the
+                // threshold (e.g. ?min h=9 brackets against h=8, not h=1).
+                for (const auto& [cand, ov] : evaluated) {
+                    const bool past = want_max ? (cand > best_cand) : (cand < best_cand);
+                    if (!past || std::isnan(ov)) continue;
+                    const bool nearer = !have_bracket
+                        || (want_max ? (cand < bracket_cand) : (cand > bracket_cand));
+                    if (nearer) {
+                        have_bracket = true; bracket_cand = cand; bracket_val = ov;
+                    }
+                }
+
+                std::cout << pv.alias << " = "
+                          << fmt_solve_result(best_cand, !approximate_mode, sys.aliases_);
+                if (have_bracket) {
+                    const std::string& cvar = constraints.front().out_var;
+                    std::cout << "  (" << cvar << "=" << fmt_num(best_val)
+                              << " at " << pv.alias << "=" << fmt_num(best_cand)
+                              << "; " << fmt_num(bracket_val)
+                              << " at " << pv.alias << "=" << fmt_num(bracket_cand) << ")";
+                }
+                std::cout << '\n';
+                return 0;
+            }
+        }
+
         // --- Table mode (Future #5) ---
         if (table_mode) {
             if (query.range_bindings.empty())

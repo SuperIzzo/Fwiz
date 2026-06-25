@@ -3738,6 +3738,10 @@ private:
     // ────────────── Subsection: private parsing helpers ──────────────
 
     // Parse a condition string like "x > 0" or "x > 0 && x < 100"
+public:
+    // Public so the F2 sweep driver (main.cpp) can parse comparator-constraint
+    // CLI args (`can_pay>=0.40`) against a loaded system. Pure over the input
+    // string — allocates Expr nodes into the active arena (caller holds a Scope).
     std::optional<Condition> parse_condition(const std::string& cond_str) {
         if (cond_str.empty()) return std::nullopt;
 
@@ -3885,6 +3889,7 @@ private:
         return cond.clauses.empty() ? std::nullopt : std::optional<Condition>(cond);
     }
 
+private:
     void parse_line(const std::string& line) {
         // Split at condition keyword: "if", "iff", or ":" (legacy)
         // Not inside parentheses. Optional comma before if/iff.
@@ -5586,6 +5591,14 @@ struct CLIQueryVar {
     std::string variable;   // formula variable name
     std::string alias;      // output name
     bool strict = false;    // ?! mode — error if multiple results
+    // F2 (2026-06-25): `?max` / `?min` projection query — the sup/inf of the
+    // feasible set (largest/smallest sweep value satisfying CLIQuery::constraints).
+    // `max`/`min` are RESERVED projection keywords after `?` (distinguished from
+    // `?alias`); a literal alias named "max"/"min" is implausible. When projection
+    // != NONE, `sweep_values` holds the explicit `in [lo..hi]` enumeration domain.
+    enum class Projection { NONE, MAX, MIN };
+    Projection projection = Projection::NONE;
+    std::vector<double> sweep_values;   // explicit `in [...]` domain (projection only)
 };
 
 struct CLIQuery {
@@ -5621,6 +5634,11 @@ struct CLIQuery {
     // velocity`), matching the pre-unification Pass 1.5 / 1.6 behaviour.
     std::string synthetic_equations;
     std::set<std::string> synthetic_aliases;
+    // F2 (2026-06-25): comparator constraints for `?max`/`?min` threshold
+    // sweeps (e.g. `can_pay>=0.40`). Stored as RAW strings, parsed later via
+    // `FormulaSystem::parse_condition` once the system exists (main.cpp). MUST
+    // be an ORDER-PRESERVING vector (NOT a map) — structured-output-order rule.
+    std::vector<std::string> constraints;
 };
 
 // Future #5: parse a bracketed range value like `[1..10]`, `[1..10 @ 0.5]`, or
@@ -5863,6 +5881,32 @@ struct CLIQuery {
             }
         }
 
+        // F2 (2026-06-25): comparator-constraint arg (`can_pay>=0.40`). A bare
+        // `arg.find('=')` misparses `>=`/`<=`/`!=`/`==` as an assignment; detect
+        // a top-level comparator operator FIRST and route the raw string to
+        // `constraints` (parsed later by FormulaSystem::parse_condition once a
+        // system exists). Single `=` (plain assignment) and `?`-queries fall
+        // through to the normal dispatch below. Order-preserving (push_back).
+        {
+            int cd = 0; bool is_constraint = false;
+            // justified: char-cursor — scans for a top-level comparator operator
+            for (size_t i = 0; i < arg.size(); i++) {
+                const char c = arg[i];
+                if      (c == '(' || c == '[') cd++;
+                else if (c == ')' || c == ']') cd--;
+                else if (cd == 0) {
+                    // Two-char comparators, then single-char (excluding lone '=').
+                    if ((c == '>' || c == '<' || c == '!' || c == '=')
+                        && i + 1 < arg.size() && arg[i+1] == '=') { is_constraint = true; break; }
+                    if (c == '>' || c == '<') { is_constraint = true; break; }
+                }
+            }
+            if (is_constraint) {
+                q.constraints.push_back(arg);
+                continue;
+            }
+        }
+
         const size_t eq = arg.find('=');
         if (eq == std::string::npos) {
             // Bare variable name (no '='). In symbolic modes (--derive, --fit)
@@ -5910,7 +5954,7 @@ struct CLIQuery {
             if (!rest.empty() && rest[0] == '!') rest = trim(rest.substr(1));  // ?! ignored — diff is single-result
             const std::string alias = rest.empty() ? ("diff_" + dvar) : rest;
             q.synthetic_equations += alias + " = diff(" + target + ", " + dvar + ")\n";
-            q.queries.push_back({alias, alias, false});
+            q.queries.push_back({alias, alias, false, CLIQueryVar::Projection::NONE, {}});
             q.synthetic_aliases.insert(alias);
             continue;
         }
@@ -5959,21 +6003,60 @@ struct CLIQuery {
                 q.synthetic_equations += alias + " = integral(" + target + ", " + ivar
                                        + ", " + lo_text + ", " + hi_text + ")\n";
             }
-            q.queries.push_back({alias, alias, false});
+            q.queries.push_back({alias, alias, false, CLIQueryVar::Projection::NONE, {}});
             q.synthetic_aliases.insert(alias);
             continue;
         }
 
         if (val.size() >= 1 && val[0] == '?') {
-            // Query: "x=?" or "x=?!" or "x=?alias" or "x=?!alias"
+            // Query: "x=?" or "x=?!" or "x=?alias" or "x=?!alias", OR the F2
+            // projection forms "x=?max [in [lo..hi]]" / "x=?min [in [lo..hi]]".
             bool strict = false;
             std::string rest = val.substr(1);
             if (!rest.empty() && rest[0] == '!') {
                 strict = true;
                 rest = rest.substr(1);
             }
-            const std::string alias = rest.empty() ? name : trim(rest);
-            q.queries.push_back({name, alias, strict});
+            rest = trim(rest);
+
+            // F2 (2026-06-25): `?max` / `?min` projection. `max`/`min` are
+            // RESERVED keywords here (a literal alias "max"/"min" is implausible
+            // — reserve them). Match the keyword as a whole word: either the
+            // entire `rest`, or followed by whitespace (the ` in [...]` domain).
+            CLIQueryVar::Projection proj = CLIQueryVar::Projection::NONE;
+            std::vector<double> sweep;
+            for (const auto& [kw, pj] : std::initializer_list<
+                     std::pair<std::string, CLIQueryVar::Projection>>{
+                     {"max", CLIQueryVar::Projection::MAX},
+                     {"min", CLIQueryVar::Projection::MIN}}) {
+                if (rest.compare(0, kw.size(), kw) == 0
+                    && (rest.size() == kw.size()
+                        || std::isspace(static_cast<unsigned char>(rest[kw.size()])))) {
+                    proj = pj;
+                    // Trailing `in [lo..hi]` explicit sweep domain (optional —
+                    // a bare `?max` with no `in` leaves sweep empty; the driver
+                    // reports "no explicit range" in that case).
+                    std::string tail = trim(rest.substr(kw.size()));
+                    if (!tail.empty()) {
+                        if (tail.compare(0, 3, "in ") == 0 || tail.compare(0, 3, "in[") == 0)
+                            tail = trim(tail.substr(2));
+                        sweep = parse_range(tail);
+                    }
+                    break;
+                }
+            }
+            if (proj != CLIQueryVar::Projection::NONE) {
+                CLIQueryVar qv;
+                qv.variable = name;
+                qv.alias = name;          // ?max is a projection, NOT alias "max"
+                qv.strict = strict;
+                qv.projection = proj;
+                qv.sweep_values = std::move(sweep);
+                q.queries.push_back(std::move(qv));
+            } else {
+                const std::string alias = rest.empty() ? name : rest;
+                q.queries.push_back({name, alias, strict, CLIQueryVar::Projection::NONE, {}});
+            }
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
         } else if (val.front() == '[' && val.find("..") != std::string::npos) {

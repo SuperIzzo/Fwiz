@@ -7658,6 +7658,111 @@ void test_f1_buried_numeric_solve() {
     }
 }
 
+// M2 (F2): integer monotonic threshold search via `?max`/`?min` comparator
+// query over an explicit range. The unknown is an aggregation range-bound
+// (`sum(..., k in [r..h])`) — symbolic, it won't unroll, so there is no f(r)
+// to root-find. It must be ENUMERATED: sweep r over the explicit range,
+// forward-evaluate the constrained output (`can_pay`), find the boundary
+// integer satisfying the comparator. Result is EXACT '=' (forward eval),
+// with bracketing (value at boundary and just past it).
+void test_f2_threshold_sweep() {
+    SECTION("F2: ?max/?min integer threshold sweep over explicit range");
+
+    // Self-contained affordability fixture (same shape as the PNF model).
+    write_fw("/tmp/aff_f2.fw",
+        "P = K + W\n"
+        "can_pay = sum( product((P-k+i)/i, i in [1..k]) * "
+        "product((D-P-(h-k)+i)/i, i in [1..h-k]) / "
+        "product((D-h+i)/i, i in [1..h]), k in [r..h] )\n"
+        "cannot_pay = 1 - can_pay\n");
+
+    // [BLOCKING] parse: `r=?max in [1..5]` → projection MAX + sweep [1..5].
+    {
+        auto q = parse_cli_query("/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                                 "D=54, K=13, W=2, h=5)");
+        ASSERT(q.queries.size() == 1, "F2 parse: one projection query");
+        ASSERT(q.queries[0].variable == "r", "F2 parse: target is r");
+        ASSERT(q.queries[0].projection == CLIQueryVar::Projection::MAX,
+            "F2 parse: ?max → Projection::MAX");
+        ASSERT(q.queries[0].sweep_values.size() == 5,
+            "F2 parse: sweep [1..5] → 5 values");
+        ASSERT_NUM(q.queries[0].sweep_values.front(), 1, "F2 parse: sweep starts at 1");
+        ASSERT_NUM(q.queries[0].sweep_values.back(), 5, "F2 parse: sweep ends at 5");
+        // [BLOCKING] comparator constraint stored, order-preserving vector.
+        ASSERT(q.constraints.size() == 1, "F2 parse: one constraint stored");
+        ASSERT(q.constraints[0] == "can_pay>=0.40", "F2 parse: raw constraint preserved");
+        // `max`/`min` reserved as projection keywords — NOT an alias.
+        ASSERT(q.queries[0].alias == "r", "F2 parse: ?max is NOT alias 'max'");
+    }
+
+    // [BLOCKING] `r=?min` → Projection::MIN.
+    {
+        auto q = parse_cli_query("/tmp/aff_f2(r=?min in [1..5], can_pay>=0.40)");
+        ASSERT(q.queries[0].projection == CLIQueryVar::Projection::MIN,
+            "F2 parse: ?min → Projection::MIN");
+    }
+
+    // [BLOCKING] end-to-end r=2 for can_pay>=0.40 (r2=0.4278, r3=0.1244).
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null | grep -qE '^r = 2'");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 BLOCKING: r=?max can_pay>=0.40 → r = 2");
+    }
+
+    // [BLOCKING] result is EXACT '=', not '~' (forward eval, not root-find).
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null | grep -q ' = '");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 BLOCKING: result rendered with '=' (exact)");
+        int rc2 = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null | grep -q ' ~ '");
+        ASSERT(WEXITSTATUS(rc2) != 0, "F2 BLOCKING: result is NOT '~' (approximate)");
+    }
+
+    // [DESIRABLE] bracketing output: boundary value + first failing value past.
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null "
+                        "| grep -qE 'can_pay=0.4278.*at r=2.*0.1243.*r=3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 DESIRABLE: bracketing shows r=2 value + r=3 failing value");
+    }
+
+    // [BLOCKING] r=1 for the tighter can_pay>=0.50 (r1=0.8179, r2=0.4278).
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.50, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null | grep -qE '^r = 1'");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 BLOCKING: r=?max can_pay>=0.50 → r = 1");
+    }
+
+    // [BLOCKING] h=?min for can_pay>=0.95 (h8=0.9409, h9=0.9602) → h=9.
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(h=?min in [1..15], can_pay>=0.95, "
+                        "D=54, K=13, W=2, r=1)' 2>/dev/null | grep -qE '^h = 9'");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 BLOCKING: h=?min can_pay>=0.95 → h = 9");
+    }
+
+    // [BLOCKING] no-solution: a threshold even the best value fails → clean
+    // message, not a crash or a wrong answer. Best can_pay over [1..5] is at
+    // r=1 (0.8179); require >0.99 so nothing qualifies.
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.99, "
+                        "D=54, K=13, W=2, h=5)' 2>/dev/null "
+                        "| grep -qiE 'no value of r satisfies'");
+        ASSERT(WEXITSTATUS(rc) == 0, "F2 BLOCKING: no-solution → clean 'no value satisfies' message");
+        // And it must not crash (exit 0 with the message; no segfault).
+        int rc2 = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.99, "
+                        "D=54, K=13, W=2, h=5)' >/dev/null 2>&1");
+        ASSERT(WIFEXITED(rc2), "F2 BLOCKING: no-solution case does not crash");
+    }
+
+    // [BLOCKING] mutually exclusive with --table.
+    {
+        int rc = system("./bin/fwiz --table '/tmp/aff_f2(r=?max in [1..5], "
+                        "can_pay>=0.40, D=54, K=13, W=2, h=5)' 2>/tmp/aff_f2_mut.txt >/dev/null");
+        ASSERT(WEXITSTATUS(rc) != 0, "F2 BLOCKING: ?max + --table errors");
+    }
+}
+
 void test_numeric_precision() {
     SECTION("Numeric Precision Flag");
 
@@ -19615,6 +19720,7 @@ int main() {
     test_numeric_integration();
     test_ncr_vararg_timeout();
     test_f1_buried_numeric_solve();
+    test_f2_threshold_sweep();
     test_numeric_precision();
     test_numeric_edge_cases();
     test_numeric_binary_integration();
