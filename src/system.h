@@ -3412,8 +3412,13 @@ private:
                 // Cap numeric contributions to prevent explosion with trig equations
                 constexpr size_t MAX_NUMERIC_RESULTS = 50;
                 if (results.size() >= MAX_NUMERIC_RESULTS) return false;
+                // Fix 2 (scoped): NUMERIC (Strategy 6) is emitted last in
+                // enumerate_candidates, so a non-empty `results` here means a
+                // deterministic strategy already solved `target` — skip the
+                // expensive system-probe fallback (gate is inside try_resolve_numeric,
+                // AFTER equation-based find_numeric_roots, preserving y=x^2's -3).
                 auto roots = try_resolve_numeric(c.expr, target, bindings,
-                    visited, depth, c.condition, dead_ends);
+                    visited, depth, c.condition, dead_ends, !results.empty());
                 for (const double val : roots) {
                     if (results.size() >= MAX_NUMERIC_RESULTS) break;
                     const bool dup = std::any_of(results.begin(), results.end(),
@@ -4976,7 +4981,8 @@ private:
             std::map<std::string, double>& bindings,
             const std::set<std::string>& visited, int depth,
             const Condition* eq_condition,
-            DeadEndSet& dead_ends) const {
+            DeadEndSet& dead_ends,
+            bool target_already_solved = false) const {
         enforce_solve_budget(); // Part C: insurance
 
         // Re-entrance guard: prevent infinite recursion on coupled systems
@@ -5063,6 +5069,13 @@ private:
             roots = find_numeric_roots(f, lo, hi, false, numeric_samples, fp_ptr);
             if (!roots.empty()) goto filter;
         }
+
+        // Fix 2 (scoped): when a deterministic strategy already solved `target`, the
+        // system-probe fallback below can only rediscover the answer or reverse-drive a
+        // bound input across a grid (the nCr var-arg pathology). find_numeric_roots above
+        // already ran (and goto'd filter on success), so skipping ONLY the probe preserves
+        // legitimate equation-based numeric roots (e.g. y=x^2 -> -3). Defense-in-depth + perf.
+        if (target_already_solved) return {};
 
         // System-probe fallback: for each candidate target value,
         // evaluate the system forward and check if known bindings match.
@@ -5306,8 +5319,13 @@ private:
                     if (depth > 0) { found_eq = true; break; }
                     found_eq = true;
                     trace.step(c.desc, depth + 1);
+                    // Fix 2 (scoped): pass false here — this is resolve()'s first-wins
+                    // path. enumerate_candidates stops at the first candidate whose lambda
+                    // returns true, so reaching the NUMERIC case means NO deterministic
+                    // strategy succeeded (target not yet solved). There is no "already
+                    // solved" state to gate on; passing false preserves behavior exactly.
                     auto roots = try_resolve_numeric(c.expr, target, bindings,
-                        visited, depth, c.condition, dead_ends);
+                        visited, depth, c.condition, dead_ends, false);
                     if (!roots.empty()) {
                         bindings[target] = roots[0];
                         numeric_results_[target] = false;
