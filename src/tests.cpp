@@ -7,6 +7,7 @@
 #include <sys/wait.h>
 #include <limits>
 #include <cfloat>
+#include <chrono>
 
 // Detect sanitizers — reduce depth stress tests to avoid stack overflow
 // ASan adds ~200 bytes of red zone per stack frame
@@ -7392,6 +7393,139 @@ void test_numeric_integration() {
         (void)sys.resolve("x", {{"y", 9}});
         // x^2 is now solved algebraically — may or may not be in numeric_results
         ASSERT(true, "numeric: x^2 solve mode (algebraic or numeric)");
+    }
+}
+
+// [BLOCKING] Regression: nCr with a CLI-bound variable passed as a formula-call
+// argument must NOT trigger the explosive system-probe reverse-solve of the
+// bound input. The try_resolve_numeric system-probe used to add EVERY bound var
+// (not just equation outputs) as a reverse-solve target; a raw CLI input like
+// N/K — structurally under-determined to reverse-solve — then got swept across a
+// numeric grid, re-running the whole nCr forward chain per point.
+//   nCr(result=?c, n=N, k=5) with N=54  → out = 3162510, was ~16-60s.
+//   nCr(result=?c, n=54, k=K) with K=5  → out = 3162510, was budget breach.
+void test_ncr_vararg_timeout() {
+    SECTION("nCr var-arg timeout regression");
+
+    // nCr section body: product((n-k+i)/i, i in [1..k]).
+    write_fw("/tmp/ncr_vat.fw",
+        "[ncr_vat(n, k) -> result] result = product((n-k+i)/i, i in [1..k])\n");
+
+    auto wall_seconds = [](auto&& fn) {
+        const auto t0 = std::chrono::steady_clock::now();
+        fn();
+        const auto t1 = std::chrono::steady_clock::now();
+        return std::chrono::duration<double>(t1 - t0).count();
+    };
+
+    // (1) lit regression guard — n/k literals, already fast.
+    {
+        write_fw("/tmp/ncr_lit.fw",
+            "@include \"ncr_vat.fw\"\n"
+            "ncr_vat(result=?c, n=54, k=5)\n"
+            "out = c\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/ncr_lit.fw");
+        auto result = sys.resolve_all("out", {});
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "ncr lit: exactly one solution");
+        ASSERT_NUM(d[0], 3162510, "ncr lit: out = 3162510");
+    }
+
+    // (2) varn — n bound at CLI (was ~16-60s and produced a spurious extra root).
+    {
+        write_fw("/tmp/ncr_varn.fw",
+            "@include \"ncr_vat.fw\"\n"
+            "ncr_vat(result=?c, n=N, k=5)\n"
+            "out = c\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/ncr_varn.fw");
+        ValueSet result;
+        const double secs = wall_seconds([&] {
+            result = sys.resolve_all("out", {{"N", 54}});
+        });
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "ncr varn: exactly one solution (no spurious extra root)");
+        ASSERT_NUM(d[0], 3162510, "ncr varn: out = 3162510");
+        ASSERT(secs < 2.0, "ncr varn: solves fast (no system-probe sweep)");
+    }
+
+    // (3) vark — k bound at CLI (was a SolveBudgetExceededError breach).
+    {
+        write_fw("/tmp/ncr_vark.fw",
+            "@include \"ncr_vat.fw\"\n"
+            "ncr_vat(result=?c, n=54, k=K)\n"
+            "out = c\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/ncr_vark.fw");
+        ValueSet result;
+        bool breached = false;
+        const double secs = wall_seconds([&] {
+            try {
+                result = sys.resolve_all("out", {{"K", 5}});
+            } catch (const SolveBudgetExceededError&) {
+                breached = true;
+            }
+        });
+        ASSERT(!breached, "ncr vark: no solve-budget breach");
+        auto& d = result.discrete();
+        ASSERT(d.size() == 1, "ncr vark: exactly one solution");
+        ASSERT_NUM(d[0], 3162510, "ncr vark: out = 3162510");
+        ASSERT(secs < 2.0, "ncr vark: solves fast (no recursive cascade)");
+    }
+
+    // (4) factorial-style probe STILL works (loop-1 sentinel: an equation-OUTPUT
+    //     var that is bound IS a legitimate reverse-solve target).
+    {
+        write_fw("/tmp/ncr_fact.fw",
+            "result = 1 if n =0\n"
+            "result = n * ncr_fact(result=?prev, n=n-1) if n >0\n"
+            "n >= 0\nn <= 20\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.strict_includes_ = false;  // self-recursive flat file
+        sys.load_file("/tmp/ncr_fact.fw");
+        auto r24 = sys.resolve_all("n", {{"result", 24}});
+        bool found_4 = false;
+        for (auto v : r24.discrete()) if (std::abs(v - 4.0) < 1e-6) found_4 = true;
+        ASSERT(found_4, "factorial probe: result=24 → n=4 (loop-1 intact)");
+    }
+
+    // (5) verify path unaffected (verify does not use NUMERIC system-probe).
+    {
+        write_fw("/tmp/ncr_verify.fw", "force = mass * accel\n");
+        FormulaSystem sys;
+        sys.load_file("/tmp/ncr_verify.fw");
+        auto results = sys.verify_variable("force", 98.1, {{"force", 98.1}, {"mass", 10}, {"accel", 9.81}});
+        ASSERT(!results.empty(), "verify: has result");
+        ASSERT(results[0].pass, "verify: force=mass*accel consistent (98.1)");
+    }
+
+    // (6) multi-root algebraic + transcendental numeric unaffected by the gate.
+    {
+        // Algebraic multi-root: gate (fix 2) does not suppress Strategy-2 EXPR roots.
+        write_fw("/tmp/ncr_mr.fw", "y = x^2 + 2*x - 3\n");
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.load_file("/tmp/ncr_mr.fw");
+        auto result = sys.resolve_all("x", {{"y", 0}});
+        ASSERT(result.discrete().size() == 2, "multi-root: two solutions");
+        ASSERT(result.contains(1), "multi-root: has x=1");
+        ASSERT(result.contains(-3), "multi-root: has x=-3");
+
+        // Transcendental: NUMERIC fires with empty results (gate does not block it).
+        write_fw("/tmp/ncr_trans.fw", "z = x + sin(x)\n");
+        FormulaSystem s2;
+        s2.numeric_mode = true;
+        s2.load_file("/tmp/ncr_trans.fw");
+        auto tr = s2.resolve_all("x", {{"z", 1}});
+        bool found_root = false;
+        for (auto v : tr.discrete())
+            if (std::abs((v + std::sin(v)) - 1.0) < 1e-4) found_root = true;
+        ASSERT(found_root, "transcendental: numeric root for x+sin(x)=1 still found");
     }
 }
 
@@ -19333,6 +19467,7 @@ int main() {
     test_adaptive_scan();
     test_find_numeric_roots();
     test_numeric_integration();
+    test_ncr_vararg_timeout();
     test_numeric_precision();
     test_numeric_edge_cases();
     test_numeric_binary_integration();

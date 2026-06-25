@@ -5078,14 +5078,13 @@ private:
                 if (bindings.count(eq.lhs_var))
                     probe_vars.push_back(eq.lhs_var);
             }
-            // Also check: any variable in bindings that could be computed from target
-            for (const auto& binding : bindings) {
-                const std::string& bvar = binding.first;
-                if (bvar == target) continue;
-                const bool found = std::any_of(probe_vars.begin(), probe_vars.end(),
-                    [&bvar](const std::string& pv) { return pv == bvar; });
-                if (!found) probe_vars.push_back(bvar);
-            }
+            // NOTE: only equation-OUTPUT vars (eq.lhs_var, loop above) are valid
+            // probe targets. A raw user/CLI-bound input with no defining equation
+            // (e.g. nCr(n=N, k=5) with N bound) is structurally under-determined
+            // to reverse-solve; probing it sweeps the bound input across a grid and
+            // re-runs the whole forward chain per point (see commit history /
+            // Future: nCr var-arg timeout). The former "any bound var" loop was
+            // removed for exactly this reason.
 
             // Suppress trace during probe scans — each probe point calls
             // resolve_memoized which triggers full solve_recursive traces.
