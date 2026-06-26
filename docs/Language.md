@@ -29,6 +29,7 @@ For a gentle introduction, see [../README.md](../README.md).
 17. [Dimension Annotations](#17-dimension-annotations)
 18. [Bounded Aggregation](#18-bounded-aggregation)
 19. [Ordered Collections (`{}`, `map`, `foldl`)](#19-ordered-collections--map-foldl)
+20. [Advanced Query Forms](#20-advanced-query-forms)
 
 ---
 
@@ -1202,3 +1203,67 @@ The three collection post-load passes run in this order inside `load_with_sectio
 3. **`resolve_aggregate_in_equations`** — unrolls `sum(map(...), ...)` and other reducer-over-collection forms.
 
 This order is load-bearing: aggregate must run last so that a `sum(map(score(i), i in [1..3]))` can see the materialized `seq` from the map pass before folding.
+
+---
+
+## 20. Advanced Query Forms
+
+Since 2026-06-25, two additional query forms complement the standard `var=?` solve query.
+
+### 20.1 Numeric Fallback for Buried Unknowns
+
+A `var=?` query on a variable that is buried behind derived-variable indirection (not directly in any equation's RHS or LHS, but reachable via the system-probe) now resolves via the existing numeric root-finder and returns an approximate result flagged with `~`.
+
+**Example — affordability model:**
+
+```
+P = K + W
+can_pay = sum( product((P-k+i)/i, i in [1..k]) * ... , k in [r..h] )
+```
+
+```bash
+$ fwiz affordability(K=?, can_pay=0.6, D=54, W=2, h=5, r=2)
+K ~ 17.47
+```
+
+Without this fix, `K=?` produced "Cannot solve for 'K'" because `K` appears in `P=K+W` (not in `can_pay` directly). The solver now detects that every residual variable (`P`) has a defining equation and forwards the probe to the system-probe path, which root-finds on `can_pay` as a function of `K`.
+
+A variable with no defining equation in the residual still causes "Cannot solve": the soundness guard ensures under-determined free variables remain rejected.
+
+### 20.2 Projection Queries — `?max` / `?min`
+
+For integer-valued parameters whose feasible set is found by sweeping rather than root-finding (e.g. the number of draws in a hypergeometric model), use a projection query:
+
+```
+var=?max in [lo..hi]
+var=?min in [lo..hi]
+```
+
+Pair with one or more **comparator constraints** as additional CLI arguments:
+
+```bash
+$ fwiz affordability(r=?max in [1..5], can_pay>=0.40, D=54, K=13, W=2, h=5)
+r = 2  (can_pay=0.4278 at r=2; 0.1244 at r=3)
+```
+
+The engine sweeps `r` over `[1..5]`, forward-evaluates `can_pay` for each value, checks the constraint `can_pay>=0.40`, and projects the maximum `r` that satisfies it. The result is exact (`=`, not `~`). The bracketing line shows the boundary value and the first infeasible neighbor.
+
+**`?min` example:**
+
+```bash
+$ fwiz affordability(h=?min in [1..20], can_pay>=0.95, D=54, K=13, W=2, r=1)
+h = 9  (can_pay=0.9521 at h=9; 0.9064 at h=8)
+```
+
+**No-solution case:**
+
+```bash
+$ fwiz affordability(r=?max in [1..5], can_pay>=0.99, D=54, K=13, W=2, h=5)
+no value of r in [1..5] satisfies the constraint
+```
+
+**Comparator syntax:** the comparator argument follows standard condition syntax (`>=`, `>`, `<=`, `<`, `=`, `!=`). The constrained output variable can appear on either side — `can_pay>=0.40` and `0.40<=can_pay` are equivalent.
+
+**Mutual exclusion:** `?max`/`?min` projections are mutually exclusive with `--table`, `--derive`, `--verify`, and `--fit`.
+
+**Deferred — domain inference (Future #112):** today you must supply `in [lo..hi]` explicitly. Inferring the sweep domain from the model's aggregation range node is planned.

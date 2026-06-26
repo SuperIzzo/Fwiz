@@ -3741,7 +3741,10 @@ private:
 public:
     // Public so the F2 sweep driver (main.cpp) can parse comparator-constraint
     // CLI args (`can_pay>=0.40`) against a loaded system. Pure over the input
-    // string — allocates Expr nodes into the active arena (caller holds a Scope).
+    // string — allocates Expr nodes into the active arena. ARENA-LIFETIME CONTRACT:
+    // the caller MUST hold an `ExprArena::Scope` for this system's arena across the
+    // call AND for as long as the returned Condition's Expr nodes are used; omitting
+    // the scope leaves the nodes dangling after the next scope pop.
     std::optional<Condition> parse_condition(const std::string& cond_str) {
         if (cond_str.empty()) return std::nullopt;
 

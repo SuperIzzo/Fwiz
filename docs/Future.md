@@ -106,6 +106,18 @@ multi-branch formula calls.
 
 **Trigger:** a multi-section utility file needs by-name section resolution from a foldl or other higher-order combinator (e.g., Collections Cycle 2 stdlib path where `operators.fw` defines `max2`/`min2`).
 
+## 112. F2 domain inference from aggregation AST — PARKED
+
+**Surfaced numeric reverse-solve arc (2026-06-25).** The `?max`/`?min` projection sweep (F2-minimal) requires the user to supply an explicit `in [lo..hi]` domain. For aggregation-bound integer parameters, the natural domain is already encoded in the model: `r` in `sum(k in [2..r])` lives in `[1..h]` (derived from the aggregation's `range(r,h)` node). Inferring the sweep domain from the equation AST would let the user write `r=?max` without `in [lo..hi]`.
+
+**Trigger:** user reports friction writing `in [lo..hi]` for a sweep var whose domain is visibly constrained by an aggregation range in the model, OR a cycle needs automatic domain inference for projection queries.
+
+## 113. F2 multi-constraint bracket display — PARKED
+
+**Surfaced numeric reverse-solve arc (2026-06-25).** The current `?max`/`?min` bracketing output names the first constraint's output variable in the parenthetical (e.g. `(can_pay=0.4278 at r=2; 0.1244 at r=3)`). With multiple constraints the single-variable display is a simplification — a user with two comparator constraints sees only the first constraint's value. Generalizing to show all constraint output values at the boundary and first-infeasible neighbor would make multi-constraint brackets unambiguous.
+
+**Trigger:** a user writes two or more comparator constraints and the bracket display is confusing or incomplete, OR a cycle extends the F2 sweep to non-monotonic feasible sets.
+
 ## 111. `lookup_binary_op_body` op-body cache — PARKED
 
 **Surfaced gen-6 Collections Cycle 1, perf-auditor (2026-06-24).** `lookup_binary_op_body` builds a throwaway `FormulaSystem` per `foldl` node that lacks an in-system op match (i.e., when the op section is not in `custom_function_defs_` but must be discovered via cross-file resolution). For a file with many `foldl` calls over a shared operator, this produces one throw-away load per call. Cache the op-body expression keyed on `(op_name, acc_param, elem_param)` — a small `std::map` on `FormulaSystem` or a function-local static — so repeated folds over the same operator pay one lookup cost.
