@@ -15,8 +15,8 @@
 # nCr(n, 0) = 1 via the empty-product identity.
 #
 # Usage:
-#   ./bin/fwiz 'stdlib/combinatorics/nCr(52, 5)'          # positional -> 2598960
-#   nCr(n=52, k=5, result=?c)                              # named binding
+#   fwiz --legacy-implicit 'stdlib/combinatorics/nCr.fw(c=?, c=nCr(52,5))'   # -> c = 2598960
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [nCr(n, k) -> result]
 result = product((n-k+i)/i, i in [1..k])

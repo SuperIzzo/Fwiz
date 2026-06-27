@@ -10,8 +10,8 @@
 # falling(x, 0) = 1 via the empty-product identity.
 #
 # Usage:
-#   ./bin/fwiz 'stdlib/combinatorics/falling(5, 2)'       # positional -> 20
-#   falling(x=5, m=2, result=?f)                           # named binding
+#   fwiz --legacy-implicit 'stdlib/combinatorics/falling.fw(f=?, f=falling(5,2))'   # -> f = 20
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [falling(x, m) -> result]
 result = product(x-i+1, i in [1..m])

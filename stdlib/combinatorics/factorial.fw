@@ -7,8 +7,8 @@
 # Exact integer arithmetic; no floating-point intermediate factorials.
 #
 # Usage:
-#   ./bin/fwiz 'stdlib/combinatorics/factorial(5)'        # positional -> 120
-#   factorial(n=5, result=?r)                              # named binding
+#   fwiz 'stdlib/combinatorics/factorial.fw(r=?, r=factorial(5))'   # -> r = 120
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [factorial(n) -> result]
 result = product(i, i in [1..n])

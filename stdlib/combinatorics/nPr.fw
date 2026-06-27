@@ -12,8 +12,8 @@
 # nPr(n, 0) = 1 via the empty-product identity.
 #
 # Usage:
-#   ./bin/fwiz 'stdlib/combinatorics/nPr(5, 2)'           # positional -> 20
-#   nPr(n=5, r=2, result=?p)                               # named binding
+#   fwiz --legacy-implicit 'stdlib/combinatorics/nPr.fw(p=?, p=nPr(5,2))'   # -> p = 20
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [nPr(n, r) -> result]
 result = product(n-r+i, i in [1..r])

@@ -10,7 +10,8 @@
 # a 54-card deck with 13 clubs gives hyp_mean(54, 13, 5) = 65/54 ~ 1.2037.)
 #
 # Usage:
-#   hyp_mean(N=54, K=13, n=5, result=?m)     # expected clubs in 5 of 54 -> 65/54
+#   fwiz --legacy-implicit 'stdlib/probability/hyp_mean.fw(m=?, m=hyp_mean(54,13,5))'   # -> m = 65 / 54
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [hyp_mean(N, K, n) -> result]
 result = n * K / N

@@ -5,6 +5,7 @@ Syntax and semantics of the `.fw` language.
 For the solver and numeric mode, see [Solver.md](Solver.md).
 For curve fitting, see [Fitting.md](Fitting.md).
 For the CLI and error messages, see [CLI.md](CLI.md).
+For the standard library, see [Stdlib.md](Stdlib.md).
 For a gentle introduction, see [../README.md](../README.md).
 
 ## Table of Contents
@@ -23,7 +24,7 @@ For a gentle introduction, see [../README.md](../README.md).
 11. [Built-in Functions](#11-built-in-functions)
 12. [Built-in Constants](#12-built-in-constants)
 13. [Special Values](#13-special-values)
-14. [Standard Library](#14-standard-library)
+14. [Standard Library](#14-standard-library) — see [Stdlib.md](Stdlib.md) for full reference
 15. [Vector and Matrix Literals](#15-vector-and-matrix-literals)
 16. [Complex Numbers](#16-complex-numbers)
 17. [Dimension Annotations](#17-dimension-annotations)
@@ -288,7 +289,7 @@ Error: Cannot solve for 'x'       # no piece's domain permits a negative result
 
 Each piece is inverted and its `iff` condition is applied to the inverted value, so only the roots that lie in the original piece's domain survive. Using `if` here would block inversion entirely.
 
-The standard library wraps this same pattern into the named function `abs` via a section (see §14).
+The standard library wraps this same pattern into the named function `abs` via a section — see [Stdlib.md](Stdlib.md).
 
 ### 5.3 Comparison Operators
 
@@ -763,77 +764,22 @@ Error: Infinity is not a valid value for 'y'
 
 ## 14. Standard Library
 
-fwiz ships a small standard library in the `stdlib/` directory of the repo.
+fwiz ships a `.fw` standard library — see **[Stdlib.md](Stdlib.md)** for the full
+reference (combinatorics, probability, collections, units, mechanics, helpers).
 
-### 14.1 `stdlib/stdlib.fw` — reusable helpers
+Summary by module:
 
-Pure-fwiz definitions of common piecewise functions. Each uses bidirectional `iff` conditions so they work in both forward and reverse solves.
+- **`stdlib/stdlib.fw`** — pure-fwiz piecewise helpers: `abs`, `sign`, `clamp`, `max`, `min`, `step`
+- **`stdlib/builtin.fw`** — reference `.fw` representation of the C++ built-ins (`sin`, `cos`, `sqrt`, …) showing `@extern` and inverse equations
+- **`stdlib/units/si-minimal.fw`** — SI base units, prefixes (`km`, `mm`, `hr`, …), and derived units (`N`, `J`, `W`, `Pa`, `Hz`)
+- **`stdlib/physics/mechanics.fw`** — bidirectional Newtonian mechanics (`force = mass * accel`, kinetic energy, momentum, work, pressure, frequency)
+- **`stdlib/combinatorics/`** — `factorial`, `nCr`, `nPr`, `falling`, `rising`, `hyp_pmf`, `hyp_at_least`
+- **`stdlib/probability/`** — `expected_value`, `variance`, `hyp_mean`, `hyp_variance`, `order_statistic`
+- **`stdlib/collections/`** — fold operators (`add`, `mul`, `count_op`) and named reducers (`sum_of`, `product_of`, `count_of`, `mean_of`); see also §19
 
-| Function | Definition | Behaviour |
-|----------|-----------|-----------|
-| `abs(x)` | `x iff x >= 0; -x iff x < 0` | Absolute value |
-| `sign(x)` | `1 iff x > 0; 0 iff x = 0; -1 iff x < 0` | Sign |
-| `clamp(x, lo, hi)` | `lo iff x < lo; x iff lo <= x <= hi; hi iff x > hi` | Clamp to range |
-| `max(a, b)` | `a iff a >= b; b iff b > a` | Maximum |
-| `min(a, b)` | `a iff a <= b; b iff b < a` | Minimum |
-| `step(x)` | `0 iff x < 0; 1 iff x >= 0` | Heaviside step |
-
-To use these, copy `stdlib.fw` into your project directory (or invoke fwiz from a directory that has it on the resolution path — §7.6). Then call the functions directly:
-
-```bash
-$ fwiz my_formula(result=?, x=-5)   # where my_formula calls stdlib's abs()
-```
-
-Note: `abs` is *also* a C++ built-in (§11) for speed; the stdlib version demonstrates how a user could define it in pure fwiz. The C++ built-in takes precedence when both are available.
-
-### 14.3 `stdlib/units/si-minimal.fw` — SI units (since 2026-05-13, expanded cycle 2)
-
-Binds SI base units, common prefixes, and 5 derived units to their SI-base scalar values so that unit-suffix expressions resolve numerically:
-
-**Base units** (all scalar 1): `m, kg, s, A, K, mol, cd`
-
-**Length prefixes:** `km=1000`, `mm=0.001`, `um=1e-6`, `nm=1e-9`, `Mm=1e6`, `Gm=1e9`
-
-**Mass prefixes:** `g=0.001`, `mg=1e-6` (note: `kg` is the SI base, not `g`)
-
-**Time prefixes/multiples:** `ms=0.001`, `us=1e-6`, `ns=1e-9`, `min=60`, `hr=3600`, `day=86400`
-
-**Derived units:** `N=1` (newton, kg·m/s²), `J=1` (joule), `W=1` (watt), `Pa=1` (pascal), `Hz=1` (hertz)
-
-All values are defined in terms of SI base — `km = 1000 * m` and so on — so they cascade through a single base-change point.
-
-Load it as the CLI's single file argument and write your formula inline or via the inline-source idiom:
-
-```bash
-$ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=distance/time, speed_eqn=speed)'
-speed = 25 / 18
-```
-
-Note: a multi-file CLI load form (`fwiz file_a.fw file_b.fw(...)`) is **not** currently supported — the CLI accepts exactly one filename. Library files needing a units catalog must either (a) inline the necessary bindings (the `stdlib/physics/mechanics.fw` pattern, see §14.4) or (b) drive the equations via CLI synthetic bindings. Completed 2026-06-23 (M1+M2+M3). See the `@include` directive section (§7.7) for syntax and strict-mode resolution.
-
-Dimensional analysis rejection and further catalog expansion are tracked in Future #7a and #7b (the latter blocked by Future #78 — see Future.md).
-
-### 14.4 `stdlib/physics/mechanics.fw` — Newtonian mechanics (since 2026-05-13, cycle 3)
-
-Bidirectional Newtonian-mechanics equations: `force = mass * accel`, weight, kinetic energy, momentum, work, power, pressure, frequency/period reciprocity. Inlines the SI-base bindings it depends on (`m, kg, s, N, Pa, J, W`) so unit-suffix CLI args (`mass=10kg`, `accel=9.81*m/s^2`) resolve end-to-end without a separate units load. Variable names are deliberately verbose (`mass`, not `m`; `displacement`, not `s`; `area`, not `A`) to avoid shadowing the SI base-unit symbols bound by `stdlib/units/si-minimal.fw`.
-
-```bash
-$ fwiz 'stdlib/physics/mechanics.fw(force=?, mass=10kg, accel=9.81)'
-force = 981 / 10
-$ fwiz 'stdlib/physics/mechanics.fw(mass=?, force=98.1, accel=9.81)'
-mass = 10
-```
-
-### 14.2 `stdlib/builtin.fw` — reference for C++ built-ins
-
-The `.fw` representation of the C++-backed built-ins (`sin`, `cos`, `sqrt`, `log`, etc.). Each section shows the `@extern` directive and the inverse equation used for reverse solving:
-
-```
-[sin(x) -> result] @extern sin
-x = asin(result)
-```
-
-This file is **reference documentation** — the actual built-ins are compiled into the fwiz binary. Read it when you want to define your own `@extern`-backed function in C++: copy the pattern, register via `register_function()`, and your new function behaves like a native built-in.
+Invocation varies by module type — flat files can be queried directly; section-based
+files require the `--legacy-implicit` form or a consumer `@include` file. See
+Stdlib.md §Invocation for the complete guide.
 
 ---
 
