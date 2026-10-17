@@ -2066,6 +2066,34 @@ The helper names carry the shape taxonomy the comments currently carry; the disp
 
 **Locked:** No — naming, low-priority but cheap and risk-free.
 
+## #R19. Refactor: `numeric_results_` tri-state `map<string,bool>` → named exactness type — `nuanced-refactor-candidate` (naming)
+
+**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17, function-scope ANALYZE, T1, Haiku-only floor — Gemma unavailable). Unit: `solve_all` NUMERIC-candidate branch (the F1 gate, system.h:~3401-3458). Haiku purpose `match/specific`; mechanics `match/specific` overall but an honest hedge on one detail: *"`numeric_results_[target] = false` ... What that flag means (for example, whether the result is approximate) cannot be determined from the visible code."* Purpose response repeated the hedge. Provisional pass; not a gate failure.
+
+**The signal:** `mutable std::map<std::string, bool> numeric_results_` (system.h:468) encodes three states: **absent** = exact / never numeric, **true** = numeric and verified exact, **false** = numeric and approximate (`~`). The only place the meaning is written down is a trailing comment on the declaration (`// var → true if exact (verified)`) and a comment in main.cpp:702 ("absent OR true means exact"). At every write site (system.h:3157, 3454, 5370) and read site (main.cpp:495-496, 704-705) the reader sees a bare `false`/`it->second` and has to recover the tri-state convention off-body. Haiku could not, and correctly said so.
+
+**Proposed:** introduce `enum class NumericExactness { EXACT, APPROXIMATE };` and change the map to `std::map<std::string, NumericExactness> numeric_exactness_`. Write sites become `numeric_exactness_.try_emplace(target, NumericExactness::APPROXIMATE)` (also replaces the `if (!count) [] = false` two-step at 3453-3454 and 5370). Read sites become one helper, `bool is_exact_result(const std::string& var) const` (absent → true), replacing the two duplicated `find`/`end() || second` lambdas in main.cpp. Tests at tests.cpp:7569-7870 change mechanically.
+
+**Pattern coverage:** single member, 3 write sites + 2 duplicated read sites + 5 test asserts. Not a rule (one member). It is close to the existing `enum class`-over-magic-ints rule (Code-Style §Empirically-derived) applied to a bool whose meaning depends on presence/absence.
+
+**Reopen trigger:** any cycle that touches numeric exactness classification (`~` vs `=`) or adds a fourth exactness state (for example "exact-by-recognition"), OR a floor grader hedges on `numeric_results_` again.
+
+**Locked:** No.
+
+## #R20. Refactor: `lookup_binary_op_body` throwaway `shared_ptr<FormulaSystem> parse_sub` → stack local at point of use — `nuanced-refactor-candidate` (load-bearing comment)
+
+**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17, function-scope ANALYZE, T1, Haiku-only floor). Haiku purpose `match/specific`; mechanics `match/specific` with an honest lifetime hedge: *"The assignment to a `shared_ptr` suggests it was meant to keep the parsed system alive, but it is a local that is destroyed on return; whether the returned `eq.rhs` pointer remains valid after that depends on where the expression arena lives, which cannot be determined."* Provisional pass.
+
+**The signal:** the code is safe. `load_lines` opens no `ExprArena::Scope`, so the parsed nodes live in the caller's active arena, not `parse_sub->arena`. But that invariant is carried only by an 8-line comment above `parse_sub = std::make_shared<FormulaSystem>()` (system.h:~1757-1765). With comments stripped, two cues point the reader the wrong way: (1) `shared_ptr` signals shared or escaping ownership, and (2) `parse_sub` is declared at the top of the function, far from where it is assigned. Every other `make_shared<FormulaSystem>` site in system.h (1164, 1229, 4278, 4338) escapes into the `sub_systems` cache, so here the type tells a false story.
+
+**Proposed:** remove the early `std::shared_ptr<FormulaSystem> parse_sub;` declaration and write `FormulaSystem parse_sub;` (plain stack value) right before `parse_sub.load_lines(sugared)`. A stack local plainly does not outlive the function, and the reader no longer assumes ownership has to be extended. Cut the lifetime comment to one line that names the actual invariant (`// parsed nodes live in the caller's active arena; parse_sub holds only the equations vector`). Optionally add `assert(ExprArena::current() != &parse_sub.arena)` so the invariant is checked and not just documented. If `FormulaSystem` turns out too large for the stack, `auto parse_sub = std::make_unique<FormulaSystem>()` at point of use still fixes the misleading ownership signal.
+
+**Pattern coverage:** single site, so not a new rule. Recorded as a 4th corroborating site of the existing Code-Style rule "load-bearing comments must point at a structural cause" (R1/R2/R5 precedent).
+
+**Reopen trigger:** implementer touches `lookup_binary_op_body` or the foldl pass, OR `load_lines` ever gains its own `ExprArena::Scope` (at that point the current code becomes a real dangling pointer, and this refactor's assert would catch it).
+
+**Locked:** No.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
