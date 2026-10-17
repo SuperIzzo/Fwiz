@@ -31,3 +31,17 @@ make                                   # build ./bin/fwiz
 python3 benchmarks/llm-stem/check_reference.py            # all problems
 python3 benchmarks/llm-stem/check_reference.py --problems 'rev-*'
 ```
+
+## Running an LLM
+
+```bash
+python3 benchmarks/llm-stem/run.py --dry-run                      # score references, no LLM (must be 100%)
+python3 benchmarks/llm-stem/run.py --problems 'alg-*' --model haiku
+python3 benchmarks/llm-stem/test_run.py                           # offline tests with a mock LLM
+```
+
+Flags: `--problems <glob>`, `--model` (default `haiku`), `--dry-run`, `--docs a.md,b.md` (repo docs given to the model; default `README.md,docs/Language.md`), `--max-runs` (fwiz runs, default 3), `--max-turns` (LLM turns, default 4), `--out DIR`.
+
+The model runs through `claude -p --safe-mode --setting-sources "" --tools ""` from a temp dir outside the repo, so it cannot read `CLAUDE.md` or project memory. It replies with ```` ```fw name.fw ```` file blocks and ```` ```fwiz <args> ```` command blocks; the runner writes the files, runs fwiz (no shell), and feeds the output back. It stops once fwiz prints a value for the answer variable. The backend is the single function `call_claude` in `run.py`.
+
+Output goes to `results/<timestamp>/` (git-ignored): `results.json` (per attempt: verdict, `.fw` files, commands, fwiz stdout/stderr, replies, turns, seconds) and `summary.md`.
