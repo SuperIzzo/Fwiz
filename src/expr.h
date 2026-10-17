@@ -36,6 +36,26 @@ static_assert(static_cast<double>(FINGERPRINT_SCALE) * EPSILON_REL == 1.0,
               "FINGERPRINT_SCALE must equal 1/EPSILON_REL so bucket size matches tolerance");
 
 // ============================================================================
+//  FILE MAP — approximate start lines; `grep -n "^// Section:" expr.h` for the
+//  coarse sections, or the per-region `// ====` dividers below for the rest.
+//  (Line numbers drift as the file grows; update when adding a major region.)
+//
+//     59  gen_range_values, Checked<T> NaN-sentinel wrapper (87)
+//    170  Set theory: ValueSet, Interval, PeriodicFamily
+//    505  AST: Expr, ExprArena (509), rational helpers (620), BinOp table,
+//            builtin registry (725), builtin constants, undefined
+//    797  Symbolic algebra: tree queries (801), pattern matching (901),
+//            tree_map / substitute (1248), evaluate (1383), simplify (1542),
+//            Condition / check_condition (1787), rewrite rules (2297)
+//   2645  Linear algebra: vec / mat builtins
+//   2884  Bounded aggregation: fold_aggregate, try_unroll_aggregate
+//   3245  Symbolic calculus: BuiltinMeta registry (3249), compute_dim (3383),
+//            symbolic_diff (3467), symbolic_integrate (3566)
+//   4071  Linear solver: decompose into coeff * target + rest
+//   4458  Numerical solvers: newton_solve, bisection, adaptive_simpson, scans
+// ============================================================================
+
+// ============================================================================
 //  gen_range_values — discrete value generation for `[lo..hi @ step]`.
 //
 //  Single source of truth for range enumeration, shared by parse_range
@@ -2969,6 +2989,7 @@ constexpr size_t MATRIX_3X3_DIM = 3;
     const bool is_product = (name == "product");
     const bool is_max     = (name == "max");
     const bool is_min     = (name == "min");
+    const bool is_mean    = (name == "mean");
 
     // Empty domain: sum/product have identity elements; max/min/mean do not.
     if (values.empty()) {
@@ -2990,29 +3011,34 @@ constexpr size_t MATRIX_3X3_DIM = 3;
     }
 
     if (is_max || is_min) {
-        ExprPtr best = nullptr;
-        double best_num = 0.0;
+        ExprPtr best_term = nullptr;
+        double best_value = 0.0;                 // numeric value of best_term
         for (double v : values) {
             ExprPtr term = make_term(v);
-            const Checked<double> tn = evaluate(*term);
-            if (!tn) return nullptr;             // non-numeric term → unevaluated
-            const double n = tn.value();
-            if (!best || (is_max ? (n > best_num) : (n < best_num))) {
-                best = term;
-                best_num = n;
+            const Checked<double> term_value = evaluate(*term);
+            if (!term_value) return nullptr;     // non-numeric term → unevaluated
+            const double n = term_value.value();
+            const bool beats_best = !best_term || (is_max ? (n > best_value) : (n < best_value));
+            if (beats_best) {
+                best_term = term;
+                best_value = n;
             }
         }
-        return best;
+        return best_term;
     }
 
-    // mean = sum-fold / count, kept exact via rational DIV simplification.
-    ExprPtr acc = nullptr;
-    for (double v : values) {
-        ExprPtr term = make_term(v);
-        acc = acc ? Expr::BinOpExpr(BinOp::ADD, acc, term) : term;
+    if (is_mean) {
+        // mean = sum-fold / count, kept exact via rational DIV simplification.
+        ExprPtr acc = nullptr;
+        for (double v : values) {
+            ExprPtr term = make_term(v);
+            acc = acc ? Expr::BinOpExpr(BinOp::ADD, acc, term) : term;
+        }
+        return simplify(Expr::BinOpExpr(
+            BinOp::DIV, acc, Expr::Num(static_cast<double>(values.size()))));
     }
-    return simplify(Expr::BinOpExpr(
-        BinOp::DIV, acc, Expr::Num(static_cast<double>(values.size()))));
+
+    return nullptr;  // defensive: passed is_aggregate_reducer but has no fold policy
 }
 
 [[nodiscard]] inline ExprPtr try_unroll_aggregate(
