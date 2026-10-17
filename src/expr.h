@@ -636,6 +636,22 @@ inline Expr* ExprArena::alloc() {
     return a;
 }
 
+// 128-bit GCD — used by the additive rational accumulator, whose intermediate
+// numerator/denominator products can exceed int64 before reduction. __int128 is
+// a GCC/Clang extension (fine for this codebase's GCC 7+/Clang 5+ target).
+[[nodiscard]] inline __int128 gcd_abs_i128(__int128 a, __int128 b) {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b) { __int128 t = a % b; a = b; b = t; }
+    return a;
+}
+
+// Does a 128-bit value fit in int64_t?
+[[nodiscard]] inline bool fits_int64(__int128 v) {
+    return v >= static_cast<__int128>(INT64_MIN)
+        && v <= static_cast<__int128>(INT64_MAX);
+}
+
 // Build a normalized rational expression: GCD-reduced, sign in numerator.
 // Returns Num(n) if denominator is 1 after reduction.
 [[nodiscard]] inline ExprPtr make_rational(int64_t numer, int64_t denom) {
@@ -2336,17 +2352,38 @@ struct RewriteRulesGuard {
     flatten_additive(combined, 1.0, terms);
     double constant = 0;
     std::vector<std::pair<double, ExprPtr>> symbolic;
-    // Rational accumulator: combine integers and structural fractions
+    // Rational accumulator: combine integers and structural fractions exactly.
+    // Each combination is computed in __int128 (intermediate num/den products can
+    // exceed int64 — e.g. summing large coprime-denominator fractions from a
+    // factorial/aggregation), GCD-reduced in 128-bit, then checked to fit int64.
+    // If the REDUCED rational genuinely overflows int64 (arbitrary precision is
+    // out of scope), the accumulator is flushed to the inexact `constant` double
+    // path — same boundary behavior as a non-integer constant. Exactness is
+    // preserved for everything that fit before (the common case).
     int64_t rat_num = 0, rat_den = 1;
     bool has_rational = false;
+    // Flush the current exact accumulator into the inexact double `constant` and
+    // reset to 0/1. Used when a combination's reduced result exceeds int64.
+    auto flush_rational_to_double = [&]() {
+        if (has_rational && rat_num != 0)
+            constant += static_cast<double>(rat_num) / static_cast<double>(rat_den);
+        rat_num = 0; rat_den = 1; has_rational = false;
+    };
     for (auto& [c, b] : terms) {
         if (!b) {
             // Pure constant — try to add as rational
             if (is_integer_value(c)) {
                 const int64_t n = static_cast<int64_t>(c);
-                rat_num = rat_num * 1 + n * rat_den; // rat += n/1
-                // (no GCD yet — normalize at end)
-                has_rational = true;
+                // rat += n/1 : num = rat_num + n*rat_den (den unchanged)
+                const __int128 num = static_cast<__int128>(rat_num)
+                    + static_cast<__int128>(n) * rat_den;
+                if (fits_int64(num)) {
+                    rat_num = static_cast<int64_t>(num);
+                    has_rational = true;
+                } else {
+                    flush_rational_to_double();
+                    constant += c;
+                }
             } else {
                 constant += c;
             }
@@ -2354,12 +2391,21 @@ struct RewriteRulesGuard {
             // Structural fraction with integer coefficient: c * (p/q)
             auto [p, q] = to_rational(b);
             const int64_t ic = static_cast<int64_t>(c);
-            rat_num = rat_num * q + ic * p * rat_den;
-            rat_den *= q;
-            // Prevent overflow by intermediate GCD
-            const int64_t g = gcd_abs(rat_num, rat_den);
-            if (g > 1) { rat_num /= g; rat_den /= g; }
-            has_rational = true;
+            // rat += (ic*p)/q : num = rat_num*q + ic*p*rat_den ; den = rat_den*q
+            __int128 num = static_cast<__int128>(rat_num) * q
+                + static_cast<__int128>(ic) * p * rat_den;
+            __int128 den = static_cast<__int128>(rat_den) * q;
+            const __int128 g = gcd_abs_i128(num, den);
+            if (g > 1) { num /= g; den /= g; }
+            if (fits_int64(num) && fits_int64(den)) {
+                rat_num = static_cast<int64_t>(num);
+                rat_den = static_cast<int64_t>(den);
+                has_rational = true;
+            } else {
+                // Reduced rational genuinely exceeds int64 — fall back to inexact.
+                flush_rational_to_double();
+                constant += c * (static_cast<double>(p) / static_cast<double>(q));
+            }
         } else {
             symbolic.push_back({c, b});
         }

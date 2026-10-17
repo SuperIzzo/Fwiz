@@ -19,7 +19,8 @@
 # Iterator named v, NOT i (imaginary unit) — see expected_value.fw.
 #
 # Usage:
-#   variance(N=6, result=?s2)               # variance of a fair 6-sided die
+#   fwiz --legacy-implicit 'stdlib/probability/variance.fw(v=?, v=variance(6))'   # -> v = 35 / 12
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [variance(N) -> result]
 mean = sum(v * (1/N), v in [1..N])

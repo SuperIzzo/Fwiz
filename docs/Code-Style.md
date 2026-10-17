@@ -199,7 +199,7 @@ Function-scope rules. Appended by the blind-spot critic when function-scope Haik
 
 **Reason:** T3-only-passes mean a reader without the comment cannot follow. Comments rot, drift, get stripped by IDE flows, and are skipped by Haiku-grade readers under context pressure. Code that reads correctly without leaning on comments is durable; code that requires a comment to disambiguate the next step is not.
 
-**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable.
+**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable. **Corroborated** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17): a 4th site, `lookup_binary_op_body`, where a comment defends a misleading ownership type (`shared_ptr` for a throwaway) — #R20.
 
 ### Rule: heuristic-priority / rank functions returning small magic ints should use a named-constant `enum class`
 
@@ -270,6 +270,16 @@ walker(quotient);
 **Pattern coverage at extraction:** 4 sites in expr.h + system.h — `FactorWalker` (`try_cancel`, this cycle's A1), `Gatherer` (`try_u_sub_integrate`, this cycle's A1), `Walker` (`cse_extract`, pre-existing — predates the rule but follows it), `TreeCounter` (`cse_extract`, pre-existing — same). N≥3 met. The pre-existing sites confirm the pattern was already idiomatic in places; the cycle's A1 made it the *default* for new walker code.
 
 **Origin:** Cycle Cleanup-Bundle — measured T1-mechanics improvement on `try_cancel` after A1's `std::function`→struct rewrite (Cycle I-M2's vague-but-correct → Cycle Cleanup-Bundle's match on the same function under the same Haiku-grade test).
+
+### Rule: name a stored value by what it holds, not by its source or an ambiguous abbreviation
+
+**Convention:** name fields, parameters and maps for what the value *is* where it is read. Avoid names that describe a neighbouring thing (`function_section_name` holding a return-variable name), abbreviations with two local meanings (`eq_condition`: equation or equality?), generic names next to a second kind of value (`bindings` beside seq-valued variables), terms with two meanings in the codebase ("derive" vs derivative), and encodings hidden in values (`numeric_results_` tri-state bool).
+
+**Anti-pattern:** a name that is right to the author but sends a reader without context to the other reading; graders then either confabulate or hedge on that one identifier.
+
+**Reason:** in each case the code and structure were fine; one identifier flipped the T1 read to a fail, and a rename alone fixed it for both model families in 5 of 6 cases.
+
+**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17) — `exists_for_function_section` (#R21), `extract_bounds` (#R22), `refold_seq_valued_collections` (#R24), `format_derived` / `prepare_derive_bindings` (#R29), `numeric_results_` (#R19).
 
 ## File-organisation rules
 

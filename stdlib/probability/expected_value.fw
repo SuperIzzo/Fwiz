@@ -25,7 +25,8 @@
 # named-call dispatch resolves a section call by filename.
 #
 # Usage:
-#   expected_value(N=6, result=?m)          # mean of a fair 6-sided die -> 3.5
+#   fwiz --legacy-implicit 'stdlib/probability/expected_value.fw(m=?, m=expected_value(6))'   # -> m = 7 / 2
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [expected_value(N) -> result]
 result = sum(v * (1/N), v in [1..N])

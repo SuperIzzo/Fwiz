@@ -11,7 +11,8 @@
 # rationals up to the final divisions.)
 #
 # Usage:
-#   hyp_variance(N=54, K=13, n=5, result=?s2)   # spread of clubs in 5 of 54
+#   fwiz --legacy-implicit 'stdlib/probability/hyp_variance.fw(v=?, v=hyp_variance(54,13,5))'   # -> v = 0.8449478479
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [hyp_variance(N, K, n) -> result]
 result = n * (K/N) * ((N-K)/N) * ((N-n)/(N-1))

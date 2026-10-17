@@ -9,8 +9,8 @@
 # rising(x, 0) = 1 via the empty-product identity.
 #
 # Usage:
-#   ./bin/fwiz 'stdlib/combinatorics/rising(5, 2)'        # positional -> 30
-#   rising(x=5, m=2, result=?r)                            # named binding
+#   fwiz --legacy-implicit 'stdlib/combinatorics/rising.fw(r=?, r=rising(5,2))'   # -> r = 30
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [rising(x, m) -> result]
 result = product(x+i-1, i in [1..m])

@@ -24,7 +24,8 @@
 # dogfood for that non-uniform case.
 #
 # Usage:
-#   order_statistic(N=5, n=5, k=5, result=?e)     # expected highest of 5 from {1..5}
+#   fwiz --legacy-implicit 'stdlib/probability/order_statistic.fw(e=?, e=order_statistic(5,5,5))'   # -> e = 5
+#   See docs/Stdlib.md §Invocation for the @include consumer form.
 
 [order_statistic(N, n, k) -> result]
 result = k * (N+1) / (n+1)
