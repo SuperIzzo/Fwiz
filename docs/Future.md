@@ -2022,7 +2022,7 @@ Without comment or git-blame archaeology, the floor-grader read cannot disambigu
 
 **Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Likely in-scope as cheap hygiene.
 
-## #R16. Refactor: `expr.h` missing top-of-file SECTION table — `nuanced-refactor-candidate` (sharpens #R13)
+## #R16. Refactor: `expr.h` missing top-of-file SECTION table — `nuanced-refactor-candidate` (sharpens #R13) — DONE (2026-10-17)
 
 **From:** Cycle targeted-sweep-3c-3k blind-spot critic (2026-06-21, file-scope ANALYZE). Floor (Haiku + Gemma) **PASSED** the comprehension gate on all four file-explainer axes (purpose / components / relationships / pattern) for src/expr.h (4383 LOC, 2909 comment-stripped). This is NOT a gate failure.
 
@@ -2043,7 +2043,7 @@ However, **both floor graders independently flagged the same structural gap unpr
 
 **Locked:** No — nuanced channel, low-priority. Open for visionary tier classification. Cheap hygiene that directly implements a newly-adopted Code-Style rule.
 
-## #R17. Refactor: `try_unroll_aggregate_with_calls` three-shape dispatch → named helpers — `nuanced-refactor-candidate`
+## #R17. Refactor: `try_unroll_aggregate_with_calls` three-shape dispatch → named helpers — `nuanced-refactor-candidate` — DONE (2026-10-17)
 
 **From:** FULL-SWEEP Batch 1 (2026-06-22, gen-6 aggregation surface, function-scope ANALYZE, T1). Floor (Haiku + Gemma) **PASSED** the comprehension gate worst-of-two (purpose vague-but-correct/vague via Gemma; mechanics match/specific via both). This is NOT a gate failure.
 
@@ -2068,7 +2068,7 @@ The helper names carry the shape taxonomy the comments currently carry; the disp
 
 **Locked:** No — nuanced channel, low-priority.
 
-## #R18. Refactor: `fold_aggregate` mean branch → explicit `is_mean` flag — naming
+## #R18. Refactor: `fold_aggregate` mean branch → explicit `is_mean` flag — naming — DONE (2026-10-17)
 
 **From:** FULL-SWEEP Batch 1 (2026-06-22, gen-6 aggregation surface, function-scope ANALYZE, T1). Floor **PASSED** worst-of-two (purpose match/vague worst-case via Gemma; mechanics match/vague worst-case via Haiku). Not a gate failure — both graders got the substance (it computes the arithmetic mean).
 

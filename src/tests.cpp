@@ -18296,6 +18296,58 @@ void test_bounded_aggregation_step_d() {
     }
 }
 
+void test_aggregation_tidy_gaps() {
+    SECTION("gen-6 aggregation tidy: nested iterators, descending step, SD7/SD9");
+
+    const std::string dmg_linear_def = "[dmg_linear(atk, def) -> result]\nresult = atk * def\n";
+
+    // ---- Nested iterators: inner reducer folds first, outer sees concrete terms ----
+    ASSERT_EQ(ss("sum(sum(i*j, j in [1..3]), i in [1..2])"), "18",
+              "NI1: sum_i sum_j i*j over 1..2 x 1..3 = 3*6 = 18");
+    ASSERT_EQ(ss("sum(product(j, j in [1..i]), i in [1..4])"), "33",
+              "NI2: inner bound depends on outer iterator: 1!+2!+3!+4! = 33");
+    ASSERT_EQ(ss("max(count(j in [1..i]), i in [1..4])"), "4",
+              "NI3: nested count under max");
+    {
+        FormulaSystem sys;
+        sys.load_string("total = sum(sum(f*g, g in [1..2]), f in [1..3])\n");
+        ASSERT_NUM(sys.resolve("total", {}), 18.0, "NI4: nested sums via load path = 18");
+    }
+
+    // ---- Descending step: negative step walks hi..lo; sign-mismatched step is empty ----
+    ASSERT_EQ(ss("sum(i, i in [10..1 @ -3])"), "22", "DS1: 10+7+4+1 = 22");
+    ASSERT_EQ(ss("count(i in [5..1 @ -1])"), "5", "DS2: count descending = 5");
+    ASSERT_EQ(ss("product(i, i in [3..1 @ -1])"), "6", "DS3: product descending = 6");
+    ASSERT_EQ(ss("max(i, i in [5..1 @ -2])"), "5", "DS4: max descending picks first");
+    ASSERT_EQ(ss("min(i, i in [5..1 @ -2])"), "1", "DS5: min descending picks last");
+    ASSERT_EQ(ss("sum(i, i in [1..5 @ -1])"), "0", "DS6: ascending bounds with negative step is empty -> 0");
+
+    // ---- SD7: resolve_all through an explicit-iterator named binding ----
+    // sum(dmg_linear(atk=f, def=k), f in [1..6]) = 21*k. total=42 -> k=2.
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("total = sum(dmg_linear(atk=f, def=k), f in [1..6])\n");
+        auto ks = sys.resolve_all("k", {{"total", 42}});
+        ASSERT(ks.contains(2.0), "SD7: resolve_all total=42 -> k=2");
+    }
+
+    // ---- SD9: mean reducer over a named-binding formula call (forward + reverse) ----
+    // (max/min over a formula-call body are NOT covered: fold_aggregate must
+    // evaluate each term to compare, and a term that is still an unresolved _fcN
+    // call leaves the aggregate unevaluated — a known limitation, not asserted here.)
+    {
+        FormulaSystem sys;
+        sys.numeric_mode = true;
+        sys.custom_function_defs_["dmg_linear"] = dmg_linear_def;
+        sys.load_string("avg = mean(dmg_linear(atk=f, def=k), f in [1..6])\n");
+        ASSERT_NUM(sys.resolve("avg", {{"k", 2}}), 7.0, "SD9: mean(atk*2, 1..6) = 7");
+        const double k = sys.resolve("k", {{"avg", 7}});
+        ASSERT(FormulaSystem::approx_equal(k, 2.0), "SD9: avg=7 -> k=2");
+    }
+}
+
 void test_aggregation_binder_scoping() {
     SECTION("gen-6 Cycle 2a: aggregation iterator is a binder, not a free var");
 
@@ -19888,6 +19940,7 @@ int main() {
     test_bounded_aggregation_step_b();
     test_bounded_aggregation_step_c();
     test_bounded_aggregation_step_d();
+    test_aggregation_tidy_gaps();
     test_aggregation_binder_scoping();
     test_collections_c1_literal();
     test_collections_c1_map();
