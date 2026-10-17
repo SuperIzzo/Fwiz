@@ -1,0 +1,21 @@
+{
+  "id": "geo-hypotenuse",
+  "category": "geometry",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "A right triangle has legs 3 and 4. How long is the hypotenuse?",
+  "answer": {
+    "var": "c",
+    "values": [
+      5
+    ]
+  },
+  "reference": {
+    "files": {
+      "geo-hypotenuse.fw": [
+        "c = sqrt(a^2 + b^2)"
+      ]
+    },
+    "command": "'geo-hypotenuse.fw(c=?, a=3, b=4)'"
+  }
+}

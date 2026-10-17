@@ -1,0 +1,21 @@
+{
+  "id": "comb-two-aces",
+  "category": "combinatorics",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "A 5-card hand is dealt from a well-shuffled 52-card deck. What is the probability it contains exactly 2 aces?",
+  "answer": {
+    "var": "p",
+    "values": [
+      0.03992981808107859
+    ]
+  },
+  "reference": {
+    "files": {
+      "comb-two-aces.fw": [
+        "p = product((4-2+i)/i, i in [1..2]) * product((48-3+i)/i, i in [1..3]) / product((52-5+i)/i, i in [1..5])"
+      ]
+    },
+    "command": "'comb-two-aces.fw(p=?)'"
+  }
+}

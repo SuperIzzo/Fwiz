@@ -1,0 +1,23 @@
+{
+  "id": "alg-exponential",
+  "category": "algebra",
+  "difficulty": "easy",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "Solve 3^x = 81 for x.",
+  "answer": {
+    "var": "x",
+    "values": [
+      4
+    ]
+  },
+  "reference": {
+    "files": {
+      "alg-exponential.fw": [
+        "y = 3^x"
+      ]
+    },
+    "command": "'alg-exponential.fw(x=?, y=81)'"
+  }
+}

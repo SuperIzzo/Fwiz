@@ -1,0 +1,24 @@
+{
+  "id": "pw-shipping-reverse",
+  "category": "piecewise",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "Shipping costs $5 flat for parcels up to 2 kg, and $5 plus $3 per kg over 2 kg for heavier parcels. A shipment cost $17. How heavy was the parcel, in kg?",
+  "answer": {
+    "var": "w",
+    "values": [
+      6
+    ]
+  },
+  "reference": {
+    "files": {
+      "pw-shipping-reverse.fw": [
+        "cost = 5 iff w > 0 && w <= 2",
+        "cost = 5 + 3*(w - 2) iff w > 2"
+      ]
+    },
+    "command": "'pw-shipping-reverse.fw(w=?, cost=17)'"
+  }
+}

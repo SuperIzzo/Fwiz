@@ -1,0 +1,22 @@
+{
+  "id": "calc-gaussian-integral",
+  "category": "calculus",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "Compute the definite integral of e^(-x^2) from 0 to 1 (to 6 significant digits).",
+  "answer": {
+    "var": "a",
+    "values": [
+      0.746824132812427
+    ],
+    "rel_tol": 1e-05
+  },
+  "reference": {
+    "files": {
+      "calc-gaussian-integral.fw": [
+        "a = integral(e^(-x^2), x, 0, 1)"
+      ]
+    },
+    "command": "'calc-gaussian-integral.fw(a=?)'"
+  }
+}

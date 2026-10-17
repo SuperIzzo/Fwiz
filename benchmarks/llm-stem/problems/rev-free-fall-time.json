@@ -1,0 +1,25 @@
+{
+  "id": "rev-free-fall-time",
+  "category": "reverse-solve",
+  "difficulty": "easy",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "An object is dropped from rest from a height of 45 m (g = 9.81 m/s^2, no air resistance). How many seconds does it take to hit the ground?",
+  "answer": {
+    "var": "t",
+    "values": [
+      3.0289126640769135
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-free-fall-time.fw": [
+        "g = 9.81",
+        "h = g * t^2 / 2",
+        "t >= 0"
+      ]
+    },
+    "command": "'rev-free-fall-time.fw(t=?, h=45)'"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "geo-cosine-angle",
+  "category": "geometry",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "A triangle has sides 7, 8 and 9. What is the angle opposite the side of length 9, in degrees?",
+  "answer": {
+    "var": "C",
+    "values": [
+      73.39845040097977
+    ]
+  },
+  "reference": {
+    "files": {
+      "geo-cosine-angle.fw": [
+        "C = acos((a^2 + b^2 - c^2) / (2*a*b)) * 180 / pi"
+      ]
+    },
+    "command": "'geo-cosine-angle.fw(C=?, a=7, b=8, c=9)'"
+  }
+}

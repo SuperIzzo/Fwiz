@@ -1,0 +1,23 @@
+{
+  "id": "alg-mixture",
+  "category": "algebra",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "How many litres of a 40% acid solution must be mixed with 10 litres of a 10% acid solution to obtain a 25% acid solution?",
+  "answer": {
+    "var": "v",
+    "values": [
+      10
+    ]
+  },
+  "reference": {
+    "files": {
+      "alg-mixture.fw": [
+        "conc = (0.4*v + 0.1*w) / (v + w)"
+      ]
+    },
+    "command": "'alg-mixture.fw(v=?, conc=0.25, w=10)'"
+  }
+}

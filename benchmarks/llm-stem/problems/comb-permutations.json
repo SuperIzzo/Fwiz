@@ -1,0 +1,21 @@
+{
+  "id": "comb-permutations",
+  "category": "combinatorics",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "In how many ways can gold, silver and bronze medals be awarded among 10 runners?",
+  "answer": {
+    "var": "ways",
+    "values": [
+      720
+    ]
+  },
+  "reference": {
+    "files": {
+      "comb-permutations.fw": [
+        "ways = product(n - i + 1, i in [1..r])"
+      ]
+    },
+    "command": "'comb-permutations.fw(ways=?, n=10, r=3)'"
+  }
+}

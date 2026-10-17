@@ -1,0 +1,28 @@
+{
+  "id": "rev-fib-index",
+  "category": "reverse-solve",
+  "difficulty": "hard",
+  "tags": [
+    "reverse",
+    "recursion"
+  ],
+  "statement": "With F(0) = 0, F(1) = 1, F(n) = F(n-1) + F(n-2): for which n is F(n) = 55?",
+  "answer": {
+    "var": "k",
+    "values": [
+      10
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-fib-index.fw": [
+        "answer = fib(k)",
+        "",
+        "[fib(n) -> result]",
+        "result = n if n <= 1",
+        "result = fib(n-1) + fib(n-2) if n >= 2"
+      ]
+    },
+    "command": "'rev-fib-index.fw(k=?, answer=55)'"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "id": "rev-cagr",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "An investment grows from $1000 to $1500 in 8 years with annual compounding. What is the annual growth rate, as a decimal?",
+  "answer": {
+    "var": "r",
+    "values": [
+      0.05198950550864412
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-cagr.fw": [
+        "A = P * (1 + r)^t",
+        "r > 0"
+      ]
+    },
+    "command": "'rev-cagr.fw(r=?, A=1500, P=1000, t=8)'"
+  }
+}

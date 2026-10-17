@@ -1,0 +1,22 @@
+{
+  "id": "geo-heron",
+  "category": "geometry",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "What is the area of a triangle with sides 5, 6 and 7?",
+  "answer": {
+    "var": "area",
+    "values": [
+      14.696938456699067
+    ]
+  },
+  "reference": {
+    "files": {
+      "geo-heron.fw": [
+        "s = (a + b + c) / 2",
+        "area = sqrt(s*(s-a)*(s-b)*(s-c))"
+      ]
+    },
+    "command": "'geo-heron.fw(area=?, a=5, b=6, c=7)'"
+  }
+}

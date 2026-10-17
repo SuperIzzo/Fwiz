@@ -1,0 +1,23 @@
+{
+  "id": "rev-rc-charge-time",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A capacitor (100 microfarads) charges through a 10 kilo-ohm resistor toward 1 V from 0 V. After how many seconds does it reach 0.9 V?",
+  "answer": {
+    "var": "t",
+    "values": [
+      2.302585092994046
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-rc-charge-time.fw": [
+        "V = V0 * (1 - e^(-t/(R*C)))"
+      ]
+    },
+    "command": "'rev-rc-charge-time.fw(t=?, V=0.9, V0=1, R=10000, C=100e-6)'"
+  }
+}

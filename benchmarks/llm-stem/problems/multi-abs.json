@@ -1,0 +1,24 @@
+{
+  "id": "multi-abs",
+  "category": "multiple-solutions",
+  "difficulty": "easy",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "Find all x with |2x - 3| = 7.",
+  "answer": {
+    "var": "x",
+    "values": [
+      5,
+      -2
+    ]
+  },
+  "reference": {
+    "files": {
+      "multi-abs.fw": [
+        "y = abs(2*x - 3)"
+      ]
+    },
+    "command": "'multi-abs.fw(x=?, y=7)'"
+  }
+}

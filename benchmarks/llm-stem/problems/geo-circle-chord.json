@@ -1,0 +1,21 @@
+{
+  "id": "geo-circle-chord",
+  "category": "geometry",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "A chord of a circle of radius 10 subtends a central angle of 60 degrees. How long is the chord?",
+  "answer": {
+    "var": "chord",
+    "values": [
+      10
+    ]
+  },
+  "reference": {
+    "files": {
+      "geo-circle-chord.fw": [
+        "chord = 2 * r * sin(theta*pi/180 / 2)"
+      ]
+    },
+    "command": "'geo-circle-chord.fw(chord=?, r=10, theta=60)'"
+  }
+}

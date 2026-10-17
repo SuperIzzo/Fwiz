@@ -1,0 +1,21 @@
+{
+  "id": "calc-area-between",
+  "category": "calculus",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "What is the area enclosed between y = x and y = x^2 for 0 <= x <= 1?",
+  "answer": {
+    "var": "a",
+    "values": [
+      0.16666666666666666
+    ]
+  },
+  "reference": {
+    "files": {
+      "calc-area-between.fw": [
+        "a = integral(x - x^2, x, 0, 1)"
+      ]
+    },
+    "command": "'calc-area-between.fw(a=?)'"
+  }
+}

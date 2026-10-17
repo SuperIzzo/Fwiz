@@ -1,0 +1,24 @@
+{
+  "id": "phys-units-avg-speed",
+  "category": "physics",
+  "difficulty": "easy",
+  "tags": [
+    "units"
+  ],
+  "statement": "A walker covers 10 km in 2 hours. What is the average speed in metres per second?",
+  "answer": {
+    "var": "speed",
+    "values": [
+      1.3888888888888888
+    ]
+  },
+  "reference": {
+    "files": {
+      "phys-units-avg-speed.fw": [
+        "@include \"stdlib/units/si-minimal.fw\"",
+        "speed = distance / time"
+      ]
+    },
+    "command": "'phys-units-avg-speed.fw(speed=?, distance=10km, time=2hr)'"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "fin-loan-payment",
+  "category": "finance",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "What is the monthly payment on a $200,000 loan at 6% annual interest (compounded monthly), repaid in equal monthly instalments over 30 years?",
+  "answer": {
+    "var": "payment",
+    "values": [
+      1199.1010503055138
+    ]
+  },
+  "reference": {
+    "files": {
+      "fin-loan-payment.fw": [
+        "i = rate / 12",
+        "N = years * 12",
+        "payment = principal * i / (1 - (1 + i)^(-N))"
+      ]
+    },
+    "command": "'fin-loan-payment.fw(payment=?, principal=200000, rate=0.06, years=30)'"
+  }
+}

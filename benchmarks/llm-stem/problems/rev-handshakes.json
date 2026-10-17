@@ -1,0 +1,24 @@
+{
+  "id": "rev-handshakes",
+  "category": "reverse-solve",
+  "difficulty": "easy",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "At a party everyone shook hands with everyone else exactly once, 45 handshakes in total. How many people were there?",
+  "answer": {
+    "var": "n",
+    "values": [
+      10
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-handshakes.fw": [
+        "h = n*(n-1)/2",
+        "n > 0"
+      ]
+    },
+    "command": "'rev-handshakes.fw(n=?, h=45)'"
+  }
+}

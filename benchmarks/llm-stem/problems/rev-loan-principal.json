@@ -1,0 +1,25 @@
+{
+  "id": "rev-loan-principal",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "You can afford $1500 per month for 30 years at 4.5% annual interest (compounded monthly). How large a loan can you take?",
+  "answer": {
+    "var": "principal",
+    "values": [
+      296041.7385132896
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-loan-principal.fw": [
+        "i = rate / 12",
+        "N = years * 12",
+        "payment = principal * i / (1 - (1 + i)^(-N))"
+      ]
+    },
+    "command": "'rev-loan-principal.fw(principal=?, payment=1500, rate=0.045, years=30)'"
+  }
+}
