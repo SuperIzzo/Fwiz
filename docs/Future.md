@@ -124,6 +124,19 @@ multi-branch formula calls.
 
 **Trigger:** 50+ `foldl` equations over a shared op in a single system, OR a foldl-heavy stdlib module with 10+ section-referencing foldl sites, OR measured load latency attributable to repeated op-body lookups.
 
+## 114. `extract_bounds` turns a disjunctive condition into an inverted scan range, so numeric roots are lost — BUG (in-scope)
+
+**Surfaced by the FWIZ-4 blind-spot sweep, batch 3 (2026-10-17).** Clean Haiku, reading `extract_bounds` (system.h:~4989) with comments stripped, noted that `apply_valueset` takes the *largest* finite low and the *smallest* finite high over **all** intervals of a ValueSet. For a multi-interval set such as `(-inf,-2) | (2,inf)`, that gives `lo = 2, hi = -2`, an inverted (empty) range, where the hull or a per-interval scan was intended.
+
+**Confirmed empirically** with `bin/fwiz`:
+- `y = x^2 + sin(x)` with `y=100` gives `x ~ -9.97` and `x ~ 10.03`.
+- Adding the global condition `x > 2` gives `x ~ 10.03`. Using `x < -2` instead gives `x ~ -9.97`.
+- Adding the global condition `x < -2 || x > 2` gives **no roots**. The output is just the constraint range `x : (-inf, -2) | (2, +inf)`, even though both roots satisfy it.
+
+**Proposed:** have `extract_bounds` return the ValueSet's hull, or better, have the numeric scan iterate over each finite-clipped interval separately (`try_resolve_numeric` already filters candidates through the condition). Add a regression test for the disjunctive global condition above.
+
+**Trigger:** any cycle touching the numeric solver or ValueSet; cheap enough to take as a micro-cycle.
+
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
 Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.
@@ -2095,6 +2108,45 @@ The helper names carry the shape taxonomy the comments currently carry; the disp
 **Pattern coverage:** single site, so not a new rule. Recorded as a 4th corroborating site of the existing Code-Style rule "load-bearing comments must point at a structural cause" (R1/R2/R5 precedent).
 
 **Reopen trigger:** implementer touches `lookup_binary_op_body` or the foldl pass, OR `load_lines` ever gains its own `ExprArena::Scope` (at that point the current code becomes a real dangling pointer, and this refactor's assert would catch it).
+
+**Locked:** No.
+
+## #R21. Refactor: `SetDef::function_section_name` → `section_return_var`, `exists_for_function_section` → a name that says what it tests — naming (gate failure)
+
+**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17, function-scope, T1, two-grader floor). **Gate FAIL on both floor graders.** Haiku purpose wrong-on-detail/vague: the value is "bound to the function-section name", and it "can't determine what 'exists' means". Gemma purpose wrong-on-detail/specific: it confabulated "validate the configuration structure before further resolution". Both mechanics answers repeat "bind the value to the function-section name".
+
+**The signal:** in `exists_for_function_section` (system.h:~3037), `sub_binds[sd.function_section_name] = value; sub.resolve(sd.parameter, ...)` implements `is_in(value, sec) ⟺ ∃n: sec(n) = value`. But `SetDef::function_section_name` holds the section's **return-variable** name (system.h:~1317: `sd.function_section_name = s.return_var`), not a section name. The field name is false. Its partner `parameter` names the *input* variable only by convention, and the function name says "exists" without saying what exists.
+
+**Diagnosis (empirical, intervention ladder):**
+- Rung 1 (rename fields: `function_section_name` → `section_return_var`, `parameter` → `section_input_var`): Haiku flips to "solve for the section's input variable when its return variable is fixed to `value` ... a feasibility test for whether a target output can be reached" (match/specific). Gemma mechanics flips ("value bound to the function's return variable"). Gemma purpose is still vague ("defined and configured correctly").
+- Rung 2 (also rename the function → `section_can_output_value`): Haiku match/specific ("whether `value` can be produced as the output of a named function-type section"). Gemma stays vague ("can successfully execute").
+- Rung 3 (rung 2 plus a one-line header comment, `// Membership test for a function-section set: true iff some input n makes section(n) == value.`): Gemma flips to "can successfully produce a given output value" (match/specific).
+
+Diagnosis: **naming + a missing purpose comment** (rung 3). The field name is the larger defect because it misleads. The comment carries the existential meaning that no name of reasonable length can.
+
+**Proposed:**
+1. Rename `SetDef::function_section_name` → `return_var` (or `section_return_var`). It is set at one place (system.h:~1317), read in `exists_for_function_section`, and mentioned in the comment in expr.h:~1950.
+2. Rename `exists_for_function_section` → `section_can_output_value` (or `section_has_preimage`). It is called from the three `ExistenceCheckerGuard` lambdas plus tests.
+3. Keep the existing header block's `is_in(x, sec) ↔ ∃ n: sec(n) = x` line as the first line of the comment. The function already has it, so it is a legitimate load-bearing comment for an existential meaning that cannot be put into a name. The defect to fix is the misleading field name, not the absence of documentation.
+4. Optional: for FUNCTION_SECTION, document `SetDef::parameter` as the input variable, or alias it as `input_var` in a comment at the field.
+
+**Pattern coverage:** one of four sites behind the new Code-Style rule "name a stored value by what it holds" (see Code-Style.md §Empirically-derived rules).
+
+**Reopen trigger:** any cycle touching FUNCTION_SECTION sets or `is_in` dispatch, or a re-run that re-flags it.
+
+**Locked:** No.
+
+## #R22. Refactor: `extract_bounds` / `try_resolve_numeric` parameter `eq_condition` → `equation_condition` — naming (gate failure)
+
+**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma purpose wrong-on-detail/specific):** "optional *equality* conditions". Clean Haiku hedged on the same name ("The name suggests an equality constraint, but the visible code does not verify that").
+
+**Diagnosis (empirical):** rung 1 (rename only) `eq_condition` → `equation_condition` flips Gemma to "applying any specified equation or global constraints" (match/specific), and Haiku drops the equality reading. Naming was the whole bottleneck. `eq` is ambiguous between *equation* and *equality*, and in a condition context the second reading wins.
+
+**Proposed:** rename the parameter at its 2 declaration sites (system.h:~4992 `extract_bounds`, ~5017 `try_resolve_numeric`) and their uses (~5003, ~5065, ~5183). This is a mechanical change.
+
+**Pattern coverage:** a site of the "name a stored value by what it holds" rule. Other `eq` locals that hold an `Equation` (`for (auto& eq : equations)`) are unambiguous, because the type is visible at the loop header. Only a `Condition*` named `eq_…` is ambiguous.
+
+**Reopen trigger:** implementer touches either function, OR a grader misreads `eq_condition` again.
 
 **Locked:** No.
 

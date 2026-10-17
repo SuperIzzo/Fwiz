@@ -271,6 +271,28 @@ walker(quotient);
 
 **Origin:** Cycle Cleanup-Bundle — measured T1-mechanics improvement on `try_cancel` after A1's `std::function`→struct rewrite (Cycle I-M2's vague-but-correct → Cycle Cleanup-Bundle's match on the same function under the same Haiku-grade test).
 
+### Rule: name a stored value by what it holds, not by where it came from or by an ambiguous abbreviation
+
+**Convention:** a field, parameter or map that stores a value must be named for **what the value is** in the code that reads it. Avoid three kinds of name:
+1. **A name that describes a neighbouring thing.** `SetDef::function_section_name` stores the section's *return-variable* name, so call it `return_var` / `section_return_var`.
+2. **An abbreviation with two plausible expansions in the local domain.** `eq_condition` reads as "equality condition" in condition code, so write `equation_condition`.
+3. **A generic name next to a second kind of the same thing.** `bindings` (numeric) sitting beside seq-valued variables, so write `numeric_bindings`. A container whose *values* carry an encoding is a variant of this: `numeric_results_`, a `map<string,bool>` where absent/true/false mean three exactness states, should use a named enum value (#R19).
+
+**Anti-pattern:** the name is correct to the author, because the value really does come from the function section, or `eq` really is short for equation, but a reader without that context picks the other reading. Then they either (a) confabulate confidently (Gemma: "optional *equality* conditions"; "validate the configuration structure") or (b) hedge on the one identifier they cannot place (Haiku: "what the flag means cannot be determined").
+
+**Reason:** in these failures the code was correct and the structure was fine. A single misleading identifier flipped a T1 read from pass to fail. A rename alone (rung 1) fixed it for both model families in 3 of 4 cases. That is the cheapest possible fix, and the defect costs a reader the most when it is left in place, because it misleads rather than merely being opaque.
+
+**Pattern coverage at extraction (N=5 across 2 batches, both model families):**
+- `SetDef::function_section_name` in `exists_for_function_section`: gate FAIL on both graders, #R21.
+- `eq_condition` in `extract_bounds` / `try_resolve_numeric`: gate FAIL (Gemma), Haiku hedge, #R22.
+- `bindings` in `refold_seq_valued_collections`: gate FAIL (Gemma), Haiku hedge, #R24.
+- `numeric_results_` value encoding in the `solve_all` F1-gate branch: both graders stumble, #R19 (batch 2).
+- `v0` (the visited set passed to `solve_recursive`; `resolve`, `verify_variable`): Haiku "cannot be determined" in `resolve`, nit.
+
+**Fix pattern:** run the rename intervention first (rung 1). If one family still hedges, the remaining gap is usually a *meaning* that cannot fit in a name (e.g. "∃n: sec(n) = value"). That is the legitimate case for a short load-bearing comment, and it is consistent with the "load-bearing comments must point at a structural cause" rule above, because the structural cause, the bad name, has been removed first.
+
+**Origin:** FULL-SWEEP Batches 2-4 (FWIZ-4, 2026-10-17). Two-grader T1 failures on `exists_for_function_section`, `extract_bounds` and `refold_seq_valued_collections`, plus the batch-2 `numeric_results_` hedge.
+
 ## File-organisation rules
 
 File-scope rules. Appended by the blind-spot critic when file-scope tests reveal a recurring file-level comprehension failure (file-explainer can't reliably name purpose / components / relationships / pattern). Each entry follows the same rule format as above; **Origin** line names the cycle and file.
