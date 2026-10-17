@@ -147,6 +147,18 @@ multi-branch formula calls.
 
 **Trigger:** any cycle touching conditions; cheap enough for a micro-cycle.
 
+## 116. `parse_condition` silently drops clauses it cannot recognise, and the connector list then falls out of step with the clauses — BUG (in-scope)
+
+**Surfaced by the FWIZ-4 blind-spot sweep, batch 6 (2026-10-17).** Clean Haiku on `parse_condition` (system.h:~3748), comments stripped: "Only `is_neg_num` and `is_in` calls are kept. Every other bare clause is dropped silently." It also noted that "connectors are pushed ... before clauses are known to be valid ... so `connectors` may no longer line up one-to-one with `clauses`".
+
+**Confirmed empirically:**
+- `y = 1 if bogus(a)` with `a=-5` gives `y = 1`. The condition disappears without any warning, and the equation silently becomes unconditional.
+- `y = 1 if a > 0 && bogus(a) || b > 0` with `a=1, b=0` gives `Cannot solve`. The surviving clauses `[a>0, b>0]` are joined by `connectors[0] = AND`, the connector that belonged to the dropped clause.
+
+**Proposed:** throw a parse error on an unrecognised clause (the `// malformed clause, skip` branch). The project rule is "no silent failure", and a condition that vanishes changes what the equation means. If dropping ever has to stay, pop the matching connector along with the clause. A second, lower-priority hazard: the comparison-operator scan is textual, so `f(a > b) == c` splits at the inner `>`. That only becomes reachable once conditions accept parentheses (see #115).
+
+**Trigger:** any cycle touching `parse_condition`, or together with #115.
+
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
 Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.
@@ -2210,6 +2222,20 @@ The ~110-line `is_in` dispatcher sits between the two, so a reader who reaches t
 **Pattern coverage:** single site.
 
 **Reopen trigger:** any change to range-literal grammar (e.g. the `[lo..hi)` boundary brackets planned in the collection ontology), since that change would otherwise have to be made twice.
+
+**Locked:** No.
+
+## #R27. Refactor: one shared bracket-depth helper for token scans — `nuanced-refactor-candidate` (structure / duplication)
+
+**From:** FULL-SWEEP Batch 6 (FWIZ-4, 2026-10-17, T1). Not a gate failure: every function involved passes on both graders. Clean Haiku flagged the same fragility at two sites ("`pd` is not checked for going negative ... the comma check would then never fire"; "mismatched pairs ... are not detected; the counter simply balances numerically").
+
+**The signal:** the same open/close depth counter is hand-written at least 4 times. `parse_call_args` has a 6-arm if-chain over `LPAREN/RPAREN/LBRACKET/RBRACKET/LBRACE/RBRACE`, and `has_named_eq_in_range` has the same chain, with a comment saying it "mirrors the depth-tracking pattern used by parse_call_args ... any bracket pair the lexer emits must appear here". `extract_formula_calls`' pre-scan tracks parens only. `parse_range` and `load_lines` repeat the idea at character level. When gen-6 added `{}` the token sites had to be patched one by one (see the comments recording that history). A comment asking future editors to keep copies in sync is the load-bearing-comment anti-pattern in another form.
+
+**Proposed:** `constexpr int bracket_depth_delta(TokenType t)` (+1 for any opener, −1 for any closer, 0 otherwise) next to `TokenType` in lexer.h, used by the token-level scans. Each scan becomes `pd += bracket_depth_delta(tok[k].type); if (pd == 0 && tok[k].type == TARGET) ...`. The next bracket token is then added in one place. Optionally clamp or flag a negative depth.
+
+**Pattern coverage:** 3 token-level sites + 2 char-level sites. This is close to rule threshold, but it is a DRY/structure issue rather than a comprehension failure, so it is filed as a refactor, not a Code-Style rule.
+
+**Reopen trigger:** the next new bracket-like token (e.g. boundary brackets `[lo..hi)` from the collection ontology), or any bug traced to a depth scan that missed a bracket kind.
 
 **Locked:** No.
 
