@@ -280,18 +280,19 @@ walker(quotient);
 
 **Anti-pattern:** the name is correct to the author, because the value really does come from the function section, or `eq` really is short for equation, but a reader without that context picks the other reading. Then they either (a) confabulate confidently (Gemma: "optional *equality* conditions"; "validate the configuration structure") or (b) hedge on the one identifier they cannot place (Haiku: "what the flag means cannot be determined").
 
-**Reason:** in these failures the code was correct and the structure was fine. A single misleading identifier flipped a T1 read from pass to fail. A rename alone (rung 1) fixed it for both model families in 3 of 4 cases. That is the cheapest possible fix, and the defect costs a reader the most when it is left in place, because it misleads rather than merely being opaque.
+**Reason:** in these failures the code was correct and the structure was fine. A single misleading identifier flipped a T1 read from pass to fail. A rename alone (rung 1) fixed it for both model families in 5 of 6 cases. That is the cheapest possible fix, and the defect costs a reader the most when it is left in place, because it misleads rather than merely being opaque.
 
-**Pattern coverage at extraction (N=5 across 2 batches, both model families):**
+**Pattern coverage at extraction (N=6 across 4 batches, both model families):**
 - `SetDef::function_section_name` in `exists_for_function_section`: gate FAIL on both graders, #R21.
 - `eq_condition` in `extract_bounds` / `try_resolve_numeric`: gate FAIL (Gemma), Haiku hedge, #R22.
 - `bindings` in `refold_seq_valued_collections`: gate FAIL (Gemma), Haiku hedge, #R24.
 - `numeric_results_` value encoding in the `solve_all` F1-gate branch: both graders stumble, #R19 (batch 2).
 - `v0` (the visited set passed to `solve_recursive`; `resolve`, `verify_variable`): Haiku "cannot be determined" in `resolve`, nit.
+- the "derive" helper family (`format_derived`, `prepare_derive_bindings`): clean Haiku read "derive" as *derivative* in a codebase that also differentiates symbolically. Gate FAIL ×2, and the rename to "symbolic solve" fixes both, #R29 (batch 9). This is a domain-term variant of kind 2: one word with two meanings in the same codebase.
 
 **Fix pattern:** run the rename intervention first (rung 1). If one family still hedges, the remaining gap is usually a *meaning* that cannot fit in a name (e.g. "∃n: sec(n) = value"). That is the legitimate case for a short load-bearing comment, and it is consistent with the "load-bearing comments must point at a structural cause" rule above, because the structural cause, the bad name, has been removed first.
 
-**Origin:** FULL-SWEEP Batches 2-4 (FWIZ-4, 2026-10-17). Two-grader T1 failures on `exists_for_function_section`, `extract_bounds` and `refold_seq_valued_collections`, plus the batch-2 `numeric_results_` hedge.
+**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17). Two-grader T1 failures on `exists_for_function_section`, `extract_bounds`, `refold_seq_valued_collections`, `format_derived` and `prepare_derive_bindings`, plus the batch-2 `numeric_results_` hedge.
 
 ## File-organisation rules
 

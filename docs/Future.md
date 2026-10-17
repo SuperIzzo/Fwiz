@@ -2269,6 +2269,26 @@ Naming / magic number is the whole bottleneck. This breaks the existing "no magi
 
 **Locked:** No.
 
+## #R29. Refactor: internal "derive" helpers → "symbolic solve" vocabulary (start with `format_derived`, `prepare_derive_bindings`) — naming (gate failure)
+
+**From:** FULL-SWEEP Batch 9 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (clean Haiku, too-smart) on 2 of 6 derive-family helpers.** `format_derived` was read as formatting "a symbolic *derivative* result", and `prepare_derive_bindings` as preparing bindings "before a derivative is taken ... target stays the differentiation variable". In fwiz, `--derive` means *symbolic derivation of a formula for the target* (symbolic solving). Derivatives are `diff(...)` / `symbolic_diff`. The two meanings live in the same codebase, and the shared English root pulls readers to the wrong one whenever the body does not show solving.
+
+**Diagnosis (empirical):** rung 1 (rename only) flips Haiku on both, and Gemma stays correct:
+- `format_derived` → `format_symbolic_solution`: "turns a symbolic math result into the string shown to the user".
+- `prepare_derive_bindings` → `prepare_symbolic_solve_bindings`: "the variable-to-expression map that a symbolic solver needs before it solves for `target`".
+
+`derive` itself and `try_derive` passed, because their bodies show recursive solving and the "Cannot derive equation" error.
+
+**Proposed:**
+1. Rename the two failing helpers as above (one definition each plus a handful of call sites in `derive` / `derive_all`).
+2. Optional, broader: adopt one internal vocabulary for the symbolic-solve family (`derive_all` → `symbolic_solve_all`, `derive_recursive` → `symbolic_solve_recursive`, `derive_unfold_bindings` → `symbolic_unfold_bindings`, etc.), keeping the user-facing `--derive` flag and its docs unchanged. Decide this together with any other cycle that touches derive.
+
+**Pattern coverage:** the 6th site of the Code-Style rule "name a stored value by what it holds ... not by an ambiguous abbreviation". Here the ambiguity is a domain term with two meanings in the same codebase.
+
+**Reopen trigger:** any cycle touching derive / CSE output, or when symbolic differentiation gains more surface (making the clash worse).
+
+**Locked:** No.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
