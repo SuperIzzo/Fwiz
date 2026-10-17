@@ -22,5 +22,4 @@
 # Usage:
 #   hyp_at_least(N=54, K=13, n=5, kmin=2, result=?p)
 
-[hyp_at_least(N, K, n, kmin) -> result]
 result = sum( product((K-k+i)/i, i in [1..k]) * product((N-K-(n-k)+i)/i, i in [1..n-k]) / product((N-n+i)/i, i in [1..n]), k in [kmin..n])
