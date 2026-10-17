@@ -199,7 +199,7 @@ Function-scope rules. Appended by the blind-spot critic when function-scope Haik
 
 **Reason:** T3-only-passes mean a reader without the comment cannot follow. Comments rot, drift, get stripped by IDE flows, and are skipped by Haiku-grade readers under context pressure. Code that reads correctly without leaning on comments is durable; code that requires a comment to disambiguate the next step is not.
 
-**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable. **Corroborated** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17) by a 4th site in another domain: `lookup_binary_op_body` (collections / foldl). An 8-line arena-lifetime comment is the only thing showing that the returned `eq.rhs` outlives the throwaway `shared_ptr<FormulaSystem> parse_sub`. With comments stripped, Haiku doubted that the pointer stays valid. The structural fix is to make the owner a stack local at point of use, so its lifetime is visible in the type. Future #R20. This also extends the rule's scope: a misleading **ownership type** (shared or escaping smart pointer for a throwaway) belongs to the same class of defect as a misleading name, and a comment that defends it is a symptom of that defect.
+**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable. **Corroborated** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17): a 4th site, `lookup_binary_op_body`, where a comment defends a misleading ownership type (`shared_ptr` for a throwaway) — #R20.
 
 ### Rule: heuristic-priority / rank functions returning small magic ints should use a named-constant `enum class`
 
@@ -271,28 +271,15 @@ walker(quotient);
 
 **Origin:** Cycle Cleanup-Bundle — measured T1-mechanics improvement on `try_cancel` after A1's `std::function`→struct rewrite (Cycle I-M2's vague-but-correct → Cycle Cleanup-Bundle's match on the same function under the same Haiku-grade test).
 
-### Rule: name a stored value by what it holds, not by where it came from or by an ambiguous abbreviation
+### Rule: name a stored value by what it holds, not by its source or an ambiguous abbreviation
 
-**Convention:** a field, parameter or map that stores a value must be named for **what the value is** in the code that reads it. Avoid three kinds of name:
-1. **A name that describes a neighbouring thing.** `SetDef::function_section_name` stores the section's *return-variable* name, so call it `return_var` / `section_return_var`.
-2. **An abbreviation with two plausible expansions in the local domain.** `eq_condition` reads as "equality condition" in condition code, so write `equation_condition`.
-3. **A generic name next to a second kind of the same thing.** `bindings` (numeric) sitting beside seq-valued variables, so write `numeric_bindings`. A container whose *values* carry an encoding is a variant of this: `numeric_results_`, a `map<string,bool>` where absent/true/false mean three exactness states, should use a named enum value (#R19).
+**Convention:** name fields, parameters and maps for what the value *is* where it is read. Avoid names that describe a neighbouring thing (`function_section_name` holding a return-variable name), abbreviations with two local meanings (`eq_condition`: equation or equality?), generic names next to a second kind of value (`bindings` beside seq-valued variables), terms with two meanings in the codebase ("derive" vs derivative), and encodings hidden in values (`numeric_results_` tri-state bool).
 
-**Anti-pattern:** the name is correct to the author, because the value really does come from the function section, or `eq` really is short for equation, but a reader without that context picks the other reading. Then they either (a) confabulate confidently (Gemma: "optional *equality* conditions"; "validate the configuration structure") or (b) hedge on the one identifier they cannot place (Haiku: "what the flag means cannot be determined").
+**Anti-pattern:** a name that is right to the author but sends a reader without context to the other reading; graders then either confabulate or hedge on that one identifier.
 
-**Reason:** in these failures the code was correct and the structure was fine. A single misleading identifier flipped a T1 read from pass to fail. A rename alone (rung 1) fixed it for both model families in 5 of 6 cases. That is the cheapest possible fix, and the defect costs a reader the most when it is left in place, because it misleads rather than merely being opaque.
+**Reason:** in each case the code and structure were fine; one identifier flipped the T1 read to a fail, and a rename alone fixed it for both model families in 5 of 6 cases.
 
-**Pattern coverage at extraction (N=6 across 4 batches, both model families):**
-- `SetDef::function_section_name` in `exists_for_function_section`: gate FAIL on both graders, #R21.
-- `eq_condition` in `extract_bounds` / `try_resolve_numeric`: gate FAIL (Gemma), Haiku hedge, #R22.
-- `bindings` in `refold_seq_valued_collections`: gate FAIL (Gemma), Haiku hedge, #R24.
-- `numeric_results_` value encoding in the `solve_all` F1-gate branch: both graders stumble, #R19 (batch 2).
-- `v0` (the visited set passed to `solve_recursive`; `resolve`, `verify_variable`): Haiku "cannot be determined" in `resolve`, nit.
-- the "derive" helper family (`format_derived`, `prepare_derive_bindings`): clean Haiku read "derive" as *derivative* in a codebase that also differentiates symbolically. Gate FAIL ×2, and the rename to "symbolic solve" fixes both, #R29 (batch 9). This is a domain-term variant of kind 2: one word with two meanings in the same codebase.
-
-**Fix pattern:** run the rename intervention first (rung 1). If one family still hedges, the remaining gap is usually a *meaning* that cannot fit in a name (e.g. "∃n: sec(n) = value"). That is the legitimate case for a short load-bearing comment, and it is consistent with the "load-bearing comments must point at a structural cause" rule above, because the structural cause, the bad name, has been removed first.
-
-**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17). Two-grader T1 failures on `exists_for_function_section`, `extract_bounds`, `refold_seq_valued_collections`, `format_derived` and `prepare_derive_bindings`, plus the batch-2 `numeric_results_` hedge.
+**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17) — `exists_for_function_section` (#R21), `extract_bounds` (#R22), `refold_seq_valued_collections` (#R24), `format_derived` / `prepare_derive_bindings` (#R29), `numeric_results_` (#R19).
 
 ## File-organisation rules
 

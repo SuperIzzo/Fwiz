@@ -124,40 +124,23 @@ multi-branch formula calls.
 
 **Trigger:** 50+ `foldl` equations over a shared op in a single system, OR a foldl-heavy stdlib module with 10+ section-referencing foldl sites, OR measured load latency attributable to repeated op-body lookups.
 
-## 114. `extract_bounds` turns a disjunctive condition into an inverted scan range, so numeric roots are lost — BUG (in-scope)
+## 114. Disjunctive conditions lose numeric roots (`extract_bounds`) — BUG
 
-**Surfaced by the FWIZ-4 blind-spot sweep, batch 3 (2026-10-17).** Clean Haiku, reading `extract_bounds` (system.h:~4989) with comments stripped, noted that `apply_valueset` takes the *largest* finite low and the *smallest* finite high over **all** intervals of a ValueSet. For a multi-interval set such as `(-inf,-2) | (2,inf)`, that gives `lo = 2, hi = -2`, an inverted (empty) range, where the hull or a per-interval scan was intended.
+**Surfaced FWIZ-4 blind-spot sweep (2026-10-17).** `extract_bounds` takes the largest finite low and smallest finite high across all intervals of a ValueSet, so `x < -2 || x > 2` becomes the inverted range `[2, -2]`. Repro: `y = x^2 + sin(x)` with global condition `x < -2 || x > 2`, `y=100` prints only the constraint range; without the condition it finds `x ~ -9.97` and `x ~ 10.03`. Fix: scan each finite-clipped interval (or the hull) and add a regression test.
 
-**Confirmed empirically** with `bin/fwiz`:
-- `y = x^2 + sin(x)` with `y=100` gives `x ~ -9.97` and `x ~ 10.03`.
-- Adding the global condition `x > 2` gives `x ~ 10.03`. Using `x < -2` instead gives `x ~ -9.97`.
-- Adding the global condition `x < -2 || x > 2` gives **no roots**. The output is just the constraint range `x : (-inf, -2) | (2, +inf)`, even though both roots satisfy it.
+**Trigger:** next cycle touching the numeric solver or ValueSet; small enough for a micro-cycle.
 
-**Proposed:** have `extract_bounds` return the ValueSet's hull, or better, have the numeric scan iterate over each finite-clipped interval separately (`try_resolve_numeric` already filters candidates through the condition). Add a regression test for the disjunctive global condition above.
+## 115. Condition `&&`/`||` have no precedence — BUG
 
-**Trigger:** any cycle touching the numeric solver or ValueSet; cheap enough to take as a micro-cycle.
+**Surfaced FWIZ-4 blind-spot sweep (2026-10-17).** Clauses are folded strictly left to right in `check_condition`, `Condition::to_valueset` and `parse_condition`'s flat split. Repro: `y = 1 if a > 0 || b > 0 && c > 0` with `a=1, b=0, c=0` gives `Cannot solve`; standard precedence gives `y = 1`. Undocumented. Fix: evaluate AND-runs before OR at all three sites (or, at minimum, document it and warn on mixed `&&`/`||`).
 
-## 115. Condition `&&` / `||` have no precedence: they evaluate strictly left to right — BUG (in-scope)
+**Trigger:** any cycle touching conditions; bundle with #116 and #R23.
 
-**Surfaced by the FWIZ-4 blind-spot sweep (2026-10-17).** Clean Haiku flagged it twice, both times from comment-stripped code alone: `check_condition` ("There is no operator precedence: mixed AND/OR is evaluated strictly left to right") and `parse_condition` ("The `&&`/`||` split is flat, with no visible parenthesis awareness or precedence handling").
+## 116. `parse_condition` silently drops unrecognised clauses — BUG
 
-**Confirmed empirically:** `y = 1 if a > 0 || b > 0 && c > 0` with `a=1, b=0, c=0` gives `Cannot solve for 'y'`. Standard precedence (`&&` binds tighter) gives `a>0 || (b>0 && c>0)`, which is true, so the answer should be `y = 1`. fwiz evaluates `(a>0 || b>0) && c>0`. Parentheses inside conditions are not supported either. Nothing in the docs mentions either limitation. A third site with the same fold is `Condition::to_valueset` (expr.h:~1808), which unites and intersects interval sets strictly left to right, so the numeric scan bounds inherit the same mis-grouping (also flagged by clean Haiku, batch 7). A fix has to change all three sites together.
+**Surfaced FWIZ-4 blind-spot sweep (2026-10-17).** A clause that is neither a comparison nor a known predicate is skipped (`// malformed clause, skip`), and its connector is not removed, so later clauses pair with the wrong `&&`/`||`. Repro: `y = 1 if bogus(a)` with `a=-5` gives `y = 1` (condition gone). Fix: throw a parse error on unrecognised clauses (or at least pop the matching connector).
 
-**Proposed:** either (a) give `&&` higher precedence than `||` in `check_condition`'s fold (evaluate AND-runs first, then OR them together; a small change to the loop, no AST change), or (b) at minimum, document left-to-right evaluation in Developer.md and the language reference, and warn at parse time when a condition mixes `&&` and `||`. Option (a) is preferred; it matches what every user expects.
-
-**Trigger:** any cycle touching conditions; cheap enough for a micro-cycle.
-
-## 116. `parse_condition` silently drops clauses it cannot recognise, and the connector list then falls out of step with the clauses — BUG (in-scope)
-
-**Surfaced by the FWIZ-4 blind-spot sweep, batch 6 (2026-10-17).** Clean Haiku on `parse_condition` (system.h:~3748), comments stripped: "Only `is_neg_num` and `is_in` calls are kept. Every other bare clause is dropped silently." It also noted that "connectors are pushed ... before clauses are known to be valid ... so `connectors` may no longer line up one-to-one with `clauses`".
-
-**Confirmed empirically:**
-- `y = 1 if bogus(a)` with `a=-5` gives `y = 1`. The condition disappears without any warning, and the equation silently becomes unconditional.
-- `y = 1 if a > 0 && bogus(a) || b > 0` with `a=1, b=0` gives `Cannot solve`. The surviving clauses `[a>0, b>0]` are joined by `connectors[0] = AND`, the connector that belonged to the dropped clause.
-
-**Proposed:** throw a parse error on an unrecognised clause (the `// malformed clause, skip` branch). The project rule is "no silent failure", and a condition that vanishes changes what the equation means. If dropping ever has to stay, pop the matching connector along with the clause. A second, lower-priority hazard: the comparison-operator scan is textual, so `f(a > b) == c` splits at the inner `>`. That only becomes reachable once conditions accept parentheses (see #115).
-
-**Trigger:** any cycle touching `parse_condition`, or together with #115.
+**Trigger:** any cycle touching `parse_condition`; bundle with #115.
 
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
@@ -2103,191 +2086,113 @@ The helper names carry the shape taxonomy the comments currently carry; the disp
 
 ## #R19. Refactor: `numeric_results_` tri-state `map<string,bool>` → named exactness type — `nuanced-refactor-candidate` (naming)
 
-**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17, function-scope ANALYZE, T1, Haiku-only floor — Gemma unavailable). Unit: `solve_all` NUMERIC-candidate branch (the F1 gate, system.h:~3401-3458). Haiku purpose `match/specific`; mechanics `match/specific` overall but an honest hedge on one detail: *"`numeric_results_[target] = false` ... What that flag means (for example, whether the result is approximate) cannot be determined from the visible code."* Purpose response repeated the hedge. Provisional pass; not a gate failure.
+**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17). Floor pass on the `solve_all` NUMERIC branch, but both graders could not say what `numeric_results_[target] = false` means. The map encodes three states (absent = exact/never numeric, true = verified exact, false = approximate), documented only in comments.
 
-**Final re-grade (2026-10-17, both floor graders, clean Haiku plus Gemma):** still PASS. The signal is now seen by **both** model families. Clean Haiku again could not say what the flag means, and Gemma misread it as "checks if a result for the target has already been recorded". It is an exactness flag, not a record of results. This is family-independent naming opacity, which strengthens the case for the enum.
+**Proposed:** `enum class NumericExactness { EXACT, APPROXIMATE }` as the map value; write sites use `try_emplace(target, APPROXIMATE)`; one `is_exact_result(var)` helper replaces the duplicated read lambdas in main.cpp.
 
-**The signal:** `mutable std::map<std::string, bool> numeric_results_` (system.h:468) encodes three states: **absent** = exact / never numeric, **true** = numeric and verified exact, **false** = numeric and approximate (`~`). The only place the meaning is written down is a trailing comment on the declaration (`// var → true if exact (verified)`) and a comment in main.cpp:702 ("absent OR true means exact"). At every write site (system.h:3157, 3454, 5370) and read site (main.cpp:495-496, 704-705) the reader sees a bare `false`/`it->second` and has to recover the tri-state convention off-body. Haiku could not, and correctly said so.
+**Pattern coverage:** single member (3 write sites, 2 read sites). See Code-Style "name a stored value by what it holds".
 
-**Proposed:** introduce `enum class NumericExactness { EXACT, APPROXIMATE };` and change the map to `std::map<std::string, NumericExactness> numeric_exactness_`. Write sites become `numeric_exactness_.try_emplace(target, NumericExactness::APPROXIMATE)` (also replaces the `if (!count) [] = false` two-step at 3453-3454 and 5370). Read sites become one helper, `bool is_exact_result(const std::string& var) const` (absent → true), replacing the two duplicated `find`/`end() || second` lambdas in main.cpp. Tests at tests.cpp:7569-7870 change mechanically.
+**Reopen trigger:** any change to `~`/`=` exactness classification, or a fourth exactness state.
 
-**Pattern coverage:** single member, 3 write sites + 2 duplicated read sites + 5 test asserts. Not a rule (one member). It is close to the existing `enum class`-over-magic-ints rule (Code-Style §Empirically-derived) applied to a bool whose meaning depends on presence/absence.
+## #R20. Refactor: `lookup_binary_op_body` throwaway `shared_ptr<FormulaSystem> parse_sub` → stack local — `nuanced-refactor-candidate` (load-bearing comment)
 
-**Reopen trigger:** any cycle that touches numeric exactness classification (`~` vs `=`) or adds a fourth exactness state (for example "exact-by-recognition"), OR a floor grader hedges on `numeric_results_` again.
+**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17). Floor pass, but Haiku doubted that the returned `eq.rhs` outlives `parse_sub`. It does (nodes live in the caller's arena), but only an 8-line comment says so, and `shared_ptr` suggests escaping ownership.
 
-**Locked:** No.
+**Proposed:** declare `FormulaSystem parse_sub;` at point of use, cut the comment to one line naming the arena invariant, optionally assert it.
 
-## #R20. Refactor: `lookup_binary_op_body` throwaway `shared_ptr<FormulaSystem> parse_sub` → stack local at point of use — `nuanced-refactor-candidate` (load-bearing comment)
+**Pattern coverage:** 4th site of the load-bearing-comment rule.
 
-**From:** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17, function-scope ANALYZE, T1, Haiku-only floor). Haiku purpose `match/specific`; mechanics `match/specific` with an honest lifetime hedge: *"The assignment to a `shared_ptr` suggests it was meant to keep the parsed system alive, but it is a local that is destroyed on return; whether the returned `eq.rhs` pointer remains valid after that depends on where the expression arena lives, which cannot be determined."* Provisional pass.
+**Reopen trigger:** any change to `lookup_binary_op_body`, or `load_lines` gaining its own `ExprArena::Scope`.
 
-**Final re-grade (2026-10-17, both floor graders):** still PASS. Clean Haiku (no project context) raised the lifetime doubt again without prompting: the `sec` pointer is "only valid while `sub` is alive", and `parse_sub` is a "`shared_ptr` at function scope, though only assigned once". Gemma's purpose answer missed the two-parameter fold-operator shape (vague-but-correct/vague). Corroborated.
+## #R21. Refactor: `SetDef::function_section_name` → `return_var`; rename `exists_for_function_section` — naming
 
-**The signal:** the code is safe. `load_lines` opens no `ExprArena::Scope`, so the parsed nodes live in the caller's active arena, not `parse_sub->arena`. But that invariant is carried only by an 8-line comment above `parse_sub = std::make_shared<FormulaSystem>()` (system.h:~1757-1765). With comments stripped, two cues point the reader the wrong way: (1) `shared_ptr` signals shared or escaping ownership, and (2) `parse_sub` is declared at the top of the function, far from where it is assigned. Every other `make_shared<FormulaSystem>` site in system.h (1164, 1229, 4278, 4338) escapes into the `sub_systems` cache, so here the type tells a false story.
+**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17). Gate fail on both graders: the field holds the section's return-variable name, so both read the code as binding the value to a section name and missed the meaning `is_in(v, sec) ⟺ ∃n: sec(n) = v`. Renaming the fields fixed Haiku; Gemma also needed the function rename plus the existing header comment.
 
-**Proposed:** remove the early `std::shared_ptr<FormulaSystem> parse_sub;` declaration and write `FormulaSystem parse_sub;` (plain stack value) right before `parse_sub.load_lines(sugared)`. A stack local plainly does not outlive the function, and the reader no longer assumes ownership has to be extended. Cut the lifetime comment to one line that names the actual invariant (`// parsed nodes live in the caller's active arena; parse_sub holds only the equations vector`). Optionally add `assert(ExprArena::current() != &parse_sub.arena)` so the invariant is checked and not just documented. If `FormulaSystem` turns out too large for the stack, `auto parse_sub = std::make_unique<FormulaSystem>()` at point of use still fixes the misleading ownership signal.
+**Proposed:** rename the field (set at system.h:~1317), rename the function (e.g. `section_can_output_value`), and keep the `∃n` line first in its header comment.
 
-**Pattern coverage:** single site, so not a new rule. Recorded as a 4th corroborating site of the existing Code-Style rule "load-bearing comments must point at a structural cause" (R1/R2/R5 precedent).
+**Pattern coverage:** see Code-Style "name a stored value by what it holds".
 
-**Reopen trigger:** implementer touches `lookup_binary_op_body` or the foldl pass, OR `load_lines` ever gains its own `ExprArena::Scope` (at that point the current code becomes a real dangling pointer, and this refactor's assert would catch it).
+**Reopen trigger:** any cycle touching FUNCTION_SECTION sets or `is_in` dispatch.
 
-**Locked:** No.
+## #R22. Refactor: `eq_condition` → `equation_condition` — naming
 
-## #R21. Refactor: `SetDef::function_section_name` → `section_return_var`, `exists_for_function_section` → a name that says what it tests — naming (gate failure)
+**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17). Gate fail (Gemma): `eq_condition` in `extract_bounds` was read as an *equality* condition; Haiku hedged on the same name. The rename alone fixed both graders.
 
-**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17, function-scope, T1, two-grader floor). **Gate FAIL on both floor graders.** Haiku purpose wrong-on-detail/vague: the value is "bound to the function-section name", and it "can't determine what 'exists' means". Gemma purpose wrong-on-detail/specific: it confabulated "validate the configuration structure before further resolution". Both mechanics answers repeat "bind the value to the function-section name".
+**Proposed:** rename the parameter in `extract_bounds` and `try_resolve_numeric` and their uses.
 
-**The signal:** in `exists_for_function_section` (system.h:~3037), `sub_binds[sd.function_section_name] = value; sub.resolve(sd.parameter, ...)` implements `is_in(value, sec) ⟺ ∃n: sec(n) = value`. But `SetDef::function_section_name` holds the section's **return-variable** name (system.h:~1317: `sd.function_section_name = s.return_var`), not a section name. The field name is false. Its partner `parameter` names the *input* variable only by convention, and the function name says "exists" without saying what exists.
+**Pattern coverage:** see Code-Style "name a stored value by what it holds".
 
-**Diagnosis (empirical, intervention ladder):**
-- Rung 1 (rename fields: `function_section_name` → `section_return_var`, `parameter` → `section_input_var`): Haiku flips to "solve for the section's input variable when its return variable is fixed to `value` ... a feasibility test for whether a target output can be reached" (match/specific). Gemma mechanics flips ("value bound to the function's return variable"). Gemma purpose is still vague ("defined and configured correctly").
-- Rung 2 (also rename the function → `section_can_output_value`): Haiku match/specific ("whether `value` can be produced as the output of a named function-type section"). Gemma stays vague ("can successfully execute").
-- Rung 3 (rung 2 plus a one-line header comment, `// Membership test for a function-section set: true iff some input n makes section(n) == value.`): Gemma flips to "can successfully produce a given output value" (match/specific).
+**Reopen trigger:** any change to either function.
 
-Diagnosis: **naming + a missing purpose comment** (rung 3). The field name is the larger defect because it misleads. The comment carries the existential meaning that no name of reasonable length can.
+## #R23. Refactor: split `check_condition` into predicate and comparison helpers — cohesion
 
-**Proposed:**
-1. Rename `SetDef::function_section_name` → `return_var` (or `section_return_var`). It is set at one place (system.h:~1317), read in `exists_for_function_section`, and mentioned in the comment in expr.h:~1950.
-2. Rename `exists_for_function_section` → `section_can_output_value` (or `section_has_preimage`). It is called from the three `ExistenceCheckerGuard` lambdas plus tests.
-3. Keep the existing header block's `is_in(x, sec) ↔ ∃ n: sec(n) = x` line as the first line of the comment. The function already has it, so it is a legitimate load-bearing comment for an existential meaning that cannot be put into a name. The defect to fix is the misleading field name, not the absence of documentation.
-4. Optional: for FUNCTION_SECTION, document `SetDef::parameter` as the input variable, or alias it as `input_var` in a comment at the field.
+**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17). Gate fail (Gemma mechanics): one lambda mixes predicate clauses (unknown → false) and comparison clauses (unknown → counted true), and Gemma swapped the two. Splitting fixed the swap.
 
-**Pattern coverage:** one of four sites behind the new Code-Style rule "name a stored value by what it holds" (see Code-Style.md §Empirically-derived rules).
-
-**Reopen trigger:** any cycle touching FUNCTION_SECTION sets or `is_in` dispatch, or a re-run that re-flags it.
-
-**Locked:** No.
-
-## #R22. Refactor: `extract_bounds` / `try_resolve_numeric` parameter `eq_condition` → `equation_condition` — naming (gate failure)
-
-**From:** FULL-SWEEP Batch 3 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma purpose wrong-on-detail/specific):** "optional *equality* conditions". Clean Haiku hedged on the same name ("The name suggests an equality constraint, but the visible code does not verify that").
-
-**Diagnosis (empirical):** rung 1 (rename only) `eq_condition` → `equation_condition` flips Gemma to "applying any specified equation or global constraints" (match/specific), and Haiku drops the equality reading. Naming was the whole bottleneck. `eq` is ambiguous between *equation* and *equality*, and in a condition context the second reading wins.
-
-**Proposed:** rename the parameter at its 2 declaration sites (system.h:~4992 `extract_bounds`, ~5017 `try_resolve_numeric`) and their uses (~5003, ~5065, ~5183). This is a mechanical change.
-
-**Pattern coverage:** a site of the "name a stored value by what it holds" rule. Other `eq` locals that hold an `Equation` (`for (auto& eq : equations)`) are unambiguous, because the type is visible at the loop header. Only a `Condition*` named `eq_…` is ambiguous.
-
-**Reopen trigger:** implementer touches either function, OR a grader misreads `eq_condition` again.
-
-**Locked:** No.
-
-## #R23. Refactor: split `check_condition`'s clause lambda into `eval_predicate_clause` + `eval_comparison_clause` — cohesion (gate failure)
-
-**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma mechanics wrong-on-detail/vague).** Gemma reversed the fail-safe direction: "Returns `false` if a variable referenced in a clause is not found ... (for non-predicate clauses)". Comparison clauses actually return `nullopt`, and the fold counts that as **true**. Clean Haiku passed (match/specific), and also named the left-to-right AND/OR fold that became bug #115.
-
-**The signal:** `check_condition` (expr.h:~2003, 234 LOC, 129 comment-stripped) holds one `eval_clause` lambda with two clause families whose **fail-safe directions are opposite**:
-- predicate clauses (`is_in` across 4 SetDef kinds, `is_neg_num`): unknown → `false`;
-- comparison clauses: unknown → `nullopt` → treated as satisfied (`true`).
-
-The ~110-line `is_in` dispatcher sits between the two, so a reader who reaches the comparison path carries the predicate path's "return false" habit into it.
-
-**Diagnosis (empirical):** rung 4 (split). Extract `eval_predicate_clause(c, bindings, expr_bindings, set_ctx)` and `eval_comparison_clause(c, bindings)`, so the driver becomes a 3-line dispatch plus the connector fold. This flipped Gemma's direction error: it now says the comparison path makes an "early exit (`return std::nullopt`)" for unbound variables. Partial: Gemma stayed match/vague on the unknown-counts-as-true fold (and mis-typed `l_opt`). Haiku was match/specific on the split version. Cohesion is the bottleneck; size contributes.
-
-**Proposed:**
-1. Extract `eval_comparison_clause` (the ~30-line substitute/evaluate/compare tail) and `eval_predicate_clause` (the `is_in` + `is_neg_num` block). The `is_in` kind switch could be its own `eval_is_in(sdef, bound_expr, ...)` helper.
-2. In the driver, name the polarity: `const bool clause_holds = !val.has_value() /* unknown counts as satisfied */ || *val;`.
-3. Fix #115 (AND binds tighter than OR) in the same pass, because the fold being edited is this one.
-
-**Pattern coverage:** single site. The `extract_*` / `try_*` helpers elsewhere already follow one-polarity-per-function, which is why they read cleanly.
-
-**Reopen trigger:** any change to `check_condition` (including the #115 fix), a new `SetDef::Kind`, or a new predicate.
-
-**Locked:** No.
-
-## #R24. Refactor: `refold_seq_valued_collections` parameter `bindings` → `numeric_bindings` — naming (gate failure)
-
-**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma purpose wrong-on-detail/specific):** "replaces them with corresponding sequence values retrieved from the provided bindings". In fact the seq values come from *equations* (`seq_value_of`), and variables present in `bindings` are the ones **skipped**. Clean Haiku hedged on the same point ("how a sequence value differs from a binding").
-
-**Diagnosis (empirical):** rung 1 (rename only) `bindings` → `numeric_bindings` flips Gemma to "substitute variables ... with their corresponding sequence values, while ignoring variables that are bound numerically" (match/specific), and Haiku's hedge disappears. Naming was the whole bottleneck: the function handles two kinds of variable values, and a generic `bindings` does not say which kind it holds.
-
-**Proposed:** rename the parameter in `refold_seq_valued_collections` (system.h:~5467). Consider the same rename wherever a `map<string,double>` sits next to seq-valued data in the collections path (`call_has_seq_arg` callers in `solve_recursive` / `solve_all`). Elsewhere the numeric map is the only kind, so `bindings` stays unambiguous there.
-
-**Pattern coverage:** a site of the "name a stored value by what it holds" rule.
-
-**Reopen trigger:** implementer touches the collections resolve path.
-
-**Locked:** No.
-
-## #R25. Refactor: merge `parse_range_literal` / `parse_range_literal_brace` and name the step — `nuanced-refactor-candidate` (naming + duplication)
-
-**From:** FULL-SWEEP Batch 5 (FWIZ-4, 2026-10-17, T1). Floor PASS on both functions. But on both, **both graders hedged on the same token**: the value after `@` is pushed into `args` anonymously. Haiku: "likely a step or stride, but the name and structure do not confirm it". Gemma: "a third bound" / "a third argument". Its only label was a `// step` trailing comment, which is stripped at T1.
-
-**Intervention (empirical):** naming the value (`const ExprPtr step = parse_expr(); args.push_back(step);`) flips Gemma to "an optional step value". Haiku now names the step but still asks what a step means for `range`, which is fair, because that is defined downstream.
-
-**Also:** the two functions are line-for-line identical except for the closing token (`RBRACKET` vs `RBRACE`) and its error message. The header comment of `_brace` says so ("Identical to parse_range_literal except the closing token is RBRACE").
-
-**Proposed:** one function `parse_range_literal(ExprPtr lo, TokenType close, const char* close_msg)` (or a `close` token plus a derived message), with the step named as a local. The two call sites in `primary()` pass `RBRACKET` / `RBRACE`. This removes about 11 lines and the drift risk (a fix to one copy silently missing the other).
+**Proposed:** extract `eval_predicate_clause` and `eval_comparison_clause`; name the unknown-counts-as-true step in the fold. Do it together with #115.
 
 **Pattern coverage:** single site.
 
-**Reopen trigger:** any change to range-literal grammar (e.g. the `[lo..hi)` boundary brackets planned in the collection ontology), since that change would otherwise have to be made twice.
+**Reopen trigger:** any change to `check_condition`, a new `SetDef::Kind`, or the #115 fix.
 
-**Locked:** No.
+## #R24. Refactor: `refold_seq_valued_collections` `bindings` → `numeric_bindings` — naming
 
-## #R27. Refactor: one shared bracket-depth helper for token scans — `nuanced-refactor-candidate` (structure / duplication)
+**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17). Gate fail (Gemma): it read the seq values as coming from `bindings`, when bound variables are the ones skipped. The rename alone fixed both graders.
 
-**From:** FULL-SWEEP Batch 6 (FWIZ-4, 2026-10-17, T1). Not a gate failure: every function involved passes on both graders. Clean Haiku flagged the same fragility at two sites ("`pd` is not checked for going negative ... the comma check would then never fire"; "mismatched pairs ... are not detected; the counter simply balances numerically").
+**Proposed:** rename the parameter; consider the same name wherever a numeric map sits next to seq-valued data in the collections path.
 
-**The signal:** the same open/close depth counter is hand-written at least 4 times. `parse_call_args` has a 6-arm if-chain over `LPAREN/RPAREN/LBRACKET/RBRACKET/LBRACE/RBRACE`, and `has_named_eq_in_range` has the same chain, with a comment saying it "mirrors the depth-tracking pattern used by parse_call_args ... any bracket pair the lexer emits must appear here". `extract_formula_calls`' pre-scan tracks parens only. `parse_range` and `load_lines` repeat the idea at character level. When gen-6 added `{}` the token sites had to be patched one by one (see the comments recording that history). A comment asking future editors to keep copies in sync is the load-bearing-comment anti-pattern in another form.
+**Pattern coverage:** see Code-Style "name a stored value by what it holds".
 
-**Proposed:** `constexpr int bracket_depth_delta(TokenType t)` (+1 for any opener, −1 for any closer, 0 otherwise) next to `TokenType` in lexer.h, used by the token-level scans. Each scan becomes `pd += bracket_depth_delta(tok[k].type); if (pd == 0 && tok[k].type == TARGET) ...`. The next bracket token is then added in one place. Optionally clamp or flag a negative depth.
+**Reopen trigger:** any change to the collections resolve path.
 
-**Pattern coverage:** 3 token-level sites + 2 char-level sites. This is close to rule threshold, but it is a DRY/structure issue rather than a comprehension failure, so it is filed as a refactor, not a Code-Style rule.
+## #R25. Refactor: merge `parse_range_literal` / `parse_range_literal_brace` and name the step — `nuanced-refactor-candidate`
 
-**Reopen trigger:** the next new bracket-like token (e.g. boundary brackets `[lo..hi)` from the collection ontology), or any bug traced to a depth scan that missed a bracket kind.
+**From:** FULL-SWEEP Batch 5 (FWIZ-4, 2026-10-17). Floor pass, but both graders hedged on the unnamed `@` value; naming it `step` fixed Gemma. The two functions differ only in the closing token.
 
-**Locked:** No.
+**Proposed:** one `parse_range_literal(lo, close_token)` with a named `step` local.
 
-## #R26. Refactor: `extract_include_path` magic `8` → one `@include` keyword constant shared with `is_include_line` — naming / magic number (gate failure)
+**Pattern coverage:** single site.
 
-**From:** FULL-SWEEP Batch 7 (FWIZ-4, 2026-10-17, T1). **Gate FAIL: Haiku confabulated** (wrong-on-detail/specific). With comments stripped, `trim(trim(line).substr(8))` gave no hint of *which* directive is being stripped. Haiku documented it as a C/C++ `#include "foo/bar.h"` extractor that "appears to handle only the quoted form; angle-bracket includes are not visibly stripped". Gemma hedged ("removing a prefix, likely a path prefix or identifier"). The sibling `is_include_line` passes on both graders because its `"@include"` literal sits next to its own `8`.
+**Reopen trigger:** any change to range-literal grammar (e.g. boundary brackets).
 
-**Diagnosis (empirical):**
-- Rung 1, making the keyword visible at the use site (`substr(std::string_view("@include").size())`): ✓ on **both** graders (Haiku: "the target path from a single `@include` directive line"; Gemma names `@include` as well).
-- Variant using a shared constant whose value is not visible at T1 (`AT_INCLUDE_KEYWORD.size()`): Haiku ✓, Gemma match/vague.
+## #R26. Refactor: `extract_include_path` magic `8` → shared `"@include"` constant — naming
 
-Naming / magic number is the whole bottleneck. This breaks the existing "no magic numbers" rule.
+**From:** FULL-SWEEP Batch 7 (FWIZ-4, 2026-10-17). Gate fail: with comments stripped, `substr(8)` led Haiku to describe a C `#include` parser. Making `"@include"` visible fixed both graders; the sibling `is_include_line` passes because its literal sits next to its `8`.
 
-**Proposed:** declare `static constexpr std::string_view INCLUDE_DIRECTIVE = "@include";` once, next to the two helpers, and use `INCLUDE_DIRECTIVE.size()` in both (`is_include_line`'s `t.size() == 8` and `t[8]`, and `extract_include_path`'s `substr(8)`). Better still, merge them into `std::optional<std::string> parse_include_directive(const std::string& line)`, which detects and extracts in one place. That also removes the hazard both graders flagged: `extract_include_path` "never checks" that the prefix is actually `@include`.
+**Proposed:** one `constexpr std::string_view` for the keyword used by both helpers, or merge them into `parse_include_directive(line) → optional<string>`.
 
-**Pattern coverage:** single site of an existing rule; no new rule.
+**Pattern coverage:** existing "no magic numbers" rule.
 
-**Reopen trigger:** any change to `@include` syntax or `process_includes`.
+**Reopen trigger:** any change to `@include` syntax.
 
-**Locked:** No.
+## #R27. Refactor: shared bracket-depth helper for token scans — `nuanced-refactor-candidate`
 
-## #R28. Refactor: one helper for the duplicated seq-argument splice in `solve_recursive` / `solve_all` — `nuanced-refactor-candidate` (duplication)
+**From:** FULL-SWEEP Batch 6 (FWIZ-4, 2026-10-17). Floor pass. The same open/close depth counter is hand-written in `parse_call_args`, `has_named_eq_in_range` and `extract_formula_calls` (plus char-level copies), and each had to be patched separately when `{}` was added.
 
-**From:** FULL-SWEEP Batch 8 (FWIZ-4, 2026-10-17, T1). Both excerpts pass the floor. The finding is structural. The Collections-Cycle-3 splice appears twice (system.h:~3358 in `solve_all`'s FORMULA_FWD branch, ~5252 in `solve_recursive`). Each copy has the same three steps: `unfold_formula_call_body(call, true)`, then a "LOUD GUARD" `throw FoldOperatorError(... "could not be inlined ...")` with the message duplicated word for word, then `resolve_foldl_calls(body)`. Only after that do the copies diverge: a single `try_resolve` in one, and dedup plus global-condition acceptance in the other.
+**Proposed:** `constexpr int bracket_depth_delta(TokenType)` in lexer.h, used by the token scans.
 
-**Proposed:** `[[nodiscard]] ExprPtr inline_seq_argument_call(const FormulaCall& call) const`, which unfolds, throws on failure and re-folds. Both sites call it and keep only their own acceptance logic. This also gives the "collection argument → parent-side inlining" invariant (CLAUDE.md, Collections Cycle 3) a single named home. Note that CLAUDE.md still mentions an `inline_seq_section_calls` helper that no longer exists in src/ (doc drift for the doc-updater).
+**Pattern coverage:** 3 token-level + 2 char-level sites.
 
-**Pattern coverage:** 2 sites. Below rule threshold.
+**Reopen trigger:** the next bracket-like token, or a bug traced to a depth scan.
 
-**Reopen trigger:** any change to the collections-as-arguments path (a third splice site, or a change in the error contract).
+## #R28. Refactor: one helper for the seq-argument splice in `solve_recursive` / `solve_all` — `nuanced-refactor-candidate`
 
-**Locked:** No.
+**From:** FULL-SWEEP Batch 8 (FWIZ-4, 2026-10-17). Floor pass. The unfold → throw `FoldOperatorError` → `resolve_foldl_calls` sequence is duplicated in both solvers, error text included.
 
-## #R29. Refactor: internal "derive" helpers → "symbolic solve" vocabulary (start with `format_derived`, `prepare_derive_bindings`) — naming (gate failure)
+**Proposed:** `inline_seq_argument_call(call)`; both sites keep only their acceptance logic. (CLAUDE.md still names a non-existent `inline_seq_section_calls`.)
 
-**From:** FULL-SWEEP Batch 9 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (clean Haiku, too-smart) on 2 of 6 derive-family helpers.** `format_derived` was read as formatting "a symbolic *derivative* result", and `prepare_derive_bindings` as preparing bindings "before a derivative is taken ... target stays the differentiation variable". In fwiz, `--derive` means *symbolic derivation of a formula for the target* (symbolic solving). Derivatives are `diff(...)` / `symbolic_diff`. The two meanings live in the same codebase, and the shared English root pulls readers to the wrong one whenever the body does not show solving.
+**Pattern coverage:** 2 sites.
 
-**Diagnosis (empirical):** rung 1 (rename only) flips Haiku on both, and Gemma stays correct:
-- `format_derived` → `format_symbolic_solution`: "turns a symbolic math result into the string shown to the user".
-- `prepare_derive_bindings` → `prepare_symbolic_solve_bindings`: "the variable-to-expression map that a symbolic solver needs before it solves for `target`".
+**Reopen trigger:** any change to collections-as-arguments.
 
-`derive` itself and `try_derive` passed, because their bodies show recursive solving and the "Cannot derive equation" error.
+## #R29. Refactor: internal "derive" helpers → "symbolic solve" names — naming
 
-**Proposed:**
-1. Rename the two failing helpers as above (one definition each plus a handful of call sites in `derive` / `derive_all`).
-2. Optional, broader: adopt one internal vocabulary for the symbolic-solve family (`derive_all` → `symbolic_solve_all`, `derive_recursive` → `symbolic_solve_recursive`, `derive_unfold_bindings` → `symbolic_unfold_bindings`, etc.), keeping the user-facing `--derive` flag and its docs unchanged. Decide this together with any other cycle that touches derive.
+**From:** FULL-SWEEP Batch 9 (FWIZ-4, 2026-10-17). Gate fail (Haiku) on `format_derived` and `prepare_derive_bindings`: "derive" was read as *derivative*, which the codebase also has (`diff`). Renaming to `format_symbolic_solution` / `prepare_symbolic_solve_bindings` fixed both graders.
 
-**Pattern coverage:** the 6th site of the Code-Style rule "name a stored value by what it holds ... not by an ambiguous abbreviation". Here the ambiguity is a domain term with two meanings in the same codebase.
+**Proposed:** rename those two; optionally move the internal derive family to one "symbolic solve" vocabulary, keeping the `--derive` flag.
 
-**Reopen trigger:** any cycle touching derive / CSE output, or when symbolic differentiation gains more surface (making the clash worse).
+**Pattern coverage:** see Code-Style "name a stored value by what it holds".
 
-**Locked:** No.
+**Reopen trigger:** any cycle touching derive/CSE output.
 
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
