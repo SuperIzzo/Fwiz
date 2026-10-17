@@ -1619,7 +1619,7 @@ void test_cli_garbage() {
             "empty name: clear error message");
     }
     {
-        // Future #73: a non-numeric RHS like `abc` parses as a Var and is
+        // docs/COMPLETED.md #73: a non-numeric RHS like `abc` parses as a Var and is
         // deferred to post-load resolution (synthetic_equations). Without a
         // query (`?`) in the input, the call still throws — but with the
         // "No query variable" message rather than "Invalid value".
@@ -1635,7 +1635,7 @@ void test_cli_garbage() {
             "non-numeric without query: clear error message");
     }
     {
-        // Future #73: same RHS WITH a query is now valid at parse time —
+        // docs/COMPLETED.md #73: same RHS WITH a query is now valid at parse time —
         // routes to synthetic_equations. Load-time would error on `abc`.
         auto q = parse_cli_query("f(x=?, y=abc)");
         ASSERT(q.synthetic_equations.find("y = abc") != std::string::npos,
@@ -3353,7 +3353,7 @@ void test_cli_scientific_notation() {
         ASSERT_NUM(q.bindings.at("y"), 1, "1e0 = 1");
     }
 
-    // Post-Units-cycle-1.1 (Future #76): the NUMBER-IDENT desugar
+    // Post-Units-cycle-1.1 (docs/COMPLETED.md #76): the NUMBER-IDENT desugar
     // intentionally does NOT fire when the trailing IDENT is `e` (Euler
     // constant), `if`, or `iff` — these are reserved words that cannot
     // serve as unit suffixes. `1e` therefore returns Num(1) (the `e` is
@@ -3371,7 +3371,7 @@ void test_cli_scientific_notation() {
         ASSERT_NUM(q.bindings.at("y"), 2.718281828459045, "1 * e = Euler (explicit)");
     }
 
-    // Future #73: `e5` is an IDENT (since `e` is in the number-IDENT desugar
+    // docs/COMPLETED.md #73: `e5` is an IDENT (since `e` is in the number-IDENT desugar
     // denylist, `2e` returns Num(2) leaving `5` as a separate token; standalone
     // `e5` lexes as a single IDENT). At parse_cli_query time it's a Var,
     // deferred to synthetic_equations rather than rejected. The user-facing
@@ -3833,11 +3833,11 @@ void test_errmsg_cli() {
             "empty value: names the variable");
     }
     {
-        // Future #73 (DONE 2026-05-13, cycle 2): `y=abc` is now deferred
+        // docs/COMPLETED.md #73 (DONE 2026-05-13, cycle 2): `y=abc` is now deferred
         // (parser succeeds, evaluate empty -> synthetic_equations). No
         // parse-time error message. The end-to-end error message (if
         // `abc` is genuinely undefined) is the system-level "Cannot solve"
-        // / "unknown variable". The error-quality follow-up is Future #79.
+        // / "unknown variable". The error-quality follow-up is FWIZ-8.
         auto q = parse_cli_query("f(x=?, y=abc)");
         ASSERT(q.synthetic_equations.find("y = abc") != std::string::npos,
                "bad number 'y=abc': deferred to synthetic_equations (post-load)");
@@ -5589,7 +5589,7 @@ void test_recursion_depth_guard() {
             "mutual recursion: depth guard surfaces");
     }
 
-    // Future #98 (cycle 3k) — sibling-leak regression guard for the RAII
+    // docs/COMPLETED.md #98 (cycle 3k) — sibling-leak regression guard for the RAII
     // visited-erase. `solve_recursive`/`try_resolve` now thread `visited` by
     // reference (frame-shrink under ASan) with a destructor that erases the
     // target on BOTH normal return and exception unwind. The unwind erase is
@@ -5633,7 +5633,7 @@ void test_recursion_depth_guard() {
             "normal formula call: still works");
     }
 
-    // Future #69: cross-file resolution cycle.
+    // docs/COMPLETED.md #69: cross-file resolution cycle.
     // matmul.fw shadows the builtin matmul and recursively calls itself.
     // Pre-fix: SIGSEGV (infinite recursion through load_sub_system).
     // Post-fix: throws "Cross-file resolution cycle: matmul recursively
@@ -6035,7 +6035,7 @@ void test_formula_call_additional() {
     }
 }
 
-// ---- Nested CLI formula calls (Future #21, nested form) ----
+// ---- Nested CLI formula calls (docs/COMPLETED.md #21, nested form) ----
 //
 // `parse_cli_query` previously did a string-level `arg.find('=')` on each
 // top-level arg, which mangled nested-call args like `triangle(A=?x, a=3)` —
@@ -6993,7 +6993,7 @@ void test_derive_cli_parsing() {
         ASSERT_NUM(q.bindings.at("b"), 3, "symbolic: b=3");
     }
 
-    // Future #73: without allow_symbolic, a non-numeric RHS like `a=side`
+    // docs/COMPLETED.md #73: without allow_symbolic, a non-numeric RHS like `a=side`
     // is now DEFERRED to synthetic_equations rather than rejected at parse
     // time. The check shifts from "throws Invalid" to "routes to synthetic".
     // The downstream error (if `side` is genuinely undefined at load time)
@@ -7106,7 +7106,7 @@ void test_numeric_solve_uses_symbolic_diff() {
     SECTION("Numeric solve via symbolic-derivative path (M4)");
 
     // y = sin(x), solve for x given y = 0; expect a root with sin(x) ≈ 0.
-    // Post-M2 (Future #12 periodicity), trig results may be wrapped as a
+    // Post-M2 (docs/COMPLETED.md #12 periodicity), trig results may be wrapped as a
     // PeriodicFamily carrier; check both `discrete()` and `periodic()[i].base`.
     FormulaSystem sys;
     sys.load_string("y = sin(x)\n");
@@ -7772,7 +7772,7 @@ void test_numeric_precision() {
     //
     // Pre-#12j this section used `sin(x) = 0.5` over [0, 20], whose 7
     // principal-cycle roots are well-spaced and density-sensitive under
-    // the pre-M1 algebraic path. Post-M2 (Future #12), the trig case is
+    // the pre-M1 algebraic path. Post-M2 (docs/COMPLETED.md #12), the trig case is
     // resolved as 2 periodic families regardless of sampling density —
     // the test became vacuous (lo_total == hi_total == 2 for all densities).
     //
@@ -9073,7 +9073,7 @@ void test_simplify_exp_log() {
     // is undetermined. Documented behavior — real-world sqrt^2 forms arise from
     // squared-distance polynomials (nonneg by construction). If a user .fw
     // program relied on sqrt(x)^2 as a positivity assertion, this commit
-    // changes that behavior. Re-examine under Future #31 domain-propagation.
+    // changes that behavior. Re-examine under FWIZ-100 domain-propagation.
     ASSERT_EQ(expr_to_string(simplify(parse("sqrt(x)^2"))), "x",
         "sqrt(x)^2 permissively simplifies to x for unknown-sign symbolic x");
     // Numeric negative x: rule does NOT fire (condition -4 >= 0 is false).
@@ -9140,7 +9140,7 @@ void test_division_reciprocal_rules() {
     ASSERT_EQ(expr_to_string(simplify(parse("a / (1 / 20)"))), "20 * a",
         "G3: division by unit-fraction with numeric denom");
     ASSERT_EQ(expr_to_string(simplify(parse("x / (1 / y)"))), "x * y",
-        "G3: division by unit-fraction with symbolic denom (subsumes Future #34)");
+        "G3: division by unit-fraction with symbolic denom (subsumes docs/COMPLETED.md #34)");
     // G3 subsumes G2 — 1/(1/x) → 1*x → x (after multiplicative flatten).
     ASSERT_EQ(expr_to_string(simplify(parse("1 / (1 / c)"))), "c",
         "G3 with x=1: reciprocal of reciprocal");
@@ -9697,7 +9697,7 @@ void test_rewrite_rules() {
     }
 }
 
-// Future.md #13 — Complex via NaN-binding + rewrite rules.
+// docs/COMPLETED.md #13 — Complex via NaN-binding + rewrite rules.
 // `i` is a builtin constant with a quiet_NaN binding; the rule `i*i = -1`
 // (and `i^2 = -1`, since multiplicative flattening canonicalizes i*i → i^2)
 // fires in the simplifier. evaluate() on i-containing expressions returns
@@ -9769,13 +9769,13 @@ void test_complex_numbers() {
         ASSERT_EQ(expr_to_string(e), "1", "i^0 = 1 (x^0 wildcard binds to i)");
     }
 
-    // 7. DESIRABLE (not asserted — Future.md follow-up): cascade `(1+i)*(1-i) = 2`.
+    // 7. DESIRABLE (not asserted — FWIZ-70): cascade `(1+i)*(1-i) = 2`.
     //    Currently produces `(i + 1) * (-i + 1)` — the simplifier does not
     //    distribute MUL over ADD/SUB on this shape before constant-folding.
     //    Reopen trigger: simplifier gains a "distribute MUL over ADD" pass that
     //    fires when the resulting i-products would collapse via i^2=-1.
 
-    // 8. DESIRABLE (not asserted — Future.md follow-up): `i^4 = 1`.
+    // 8. DESIRABLE (not asserted — FWIZ-71): `i^4 = 1`.
     //    Currently stays as `i^4` — the simplifier does not cascade
     //    `i^4 = (i^2)^2 = (-1)^2 = 1`. Rule `(x^a)^b = x^(a*b)` exists but
     //    `i^4` is parsed directly as `POW(i, 4)`, not as `(i^2)^2`. A targeted
@@ -9804,7 +9804,7 @@ void test_complex_numbers() {
     //    match the CLI path. These tests pin the rejection path; pre-fix they
     //    silently succeed with wrong real results (y=0, z=1, w=0).
     //    The deeper `flatten_additive` NaN-propagation bug is a separate
-    //    Future.md follow-up — fixing the resolver auto-binding side-channel
+    //    FWIZ-73 — fixing the resolver auto-binding side-channel
     //    here is sufficient to restore pre-M1 CLI behavior.
 
     // 10. `y = 2 * i; y=?` must NOT silently resolve (pre-fix: y = 0).
@@ -9945,7 +9945,7 @@ void test_struct_dotnames() {
     //    `"car.mass = 1500"; car.mass=?` returning `1500`. That direct query
     //    cannot succeed under fwiz's existing `defaults`-vs-`equations`
     //    distinction (the same is true for non-dotted names — pre-existing
-    //    limitation tracked as Future.md #13d). The reframed test verifies
+    //    limitation tracked as FWIZ-73). The reframed test verifies
     //    BOTH default-key preservation AND downstream consumption — strictly
     //    stronger than the original criterion's intent.
     {
@@ -10372,8 +10372,8 @@ void test_vec_mat_type() {
 // The 8 corners pinned mirror the 12-corner probe from cycle 3's brief —
 // trimmed to the cases that are both (a) actually working today and (b)
 // load-bearing for the user-facing derive contract. The four genuine gaps
-// (diff/integral don't distribute over vec/mat) are filed as Future #71
-// for the queued Linear-algebra completeness arc; see docs/Future.md #71.
+// (diff/integral don't distribute over vec/mat) are filed as FWIZ-9
+// for the queued Linear-algebra completeness arc; see docs/FWIZ-9.
 //
 // All cases use popen against ./bin/fwiz to exercise the full pipeline
 // (parser → simplifier → derive_all → format_derived → CLI rendering).
@@ -12146,7 +12146,7 @@ void test_derive_distribution() {
     SECTION("Derive post-simplification: (a+b)/k distributes over numeric k, exposing cancellations");
     // Only Case 1 — Case 2 (whole-query count reduction) requires
     // semantic/numeric dedup across structurally-distinct candidates,
-    // tracked as a separate Future.md item.
+    // tracked as a separate Backlog ticket.
     {
         FormulaSystem sys;
         sys.load_string("y = -b/2 - c/2 + (b+4)/2 - 2");
@@ -12404,7 +12404,7 @@ void test_semantic_dedup_m3() {
             // NOLINTNEXTLINE(bugprone-empty-catch) — unparseable line → skip
             } catch (...) {}
         }
-        // 2026-05-09 (#12f): tightened back to 0 after derive_all fingerprint
+        // 2026-05-09 (FWIZ-66): tightened back to 0 after derive_all fingerprint
         // resolution was extended to cover obtuse-domain branch cuts.
         ASSERT(dup_count == 0,
                "M3-6: triangle derive fingerprint dups must be 0 (got: " + std::to_string(dup_count) + ")");
@@ -12433,7 +12433,7 @@ void test_semantic_dedup_m3() {
         // the top level of Y contains no `*` — i.e. Y is a single non-MUL
         // expression. This matches exactly G3's pattern `DIV(x, DIV(Num(1), Y))`;
         // composite cases like `/ (1 / deg * acos(...))` are structurally
-        // MUL(DIV(1, deg), acos(...)) — out of G3's scope, tracked in Future #36.
+        // MUL(DIV(1, deg), acos(...)) — out of G3's scope, tracked in FWIZ-104.
         // Baseline (pre-rule): 57 pure G3 sites in triangle output.
         // Post-rule: 0. Invariant-derived per P1 cycle lesson L1 (not a count).
         for (const auto& line : results) {
@@ -13007,7 +13007,7 @@ void test_cse_integration() {
     }
 
     // CSE-I4: bare --derive byte-identical to current baseline.
-    // Baseline rebaselined 2026-05-08 from 158/40983 → 649/186127 after Future
+    // Baseline rebaselined 2026-05-08 from 158/40983 → 649/186127 after docs/COMPLETED.md
     // #12 M1 (sin/cos second inverse equations) widened branch generation 4x.
     // 2026-05-09 (#12f): rebaselined 649/186127 → 648/185628 after derive_all
     // fingerprint test points were extended from 3 cyclic primes to 5
@@ -13252,7 +13252,7 @@ void test_provenance_plumbing() {
     }
 }
 
-// ---- Symbolic differentiation (Future #6) ----
+// ---- Symbolic differentiation (docs/COMPLETED.md #6) ----
 
 // Helper: parse, differentiate w.r.t. var, simplify, stringify.
 static std::string diff_str(const std::string& src, const std::string& var) {
@@ -13414,7 +13414,7 @@ void test_symbolic_diff_surface2_cli() {
 
     // Use parse_cli_query to verify the syntax is recognized.
     // The actual main.cpp dispatch is exercised separately via end-to-end runs.
-    // Future #67: diff(...)=? is now lowered to a regular q.queries entry plus
+    // docs/COMPLETED.md #67: diff(...)=? is now lowered to a regular q.queries entry plus
     // a synthetic equation; no parallel CLIDiffQuery vector.
     auto q = parse_cli_query("/tmp/tdiff_s2.fw(diff(distance, time)=?, velocity=5)");
     ASSERT(q.queries.size() == 1, "parse_cli_query: 1 query (the diff alias)");
@@ -13527,7 +13527,7 @@ void test_symbolic_diff_provenance() {
         "PROV-DIFF: solved_symbolic_['sensitivity'] populated after resolve_all");
 }
 
-// ---- Symbolic integration (Future #16, M1) ----
+// ---- Symbolic integration (docs/COMPLETED.md #16, M1) ----
 
 // Helper: parse, integrate w.r.t. var, simplify, stringify.
 static std::string integral_str(const std::string& src, const std::string& var) {
@@ -13674,7 +13674,7 @@ void test_symbolic_integrate_surface_cli() {
     SECTION("symbolic_integrate: Surface 2 — integral(...)=? CLI query (BLOCKING #1)");
 
     // BLOCKING #1: parse_cli_query recognises integral(...)=?
-    // Future #67: integral(...)=? is now lowered to a regular q.queries entry
+    // docs/COMPLETED.md #67: integral(...)=? is now lowered to a regular q.queries entry
     // plus a synthetic equation; no parallel CLIIntegralQuery vector.
     write_fw("/tmp/tint_cli.fw", "f = x^2\n");
     auto q = parse_cli_query("/tmp/tint_cli.fw(integral(f, x)=?)");
@@ -13694,14 +13694,14 @@ void test_symbolic_integrate_surface_cli() {
     ASSERT(q2.synthetic_equations.find("antideriv = integral(f, x)") != std::string::npos,
            "synthetic_equations contains 'antideriv = integral(f, x)'");
 
-    // Future #67 reviewer obs #6: 4-arg definite integral synthesis at parse-struct level.
+    // docs/COMPLETED.md #67 reviewer obs #6: 4-arg definite integral synthesis at parse-struct level.
     // Only exercised end-to-end by --table test; pin the synthesised string shape here too.
     auto q3 = parse_cli_query("/tmp/tint_cli.fw(integral(f, x, 0, 3)=?area)");
     ASSERT(q3.queries.size() == 1, "4-arg integral: 1 query");
     ASSERT(q3.synthetic_equations.find("area = integral(f, x, 0, 3)") != std::string::npos,
            "4-arg integral: synthetic_equations contains 'area = integral(f, x, 0, 3)'");
 
-    // Future #67 reviewer BLOCKING #1: empty-query guard simplification verified.
+    // docs/COMPLETED.md #67 reviewer BLOCKING #1: empty-query guard simplification verified.
     // After dropping the diff_queries/integral_queries clauses from the guard, a CLI
     // consisting only of `F=integral(x^2, x)` (no `F=?` query) must still throw —
     // synthetic equations don't substitute for a query target.
@@ -13712,11 +13712,11 @@ void test_symbolic_integrate_surface_cli() {
     ASSERT(threw, "empty-query guard: synthetic-only CLI throws 'No query variable'");
 }
 
-// Future #67 regression A: --table composes with integral(...)=? after the
+// docs/COMPLETED.md #67 regression A: --table composes with integral(...)=? after the
 // unification (integral queries are regular q.queries entries that the table
 // driver's existing inner loop handles).
 void test_future67_table_composes_with_integral() {
-    SECTION("Future #67: --table composes with integral(...)=?");
+    SECTION("docs/COMPLETED.md #67: --table composes with integral(...)=?");
 
     write_fw("/tmp/t67_table_int.fw", "f = x^2\n");
 
@@ -13745,14 +13745,14 @@ void test_future67_table_composes_with_integral() {
     }
 }
 
-// Future #67 regression B: CLI binding RHS accepts integral(...) / diff(...).
+// docs/COMPLETED.md #67 regression B: CLI binding RHS accepts integral(...) / diff(...).
 // Today's value-side path tries `std::stod` then `Parser+evaluate`; evaluate
 // on an unresolved `integral` FUNC_CALL returns empty, so the user gets
 // "Invalid value 'integral(...)' for variable 'F'". After unification, the
 // value-side path detects the resolve-at-load FUNC_CALL prefix and routes it
 // into q.synthetic_equations instead.
 void test_future67_binding_rhs_accepts_integral_and_diff() {
-    SECTION("Future #67: CLI binding RHS accepts integral(...) / diff(...)");
+    SECTION("docs/COMPLETED.md #67: CLI binding RHS accepts integral(...) / diff(...)");
 
     write_fw("/tmp/t67_bind.fw", "g = x\n");
 
@@ -14108,7 +14108,7 @@ void test_issue1_drop_parsefailed_rewrite_rules() {
     }
 }
 
-// ---- Periodicity Detection (Future.md #12) ----
+// ---- Periodicity Detection (docs/COMPLETED.md #12) ----
 //
 // M1: `.fw` second inverse equations on sin/cos give the second principal-cycle
 // branch; tan stays single-equation. Verifies algebraic-only ('--no-numeric')
@@ -14132,7 +14132,7 @@ void test_periodicity_m1_branch_generation() {
 
     // cos(x) = 0 with --no-numeric: two algebraic branches (pi/2 and 3*pi/2)
     // produce a periodic ValueSet with 2 families. Post-12h main.cpp emits
-    // 2 lines. (The half-period collapse to one stride-pi family is a Future.md
+    // 2 lines. (The half-period collapse to one stride-pi family is a Backlog
     // follow-up; current dedup keeps both families visible.)
     {
         write_fw("/tmp/per_m1_cos.fw", "result = cos(x)\n");
@@ -14269,7 +14269,7 @@ void test_periodicity_m2_integration_sin_degenerate() {
 // (`(b1-b2) mod p ≈ 0`) does NOT collapse these since the offset is pi (= p/2,
 // half-period). Collapsing them requires a half-period rule that introduces
 // arena allocation for a derived `p/2` symbolic period — explicitly demoted
-// to a follow-up by the synthesis. Ship with 2 families visible. Future.md
+// to a follow-up by the synthesis. Ship with 2 families visible. Backlog ticket
 // trigger: "render-time stride-pi collapse for cos(x)=0 / sin(x)=0".
 void test_periodicity_m2_integration_cos_zero() {
     SECTION("Periodicity M2: cos(x)=0 (two families, demoted DESIRABLE)");
@@ -14283,7 +14283,7 @@ void test_periodicity_m2_integration_cos_zero() {
     size_t pos = 0, count = 0;
     while ((pos = rendered.find("+ k *", pos)) != std::string::npos) { ++count; ++pos; }
     // Synthesis stretch was 1; shipped as 2. Either is acceptable correctness;
-    // the half-period collapse is a Future.md follow-up.
+    // the half-period collapse is a Backlog follow-up.
     ASSERT(count == 1 || count == 2,
            std::string("M2 cos(x)=0 renders as 1 OR 2 families (DESIRABLE 1; shipped 2; got ")
                + std::to_string(count) + " in '" + rendered + "')");
@@ -14482,7 +14482,7 @@ void test_periodicity_12h_main_pass1_dedup_parity() {
 // 12e: Round-trip safety. Each line returned by periodic_render_lines() is a
 // valid fwiz expression body — `x = <body>` parses without error via
 // load_string(). The trailing `# k in Z` is a fwiz inline comment, not part
-// of the expression. Reopen trigger from Future.md #12e: user pipes Fwiz
+// of the expression. Reopen trigger from FWIZ-65: user pipes Fwiz
 // output back into Fwiz and reports a parse error.
 void test_periodicity_12e_roundtrip_parse() {
     SECTION("Periodicity 12e: periodic body re-parses as fwiz expression");
@@ -14559,10 +14559,10 @@ void test_periodicity_regression_quadratic() {
                + std::to_string(vs.discrete().size()) + ")");
 }
 
-// === Future #53: Typed-binding predicates for .fw rule conditions ===
+// === docs/COMPLETED.md #53: Typed-binding predicates for .fw rule conditions ===
 
 void test_future53_predicate_parse() {
-    SECTION("Future #53: parse is_neg_num(n) as predicate clause");
+    SECTION("docs/COMPLETED.md #53: parse is_neg_num(n) as predicate clause");
 
     ExprArena arena;
     ExprArena::Scope scope(arena);
@@ -14611,7 +14611,7 @@ void test_future53_predicate_parse() {
 }
 
 void test_future53_predicate_check_condition() {
-    SECTION("Future #53: check_condition predicate dispatch");
+    SECTION("docs/COMPLETED.md #53: check_condition predicate dispatch");
 
     ExprArena arena;
     ExprArena::Scope scope(arena);
@@ -14667,7 +14667,7 @@ void test_future53_predicate_check_condition() {
 }
 
 void test_future53_comparison_permissive_preserved() {
-    SECTION("Future #53: comparison clause permissive-true preserved");
+    SECTION("docs/COMPLETED.md #53: comparison clause permissive-true preserved");
 
     ExprArena arena;
     ExprArena::Scope scope(arena);
@@ -14688,7 +14688,7 @@ void test_future53_comparison_permissive_preserved() {
 }
 
 void test_future53_t36_negative_exp_migration() {
-    SECTION("Future #53: T3.6 x^(-n) → 1/x^n migration via .fw rule");
+    SECTION("docs/COMPLETED.md #53: T3.6 x^(-n) → 1/x^n migration via .fw rule");
 
     ExprArena arena;
     ExprArena::Scope scope(arena);
@@ -14722,10 +14722,10 @@ void test_future53_t36_negative_exp_migration() {
     }
 }
 
-// === Future #5 — Batch/Table mode ===
+// === docs/COMPLETED.md #5 — Batch/Table mode ===
 
 void test_table_range_parse() {
-    SECTION("Future #5: parse_range grammar + range_bindings");
+    SECTION("docs/COMPLETED.md #5: parse_range grammar + range_bindings");
 
     // BLOCKING: integer range [1..10] = 10 values
     {
@@ -14823,7 +14823,7 @@ void test_table_range_parse() {
         ASSERT(q.range_bindings.empty(), "no range_bindings for scalar input");
     }
 
-    // Future #73: vec literal `[1,2,3]` (no `..` -> not a range) falls
+    // docs/COMPLETED.md #73: vec literal `[1,2,3]` (no `..` -> not a range) falls
     // through to the expression-parse path. Parser succeeds (vec literal is
     // a FUNC_CALL("vec", ...)), evaluate returns empty (vec doesn't reduce
     // to a double), so the value routes to synthetic_equations rather than
@@ -14865,7 +14865,7 @@ void test_table_range_parse() {
 }
 
 void test_table_mode_binary_integration() {
-    SECTION("Future #5: --table binary integration");
+    SECTION("docs/COMPLETED.md #5: --table binary integration");
 
     write_fw("/tmp/tftab.fw", "z = a + b\n");
 
@@ -15018,7 +15018,7 @@ void test_unit_suffix() {
     // (8a) Documented quirk: `100m^2` parses as `(100 * m)^2`, not `100 * m^2`.
     // The desugar wraps the entire NUMBER+IDENT pair, so POW applies to the
     // MUL node. Cycle 1 ships a parse-time warning (see (8b) below) and parks
-    // the precedence fix as Future #74.
+    // the precedence fix as FWIZ-50.
     ASSERT_EQ(ps("100m^2"), "(100 * m)^2", "100m^2 = (100 * m)^2 (quirk; warning fires)");
 
     // (8b) Parse-time warning capture: `100m^2` adjacency triggers a stderr
@@ -15062,7 +15062,7 @@ void test_unit_suffix() {
     // (DESIRABLE) `100x2` round-trips: NUMBER(100) + IDENT("x2") -> `100 * x2`.
     ASSERT_EQ(ps("100x2"), "100 * x2", "100x2 = 100 * x2 (ident with trailing digit)");
 
-    // (Regression pin — Future-#69-equivalent for this cycle's pre-existing
+    // (Regression pin — docs/COMPLETED.md #69-equivalent for this cycle's pre-existing
     // bug discovery.) The cycle 1 desugar surfaced a pre-existing parse_line
     // bug: the `if`/`iff` keyword detector required a trailing space, but
     // `load_lines` runs `trim()` BEFORE `parse_line` so the trailing space
@@ -15094,7 +15094,7 @@ void test_unit_suffix() {
                    "trailing 'iff' (no space): resolves normally");
     }
 
-    // Reserved-word denylist for the NUMBER-IDENT desugar (Future #76,
+    // Reserved-word denylist for the NUMBER-IDENT desugar (docs/COMPLETED.md #76,
     // shipped 2026-05-13 in cycle 1.1 post-review). `if`, `iff`, and `e`
     // do NOT participate in the desugar: leaving the IDENT in the token
     // stream restores pre-cycle silent-drop for these specific cases, so
@@ -15153,13 +15153,13 @@ void test_unit_suffix() {
     }
 }
 
-// Future #73: CLI-arg unit-suffix evaluation. `parse_cli_query` historically
+// docs/COMPLETED.md #73: CLI-arg unit-suffix evaluation. `parse_cli_query` historically
 // evaluates each RHS immediately (pre-load), so a unit-suffix RHS like
 // `mass=100kg` failed because `kg` was unbound. Cycle-2 fix: parser-succeeded
 // + evaluate-empty falls through to a synthetic equation, same channel #67
 // uses for `integral(...)`/`diff(...)`.
 void test_unit_cli_resolve() {
-    SECTION("Unit suffix in CLI args (Future #73 deferred-resolution)");
+    SECTION("Unit suffix in CLI args (docs/COMPLETED.md #73 deferred-resolution)");
 
     // (1) Pure number unchanged: bindings populated, synthetic_equations empty.
     {
@@ -15414,7 +15414,7 @@ void test_physics_mechanics() {
     }
 
     // (5) Pressure: 100N / 4m^2 = 25 Pa.
-    //     `4*m^2` (with explicit `*`) avoids the Future #74 precedence
+    //     `4*m^2` (with explicit `*`) avoids the FWIZ-50 precedence
     //     trap on `4m^2`.
     {
         FormulaSystem sys;
@@ -15679,7 +15679,7 @@ void test_gen3_cycle2_constants_as_units() {
         }
     }
 
-    // ======== cycle 3c: dim algebra promotion (Future #7b FULL) =============
+    // ======== cycle 3c: dim algebra promotion (docs/COMPLETED.md #7b FULL) =============
     // compute_dim folds expression trees into DimMap exponent algebra.
     {
         ExprArena arena; ExprArena::Scope sc(arena);
@@ -16861,7 +16861,7 @@ void test_gen5_cycle3d_function_section_sets() {
         // max_formula_depth (default 1000) before locating n=6 for image 8.
         // Dispatch path is wired correctly — verified via the perfect_square
         // (C8) and double_it tests. Recursive function-section reverse-solve
-        // requires formula-call memoization (Future #85 territory) and is
+        // requires formula-call memoization (FWIZ-130 territory) and is
         // documented as SHIP-DESIRABLE for a future cycle. C4/C5 here use
         // a non-recursive image function (double_it) to exercise the same
         // dispatch path with an inverter the numeric solver can handle.
@@ -17364,7 +17364,7 @@ void test_gen5_cycle3f_infix_in() {
 // ---------------------------------------------------------------------------
 // gen-5 cycle 3g (2026-05-16): recursive FUNCTION_SECTION reverse-solve.
 //
-// Closes Future #90. Two-part fix:
+// Closes docs/COMPLETED.md #90. Two-part fix:
 //   (1) `self_name_` field on FormulaSystem + early-return in load_sub_system
 //       lets a function-section sub resolve a recursive body call (e.g.
 //       fibonacci(n-1) inside [fibonacci(n)->result] = ...) back to itself
@@ -17615,7 +17615,7 @@ void test_gen5_cycle3g_recursive_function_sections() {
     }
 
     // DESIRABLE D3: factorial is_in dispatch — STRUCTURALLY DEFERRED post-cycle-3h.
-    // Tracked as Future #94 (NEW PARKED). Forward direction (factorial(3) = 6)
+    // Tracked as FWIZ-136 (NEW PARKED). Forward direction (factorial(3) = 6)
     // DOES work post-Fix-A; the reverse fails because factorial's body equation
     // `result = n * prev if n >= 1` has the target `n` on the RHS alongside
     // a formula-output `prev`. Strategy 2 emits the algebraic candidate
@@ -17642,26 +17642,26 @@ void test_gen5_cycle3g_recursive_function_sections() {
         const auto& sub = *sys.sub_systems.at("@def:factorial");
         const double r = sub.resolve("result", {{"n", 3.0}});
         ASSERT(std::abs(r - 6.0) < 1e-9,
-               "3h D3 sentinel: forward factorial(3) = 6 (reverse direction parked as Future #94)");
+               "3h D3 sentinel: forward factorial(3) = 6 (reverse direction parked as FWIZ-136)");
     }
 
     // Cycle 3j: typed FormulaDepthExceededError replaces stringly-typed depth
     // re-throws at try_formula/try_resolve catch sites (sibling-exception
     // family; structural legibility for LLM consumers). Pure refactor —
     // always-rethrow semantics, zero behavioral change. The cycle attempted
-    // to also close Future #94 via a depth=0 swallow that lets Strategy 6
+    // to also close FWIZ-136 via a depth=0 swallow that lets Strategy 6
     // (NUMERIC system-probe) get a turn — but the dry-run rule fired mid-
     // implementation: the design's predicted execution path is NOT what fires
     // in practice. The visited-set Circular guard intercepts at depth ~2,
     // `check_condition` defaults unbound-clause to TRUE, Strategy 2 silently
-    // returns a coincidental wrong answer. Tracked at Future #97 with four
-    // candidate structural fixes. Future #94 remains PARKED.
+    // returns a coincidental wrong answer. Tracked at FWIZ-139 with four
+    // candidate structural fixes. FWIZ-136 remains PARKED.
 
     // ---- Cycle 3i: Fix Y (named-arg arithmetic) + Fix Z (positional in body) ----
     // Fix Y: extract_formula_calls UNIFIED to handle both `?`-form and the
     //        named-arg-no-`?` form. `func(name=expr)` in arithmetic position
     //        now lowers to FormulaCall + Var(_fc<id>) via the same primitive
-    //        the `?`-form has always used. Closes Future #91 ergonomic gap.
+    //        the `?`-form has always used. Closes docs/COMPLETED.md #91 ergonomic gap.
     // Fix Z: resolve_positional_calls() added to register_function_section
     //        (system.h ~line 1167) so positional FUNC_CALL nodes in section
     //        bodies (e.g. `fibonacci(n-1)`) resolve at load time. The normal
@@ -18225,7 +18225,7 @@ void test_bounded_aggregation_step_d() {
     // candidates and the correct numeric-scan root {3} survives. The reverse-solve
     // composes; the resolve() first-wins divergence on multi-branch inversion is a
     // pre-existing FORMULA_REV gap (no global forward re-verification of an inverted
-    // single value), filed as Future #102.
+    // single value), filed as FWIZ-30.
     {
         FormulaSystem sys;
         sys.numeric_mode = true;
@@ -19275,7 +19275,7 @@ void test_checked_type() {
     { Checked<double> c{std::numeric_limits<double>::quiet_NaN()}; ASSERT(!c.has_value(), "NaN-in -> empty"); }
 }
 
-// ──────────────── @include (Future #80, M1 — COEXIST) ────────────────
+// ──────────────── @include (docs/COMPLETED.md #80, M1 — COEXIST) ────────────────
 void test_include_m1() {
     SECTION("@include M1 (COEXIST infra)");
 
@@ -19526,7 +19526,7 @@ void test_include_m2() {
     fs::remove_all(base);
 }
 
-// @include M3 (Future #80 final): the strict-includes default is now ON. A fresh
+// @include M3 (docs/COMPLETED.md #80 final): the strict-includes default is now ON. A fresh
 // FormulaSystem (no flags set) must reject an un-@include'd cross-file call, and
 // the error must name @include so the user knows the fix. B18 acceptance.
 void test_include_m3() {
@@ -19849,7 +19849,7 @@ int main() {
     // Provenance plumbing — trace/final consistency (Known-Issues #6 cycle)
     test_provenance_plumbing();
 
-    // Symbolic differentiation (Future #6 cycle)
+    // Symbolic differentiation (docs/COMPLETED.md #6 cycle)
     test_symbolic_diff_per_class();
     test_symbolic_diff_per_builtin();
     test_symbolic_diff_chain_rule();
@@ -19863,7 +19863,7 @@ int main() {
     test_symbolic_diff_unfold_formula_call();
     test_symbolic_diff_provenance();
 
-    // Symbolic integration (Future #16, M1 — 2026-05-10 cycle)
+    // Symbolic integration (docs/COMPLETED.md #16, M1 — 2026-05-10 cycle)
     test_symbolic_integrate_per_class();
     test_symbolic_integrate_per_builtin();
     test_symbolic_integrate_linearity();
@@ -19886,7 +19886,7 @@ int main() {
     test_t22_positional_call_counter_per_instance();
     test_issue1_drop_parsefailed_rewrite_rules();
 
-    // Periodicity Detection (Future.md #12) — 2026-05-07 cycle
+    // Periodicity Detection (docs/COMPLETED.md #12) — 2026-05-07 cycle
     test_periodicity_m1_branch_generation();
     test_periodicity_m2_primitives();
     test_periodicity_m2_integration_sin();
@@ -19901,17 +19901,17 @@ int main() {
     test_periodicity_12e_roundtrip_parse();
     test_periodicity_regression_quadratic();
 
-    // Future #53: typed-binding predicates
+    // docs/COMPLETED.md #53: typed-binding predicates
     test_future53_predicate_parse();
     test_future53_predicate_check_condition();
     test_future53_comparison_permissive_preserved();
     test_future53_t36_negative_exp_migration();
 
-    // Future #5: Batch/Table mode (2026-05-11 cycle)
+    // docs/COMPLETED.md #5: Batch/Table mode (2026-05-11 cycle)
     test_table_range_parse();
     test_table_mode_binary_integration();
 
-    // Future #7: Units engine surface — cycle 1 (2026-05-13)
+    // docs/COMPLETED.md #7: Units engine surface — cycle 1 (2026-05-13)
     test_unit_suffix();
     test_unit_cli_resolve();
     test_unit_stdlib_catalog();
@@ -19952,7 +19952,7 @@ int main() {
     test_combinatorics_stdlib();
     test_expectation_stdlib();
 
-    // Future #80 M1 (2026-06): @include directive + search path (COEXIST infra)
+    // docs/COMPLETED.md #80 M1 (2026-06): @include directive + search path (COEXIST infra)
     test_include_m1();
     test_include_m2();
     test_include_m3();

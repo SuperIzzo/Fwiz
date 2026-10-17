@@ -10,7 +10,7 @@ enum class TokenType : uint8_t {
     NUMBER, IDENT,
     PLUS, MINUS, STAR, SLASH, CARET,
     LPAREN, RPAREN, LBRACKET, RBRACKET, EQUALS, QUESTION, COMMA,
-    // COLON: reserved for binding-annotation grammar only (see Future #78 /
+    // COLON: reserved for binding-annotation grammar only (see docs/COMPLETED.md #78 /
     // gen-3 cycle 1 design). Lock-in: `var:atom = expr` and
     // `var:(atom1, atom2, ...) = expr` are the ONLY shapes; map literals,
     // ternaries, range syntax etc. require a separate design cycle.
@@ -22,7 +22,7 @@ enum class TokenType : uint8_t {
     // upgrade. See parse_condition for the infix-to-FUNC_CALL synthesis.
     IN,
     // DOTDOT (`..`) and AT (`@`): range/step markers in range literals
-    // `[lo..hi]` / `[lo..hi @ step]` (gen-6 cycle 1, Future #5b). DOTDOT is
+    // `[lo..hi]` / `[lo..hi @ step]` (gen-6 cycle 1, FWIZ-43). DOTDOT is
     // lexed in tokenize() before the number-start dispatch; AT is a single_char.
     DOTDOT,
     AT,

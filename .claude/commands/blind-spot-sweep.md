@@ -46,7 +46,7 @@ sweep.
 ## Do NOT
 
 - Do NOT auto-apply any refactor proposals — they become ClaudeBoard Backlog tickets for
-  the visionary audit and the implementer to act on in future cycles.
+  the implementer to act on in future cycles.
 - Do NOT skip the post-run commit-hash update. Without it, the next per-cycle
   run will redo a chunk of the sweep's work.
 - Do NOT modify source files. The blind-spot critic's writes are confined to
