@@ -2239,6 +2239,24 @@ The ~110-line `is_in` dispatcher sits between the two, so a reader who reaches t
 
 **Locked:** No.
 
+## #R26. Refactor: `extract_include_path` magic `8` → one `@include` keyword constant shared with `is_include_line` — naming / magic number (gate failure)
+
+**From:** FULL-SWEEP Batch 7 (FWIZ-4, 2026-10-17, T1). **Gate FAIL: Haiku confabulated** (wrong-on-detail/specific). With comments stripped, `trim(trim(line).substr(8))` gave no hint of *which* directive is being stripped. Haiku documented it as a C/C++ `#include "foo/bar.h"` extractor that "appears to handle only the quoted form; angle-bracket includes are not visibly stripped". Gemma hedged ("removing a prefix, likely a path prefix or identifier"). The sibling `is_include_line` passes on both graders because its `"@include"` literal sits next to its own `8`.
+
+**Diagnosis (empirical):**
+- Rung 1, making the keyword visible at the use site (`substr(std::string_view("@include").size())`): ✓ on **both** graders (Haiku: "the target path from a single `@include` directive line"; Gemma names `@include` as well).
+- Variant using a shared constant whose value is not visible at T1 (`AT_INCLUDE_KEYWORD.size()`): Haiku ✓, Gemma match/vague.
+
+Naming / magic number is the whole bottleneck. This breaks the existing "no magic numbers" rule.
+
+**Proposed:** declare `static constexpr std::string_view INCLUDE_DIRECTIVE = "@include";` once, next to the two helpers, and use `INCLUDE_DIRECTIVE.size()` in both (`is_include_line`'s `t.size() == 8` and `t[8]`, and `extract_include_path`'s `substr(8)`). Better still, merge them into `std::optional<std::string> parse_include_directive(const std::string& line)`, which detects and extracts in one place. That also removes the hazard both graders flagged: `extract_include_path` "never checks" that the prefix is actually `@include`.
+
+**Pattern coverage:** single site of an existing rule; no new rule.
+
+**Reopen trigger:** any change to `@include` syntax or `process_includes`.
+
+**Locked:** No.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
