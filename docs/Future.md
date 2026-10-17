@@ -137,6 +137,16 @@ multi-branch formula calls.
 
 **Trigger:** any cycle touching the numeric solver or ValueSet; cheap enough to take as a micro-cycle.
 
+## 115. Condition `&&` / `||` have no precedence: they evaluate strictly left to right — BUG (in-scope)
+
+**Surfaced by the FWIZ-4 blind-spot sweep (2026-10-17).** Clean Haiku flagged it twice, both times from comment-stripped code alone: `check_condition` ("There is no operator precedence: mixed AND/OR is evaluated strictly left to right") and `parse_condition` ("The `&&`/`||` split is flat, with no visible parenthesis awareness or precedence handling").
+
+**Confirmed empirically:** `y = 1 if a > 0 || b > 0 && c > 0` with `a=1, b=0, c=0` gives `Cannot solve for 'y'`. Standard precedence (`&&` binds tighter) gives `a>0 || (b>0 && c>0)`, which is true, so the answer should be `y = 1`. fwiz evaluates `(a>0 || b>0) && c>0`. Parentheses inside conditions are not supported either. Nothing in the docs mentions either limitation. A third site with the same fold is `Condition::to_valueset` (expr.h:~1808), which unites and intersects interval sets strictly left to right, so the numeric scan bounds inherit the same mis-grouping (also flagged by clean Haiku, batch 7). A fix has to change all three sites together.
+
+**Proposed:** either (a) give `&&` higher precedence than `||` in `check_condition`'s fold (evaluate AND-runs first, then OR them together; a small change to the loop, no AST change), or (b) at minimum, document left-to-right evaluation in Developer.md and the language reference, and warn at parse time when a condition mixes `&&` and `||`. Option (a) is preferred; it matches what every user expects.
+
+**Trigger:** any cycle touching conditions; cheap enough for a micro-cycle.
+
 ## 5. Batch/Table Mode — DONE (2026-05-11)
 
 Core shipped. See `COMPLETED.md #5`. Four parked follow-ups below.
@@ -2147,6 +2157,43 @@ Diagnosis: **naming + a missing purpose comment** (rung 3). The field name is th
 **Pattern coverage:** a site of the "name a stored value by what it holds" rule. Other `eq` locals that hold an `Equation` (`for (auto& eq : equations)`) are unambiguous, because the type is visible at the loop header. Only a `Condition*` named `eq_…` is ambiguous.
 
 **Reopen trigger:** implementer touches either function, OR a grader misreads `eq_condition` again.
+
+**Locked:** No.
+
+## #R23. Refactor: split `check_condition`'s clause lambda into `eval_predicate_clause` + `eval_comparison_clause` — cohesion (gate failure)
+
+**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma mechanics wrong-on-detail/vague).** Gemma reversed the fail-safe direction: "Returns `false` if a variable referenced in a clause is not found ... (for non-predicate clauses)". Comparison clauses actually return `nullopt`, and the fold counts that as **true**. Clean Haiku passed (match/specific), and also named the left-to-right AND/OR fold that became bug #115.
+
+**The signal:** `check_condition` (expr.h:~2003, 234 LOC, 129 comment-stripped) holds one `eval_clause` lambda with two clause families whose **fail-safe directions are opposite**:
+- predicate clauses (`is_in` across 4 SetDef kinds, `is_neg_num`): unknown → `false`;
+- comparison clauses: unknown → `nullopt` → treated as satisfied (`true`).
+
+The ~110-line `is_in` dispatcher sits between the two, so a reader who reaches the comparison path carries the predicate path's "return false" habit into it.
+
+**Diagnosis (empirical):** rung 4 (split). Extract `eval_predicate_clause(c, bindings, expr_bindings, set_ctx)` and `eval_comparison_clause(c, bindings)`, so the driver becomes a 3-line dispatch plus the connector fold. This flipped Gemma's direction error: it now says the comparison path makes an "early exit (`return std::nullopt`)" for unbound variables. Partial: Gemma stayed match/vague on the unknown-counts-as-true fold (and mis-typed `l_opt`). Haiku was match/specific on the split version. Cohesion is the bottleneck; size contributes.
+
+**Proposed:**
+1. Extract `eval_comparison_clause` (the ~30-line substitute/evaluate/compare tail) and `eval_predicate_clause` (the `is_in` + `is_neg_num` block). The `is_in` kind switch could be its own `eval_is_in(sdef, bound_expr, ...)` helper.
+2. In the driver, name the polarity: `const bool clause_holds = !val.has_value() /* unknown counts as satisfied */ || *val;`.
+3. Fix #115 (AND binds tighter than OR) in the same pass, because the fold being edited is this one.
+
+**Pattern coverage:** single site. The `extract_*` / `try_*` helpers elsewhere already follow one-polarity-per-function, which is why they read cleanly.
+
+**Reopen trigger:** any change to `check_condition` (including the #115 fix), a new `SetDef::Kind`, or a new predicate.
+
+**Locked:** No.
+
+## #R24. Refactor: `refold_seq_valued_collections` parameter `bindings` → `numeric_bindings` — naming (gate failure)
+
+**From:** FULL-SWEEP Batch 4 (FWIZ-4, 2026-10-17, T1). **Gate FAIL (Gemma purpose wrong-on-detail/specific):** "replaces them with corresponding sequence values retrieved from the provided bindings". In fact the seq values come from *equations* (`seq_value_of`), and variables present in `bindings` are the ones **skipped**. Clean Haiku hedged on the same point ("how a sequence value differs from a binding").
+
+**Diagnosis (empirical):** rung 1 (rename only) `bindings` → `numeric_bindings` flips Gemma to "substitute variables ... with their corresponding sequence values, while ignoring variables that are bound numerically" (match/specific), and Haiku's hedge disappears. Naming was the whole bottleneck: the function handles two kinds of variable values, and a generic `bindings` does not say which kind it holds.
+
+**Proposed:** rename the parameter in `refold_seq_valued_collections` (system.h:~5467). Consider the same rename wherever a `map<string,double>` sits next to seq-valued data in the collections path (`call_has_seq_arg` callers in `solve_recursive` / `solve_all`). Elsewhere the numeric map is the only kind, so `bindings` stays unambiguous there.
+
+**Pattern coverage:** a site of the "name a stored value by what it holds" rule.
+
+**Reopen trigger:** implementer touches the collections resolve path.
 
 **Locked:** No.
 
