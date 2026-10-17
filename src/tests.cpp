@@ -19092,15 +19092,8 @@ void test_combinatorics_stdlib() {
         sys.load_string("@include \"" + file + "\"\n" + query);
         return sys.resolve("y", {});
     };
-    // Resolve a composing file directly on its `result` with named bindings.
-    // hyp_pmf.fw composes nCr.fw cross-file via its `@include "nCr.fw"` line, so it
-    // resolves under the strict-includes default (no legacy opt-out needed).
-    auto resolve_result = [](const std::string& file,
-                             std::map<std::string, double> b) -> double {
-        FormulaSystem sys;
-        sys.load_file(file);
-        return sys.resolve("result", b);
-    };
+    // hyp_pmf.fw composes nCr.fw cross-file via its own `@include "nCr.fw"` line, so
+    // it resolves under the strict-includes default (no legacy opt-out needed).
 
     // ---- factorial: n! via product(i, i in [1..n]); 0! = 1 (empty product) ----
     ASSERT_NUM(call_named("stdlib/combinatorics/factorial.fw",
@@ -19144,16 +19137,16 @@ void test_combinatorics_stdlib() {
 
     // ---- hypergeometric PMF: composes nCr cross-file (named bindings) ----
     // P(exactly 2 of 13 clubs in 5 of 54) = nCr(13,2)*nCr(41,3)/nCr(54,5).
-    ASSERT(std::abs(resolve_result("stdlib/combinatorics/hyp_pmf.fw",
-                                   {{"N",54},{"K",13},{"n",5},{"k",2}})
+    ASSERT(std::abs(call_named("stdlib/combinatorics/hyp_pmf.fw",
+                               "y = hyp_pmf(N=54, K=13, n=5, k=2, result=?)\n")
                     - 0.262917745715) < 1e-9,
            "hyp_pmf(54,13,5,2) composes nCr cross-file = 0.262917745715");
 
     // ---- KEYSTONE: P(>=2 clubs in 5 of 54) tail sum = 0.3467505241 ----
     // The PNF Monte-Carlo cross-check; assert to ~1e-9.
     {
-        const double ks = resolve_result("stdlib/combinatorics/hyp_at_least.fw",
-                                         {{"N",54},{"K",13},{"n",5},{"kmin",2}});
+        const double ks = call_named("stdlib/combinatorics/hyp_at_least.fw",
+                                     "y = hyp_at_least(N=54, K=13, n=5, kmin=2, result=?)\n");
         ASSERT(std::abs(ks - 0.3467505241) < 1e-9,
                "KEYSTONE P(>=2 clubs in 5 of 54) = 0.3467505241 (got "
                + std::to_string(ks) + ")");
@@ -19162,8 +19155,8 @@ void test_combinatorics_stdlib() {
     // ---- one more PNF-flavored hypergeometric: P(>=1 ace in 5 of 52) ----
     // 1 - nCr(48,5)/nCr(52,5) = 1 - 1712304/2598960 = 0.3411580...
     {
-        const double ace = resolve_result("stdlib/combinatorics/hyp_at_least.fw",
-                                          {{"N",52},{"K",4},{"n",5},{"kmin",1}});
+        const double ace = call_named("stdlib/combinatorics/hyp_at_least.fw",
+                                      "y = hyp_at_least(N=52, K=4, n=5, kmin=1, result=?)\n");
         ASSERT(std::abs(ace - 0.341158001662) < 1e-9,
                "P(>=1 ace in 5 of 52) = 0.341158001662 (got "
                + std::to_string(ace) + ")");

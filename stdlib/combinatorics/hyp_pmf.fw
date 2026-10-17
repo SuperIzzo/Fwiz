@@ -14,6 +14,7 @@
 # Usage:
 #   hyp_pmf(N=54, K=13, n=5, k=2, result=?p)   # P(exactly 2 of 13 in 5 of 54)
 
+[hyp_pmf(N, K, n, k) -> result]
 nCr(result=?a, n=K, k=k)
 nCr(result=?b, n=N-K, k=n-k)
 nCr(result=?c, n=N, k=n)
