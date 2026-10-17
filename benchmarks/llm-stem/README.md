@@ -45,3 +45,12 @@ Flags: `--problems <glob>`, `--model` (default `haiku`), `--dry-run`, `--docs a.
 The model runs through `claude -p --safe-mode --setting-sources "" --tools ""` from a temp dir outside the repo, so it cannot read `CLAUDE.md` or project memory. It replies with ```` ```fw name.fw ```` file blocks and ```` ```fwiz <args> ```` command blocks; the runner writes the files, runs fwiz (no shell), and feeds the output back. It stops once fwiz prints a value for the answer variable. The backend is the single function `call_claude` in `run.py`.
 
 Output goes to `results/<timestamp>/` (git-ignored): `results.json` (per attempt: verdict, `.fw` files, commands, fwiz stdout/stderr, replies, turns, seconds) and `summary.md`.
+
+## Trend tracking (`make benchmark`)
+
+```bash
+make benchmark                          # full set with the default model; costs LLM tokens
+make benchmark BENCH_ARGS=--dry-run     # no LLM, scores references (wiring check; adds a dry-run row)
+```
+
+Runs `run.py` into `results/trend-latest/`, then `append_trend.py` appends one row (date, git short sha, model, pass rate, per-category) to `.fwiz-workflow/llm-benchmark-history.md` (git-ignored; created with a header on first run). The target fails with a clear message if the `claude` CLI is not on PATH; it ignores `run.py`'s exit 1 (some problems failed) but stops on any other error. Run it at arc close and compare with the previous row.
