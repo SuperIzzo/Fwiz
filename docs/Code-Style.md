@@ -199,7 +199,7 @@ Function-scope rules. Appended by the blind-spot critic when function-scope Haik
 
 **Reason:** T3-only-passes mean a reader without the comment cannot follow. Comments rot, drift, get stripped by IDE flows, and are skipped by Haiku-grade readers under context pressure. Code that reads correctly without leaning on comments is durable; code that requires a comment to disambiguate the next step is not.
 
-**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable. **Corroborated** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17): a 4th site, `lookup_binary_op_body`, where a comment defends a misleading ownership type (`shared_ptr` for a throwaway) — #R20.
+**Origin:** Cycle I-M2 — Haiku-B failure on `try_u_sub_integrate` (R1) and `resolve_integral_calls` 4-arg branch (R2) (two sites in same cycle, same diagnosis). **Validated** Cycle I-M3 by a third occurrence (`try_ibp_integrate` render-order branch — R5; same shape, same T1+T2-fail T3-pass profile). Three sites total in the integration arc; the rule is now durable. **Corroborated** FULL-SWEEP Batch 2 (FWIZ-4, 2026-10-17): a 4th site, `lookup_binary_op_body`, where a comment defends a misleading ownership type (`shared_ptr` for a throwaway) (FWIZ-154).
 
 ### Rule: heuristic-priority / rank functions returning small magic ints should use a named-constant `enum class`
 
@@ -279,7 +279,7 @@ walker(quotient);
 
 **Reason:** in each case the code and structure were fine; one identifier flipped the T1 read to a fail, and a rename alone fixed it for both model families in 5 of 6 cases.
 
-**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17) — `exists_for_function_section` (#R21), `extract_bounds` (#R22), `refold_seq_valued_collections` (#R24), `format_derived` / `prepare_derive_bindings` (#R29), `numeric_results_` (#R19).
+**Origin:** FULL-SWEEP Batches 2-9 (FWIZ-4, 2026-10-17) — `exists_for_function_section` (FWIZ-155), `extract_bounds` (FWIZ-156), `refold_seq_valued_collections` (FWIZ-158), `format_derived` / `prepare_derive_bindings` (FWIZ-163), `numeric_results_` (FWIZ-153).
 
 ## File-organisation rules
 
@@ -316,11 +316,11 @@ Example shape:
 
 **Status:** **adopted** — Cycle targeted-sweep-3c-3k file-scope ANALYZE. Both floor graders (Haiku + Gemma) read src/expr.h (4383 LOC) cleanly on all four file-explainer axes yet **both independently flagged the missing top-of-file navigational table** (Haiku verbatim: "No explicit section delimiters or table of contents, but function clustering is logical"; Gemma: "Monolithic Mixed-Concerns"). Two-grader corroboration on a file that otherwise PASSED the gate = the empirical derivation that promotes this from the long-standing example list to an adopted rule. The complementary "non-contiguous milestone surfaces require cross-reference comments" rule (above) and the "intra-class section dividers" rule (below) cover region-pairing and class-internal grouping respectively; this rule covers file-level entry navigation.
 
-**Origin:** Cycle targeted-sweep-3c-3k (2026-06-21) — file-explainer scored src/expr.h match/specific on all four axes; both floor graders flagged the absent top-of-file SECTION table. Tracked as nuanced-refactor-candidate Future.md #R16.
+**Origin:** Cycle targeted-sweep-3c-3k (2026-06-21) — file-explainer scored src/expr.h match/specific on all four axes; both floor graders flagged the absent top-of-file SECTION table. Tracked as nuanced-refactor-candidate FWIZ-146.
 
 ### Rule (provisional): non-contiguous milestone surfaces in a >2000-line file require cross-reference comments at each end
 
-**Convention:** when a single feature-milestone (Future.md item, design-proposal milestone, or analogous unit of work) ships symbolic and numeric — or otherwise paired — halves in two physically separated regions of the same file, each region's section header must name the other region by line-anchor and one-line role description.
+**Convention:** when a single feature-milestone (a Backlog ticket, design-proposal milestone, or analogous unit of work) ships symbolic and numeric — or otherwise paired — halves in two physically separated regions of the same file, each region's section header must name the other region by line-anchor and one-line role description.
 
 Concretely (example from Cycle I-M2, src/expr.h §"Symbolic integration"):
 - Symbolic block header: `// Numeric counterpart: adaptive_simpson (line ~3329) — definite-integral fallback when symbolic_integrate returns nullptr.`
@@ -330,7 +330,7 @@ Concretely (example from Cycle I-M2, src/expr.h §"Symbolic integration"):
 
 **Reason:** files in this codebase grow monotonically (header-only design + interleaved feature areas). Once a file passes ~2000 LOC, milestone surfaces start interleaving with other concerns. Cross-references restore the structural pairing without requiring a file split. Code-as-prose for navigation when code-as-structure isn't enough.
 
-**Status:** **adopted** — Cycle I-M3 validated the rule under live use: M3's §"Symbolic integration" header comment (expr.h lines 2716-2762) embeds M1+M2+M3 milestone notes in a single comment block, and the M3 cycle ran without re-flagging the section. The cross-reference back from `adaptive_simpson` (line ~3329) to §Symbolic integration remains R4 (Future.md, open) — the rule's mechanism (cross-reference at each end) is partially in place but not symmetrically. The rule itself is durable; promotion from provisional to adopted reflects the absence of regression under one additional cycle of churn.
+**Status:** **adopted** — Cycle I-M3 validated the rule under live use: M3's §"Symbolic integration" header comment (expr.h lines 2716-2762) embeds M1+M2+M3 milestone notes in a single comment block, and the M3 cycle ran without re-flagging the section. The cross-reference back from `adaptive_simpson` (line ~3329) to §Symbolic integration remains R4 (open; see FWIZ-146) — the rule's mechanism (cross-reference at each end) is partially in place but not symmetrically. The rule itself is durable; promotion from provisional to adopted reflects the absence of regression under one additional cycle of churn.
 
 **Origin:** Cycle I-M2 — file-explainer scored vague-but-correct on Components/Relationships/Pattern for src/expr.h §Symbolic integration extension (lines 2616–2878 + 3329–3391, separated by ~430 LOC). Cycle I-M3 — validated; no regression, M3 surface follows the rule.
 
@@ -348,7 +348,7 @@ The box-drawing-character style (`──────`) visually subordinates the
 
 **Reason:** the existing file-organisation rule above ("non-contiguous milestone surfaces in a >2000-line file require cross-reference comments at each end") covers cross-region references in a file. This rule covers *intra-class* sub-area boundaries in a class that has itself exceeded the 1500-LOC threshold. The same comprehension-gate principle (Haiku-grade reader cannot navigate without structural delimiters) applies. Empirical: Cycle Cleanup-Bundle file-explainer scored Components and Relationships at vague-but-correct on src/system.h's `class FormulaSystem` (~3400 LOC) — the file's *top-level* layout is clean (5 sections delimited) but the class body itself has no internal markers.
 
-**Status:** **provisional** — single instance in the codebase (`class FormulaSystem` is the only class >1500 LOC). The rule will be retired or promoted by the next cycle's evidence: if R8 (Future.md) lands and the next cycle's file-explainer scores src/system.h's Components / Relationships at *match*, the rule is validated and adopted; if a second >1500-LOC class emerges in the codebase and exhibits the same pattern, also promote.
+**Status:** **provisional** — single instance in the codebase (`class FormulaSystem` is the only class >1500 LOC). The rule will be retired or promoted by the next cycle's evidence: if R8 lands and the next cycle's file-explainer scores src/system.h's Components / Relationships at *match*, the rule is validated and adopted; if a second >1500-LOC class emerges in the codebase and exhibits the same pattern, also promote.
 
 **Origin:** Cycle Cleanup-Bundle — file-explainer scored vague-but-correct on Components and Relationships for src/system.h (4037 LOC; central `class FormulaSystem` at lines 293–3700 has 5 conceptually separable sub-areas with no internal section delimiters).
 
@@ -397,11 +397,11 @@ Examples of rules that would live here once empirically derived:
 
 **Rule:** when a codebase's two (or fewer) largest files account for >80% of source LOC, file size is a structural variable to track, not a domain-density invariant. Specifically:
 
-- **A file approaching ~3000 LOC** is a candidate for split-by-responsibility, even if internally cohesive. If multiple sub-areas exist within the file (e.g. `numeric.h` extractable from `system.h`'s solver substrate), the split should be designed under a Future.md item with a concrete reopen trigger.
+- **A file approaching ~3000 LOC** is a candidate for split-by-responsibility, even if internally cohesive. If multiple sub-areas exist within the file (e.g. `numeric.h` extractable from `system.h`'s solver substrate), the split should be designed under a Backlog ticket with a concrete reopen trigger.
 - **A class within such a file approaching ~1500 LOC** is a candidate for intra-class section dividers (see file-organisation rule above) as a cheap interim step before split.
 - **The split must preserve dependency direction.** Extracting a sub-file from a large file should not reverse the pipeline (extracting `numeric.h` from `system.h` is fine because `system.h` calls `numeric.h`-content already; pulling `expr.h` symbols UP into `system.h` would reverse the layering).
 
-This rule is satisfied today by the open work in `Future.md`:
+This rule is satisfied today by the open Backlog tickets:
 - **#R8** (FormulaSystem intra-class section dividers) addresses intra-class structure cheaply.
 - **T4.1 trigger** (`numeric.h` extraction from `system.h`, then `query.h`) addresses the file-split path.
 - **#R12** (`nuanced-refactor-candidate` — engine/query API split) is the design-track sibling of T4.1.

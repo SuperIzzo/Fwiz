@@ -1,5 +1,5 @@
 ---
-name: Periodicity Detection — Future #12 external research
+name: Periodicity Detection — FWIZ-61..FWIZ-68 external research
 description: CAS representations of periodic root sets; textbook conventions; numeric period inference; symbolic vs numeric path tradeoffs
 type: project
 ---

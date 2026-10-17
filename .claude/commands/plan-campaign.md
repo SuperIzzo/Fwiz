@@ -154,7 +154,7 @@ Write the result to `docs/ROADMAP.md`.
 **Objective-mode design arcs are first-class.** When the winner is a 1-cycle
 design arc (deliverable = decision document; no multi-cycle implementation),
 write it into ROADMAP.md as a regular active-arc entry with a single milestone
-("Cycle 1: produce decision document for <objective>; mark <Future.md items>
+("Cycle 1: produce decision document for <objective>; mark <Backlog tickets>
 DONE-by-design or split into follow-ups per the decision."). The arc closes
 when the cycle ships. This is not a workflow exception — it's the protocol
 for objective-mode resolution of design-question items.
@@ -207,6 +207,6 @@ Append to `.fwiz-workflow/orchestrator-log.md`:
   run reads them to avoid re-proposing identical plans.
 - Do NOT auto-apply a low-confidence critic verdict in any mode. Low confidence
   always escalates to user (or exits autonomous).
-- Do NOT modify `docs/Future.md`, `docs/REJECTED.md`, or any item-level artifact
+- Do NOT modify Backlog tickets, `docs/REJECTED.md`, or any item-level artifact
   from this command. The roadmap describes which items get worked on across
   cycles; it doesn't change the items themselves.

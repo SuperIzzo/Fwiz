@@ -18,7 +18,7 @@ Fwiz lets you write equations once (`y = x + 5`) and solve for ANY variable. It 
 When given a research task:
 
 1. **Internal research**: Read project docs to understand current capabilities and limitations:
-   - `docs/Future.md` — planned features and roadmap
+   - the ClaudeBoard Backlog (claudeboard `list_tickets`) and `docs/ROADMAP.md` — planned features and roadmap
    - `docs/Known-Issues.md` — current bugs and limitations
    - `docs/Developer.md` — architecture and design philosophy
    - Relevant `.fw` example files in `examples/`
