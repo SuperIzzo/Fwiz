@@ -2197,6 +2197,22 @@ The ~110-line `is_in` dispatcher sits between the two, so a reader who reaches t
 
 **Locked:** No.
 
+## #R25. Refactor: merge `parse_range_literal` / `parse_range_literal_brace` and name the step — `nuanced-refactor-candidate` (naming + duplication)
+
+**From:** FULL-SWEEP Batch 5 (FWIZ-4, 2026-10-17, T1). Floor PASS on both functions. But on both, **both graders hedged on the same token**: the value after `@` is pushed into `args` anonymously. Haiku: "likely a step or stride, but the name and structure do not confirm it". Gemma: "a third bound" / "a third argument". Its only label was a `// step` trailing comment, which is stripped at T1.
+
+**Intervention (empirical):** naming the value (`const ExprPtr step = parse_expr(); args.push_back(step);`) flips Gemma to "an optional step value". Haiku now names the step but still asks what a step means for `range`, which is fair, because that is defined downstream.
+
+**Also:** the two functions are line-for-line identical except for the closing token (`RBRACKET` vs `RBRACE`) and its error message. The header comment of `_brace` says so ("Identical to parse_range_literal except the closing token is RBRACE").
+
+**Proposed:** one function `parse_range_literal(ExprPtr lo, TokenType close, const char* close_msg)` (or a `close` token plus a derived message), with the step named as a local. The two call sites in `primary()` pass `RBRACKET` / `RBRACE`. This removes about 11 lines and the drift risk (a fix to one copy silently missing the other).
+
+**Pattern coverage:** single site.
+
+**Reopen trigger:** any change to range-literal grammar (e.g. the `[lo..hi)` boundary brackets planned in the collection ontology), since that change would otherwise have to be made twice.
+
+**Locked:** No.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
