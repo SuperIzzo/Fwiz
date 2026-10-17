@@ -2257,6 +2257,18 @@ Naming / magic number is the whole bottleneck. This breaks the existing "no magi
 
 **Locked:** No.
 
+## #R28. Refactor: one helper for the duplicated seq-argument splice in `solve_recursive` / `solve_all` — `nuanced-refactor-candidate` (duplication)
+
+**From:** FULL-SWEEP Batch 8 (FWIZ-4, 2026-10-17, T1). Both excerpts pass the floor. The finding is structural. The Collections-Cycle-3 splice appears twice (system.h:~3358 in `solve_all`'s FORMULA_FWD branch, ~5252 in `solve_recursive`). Each copy has the same three steps: `unfold_formula_call_body(call, true)`, then a "LOUD GUARD" `throw FoldOperatorError(... "could not be inlined ...")` with the message duplicated word for word, then `resolve_foldl_calls(body)`. Only after that do the copies diverge: a single `try_resolve` in one, and dedup plus global-condition acceptance in the other.
+
+**Proposed:** `[[nodiscard]] ExprPtr inline_seq_argument_call(const FormulaCall& call) const`, which unfolds, throws on failure and re-folds. Both sites call it and keep only their own acceptance logic. This also gives the "collection argument → parent-side inlining" invariant (CLAUDE.md, Collections Cycle 3) a single named home. Note that CLAUDE.md still mentions an `inline_seq_section_calls` helper that no longer exists in src/ (doc drift for the doc-updater).
+
+**Pattern coverage:** 2 sites. Below rule threshold.
+
+**Reopen trigger:** any change to the collections-as-arguments path (a third splice site, or a change in the error contract).
+
+**Locked:** No.
+
 ## 100. `DimMap` flat-vector optimization for small-dimension systems — PARKED
 
 **Surfaced gen-5 cycle 3c (2026-06-06)** as a perf-auditor observation.
