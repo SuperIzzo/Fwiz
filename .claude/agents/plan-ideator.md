@@ -26,12 +26,12 @@ loses the divergent shape that makes the pair valuable.
 
 Read all of:
 
-- `docs/Future.md` — active items by tier (in-scope / wrapper-tool / parked)
+- the ClaudeBoard Backlog (claudeboard `list_tickets`, column `backlog`) — open follow-up items
 - `docs/COMPLETED.md` — what's shipped recently (last ~10 entries)
 - `docs/ROADMAP.md` — current state (arc in progress, queued arcs)
 - `docs/REJECTED.md` — items already rejected, do NOT revive without explicit rationale
 - `.claude/agents/visionary.md` — vision principles
-- `CLAUDE.md` §Future.md tiers, §Vision-related sections
+- `CLAUDE.md` §Backlog, §Vision-related sections
 - `.fwiz-workflow/workflow-metrics.md` — velocity trends, implementer success rate
 - `git log --oneline -30` — actual shipping trajectory
 - `.fwiz-workflow/roadmap-archive/*.md` if any — prior generations (avoid re-proposing identical plans)
@@ -57,13 +57,13 @@ to **"different SHAPES of executing the same goal"**:
 - Different framings of the underlying question (what would make item X true?).
 - Different scopes (minimum viable resolution vs comprehensive treatment).
 
-Many objectives are **design questions** (resolve Future.md item X / pick a semantic model / decide the order to ship a chain of items). For these:
+Many objectives are **design questions** (resolve Backlog ticket X / pick a semantic model / decide the order to ship a chain of items). For these:
 
 - Each approach is typically a **1-cycle "design arc"** — produce a decision document, apply trivial implementation if it falls out, do NOT propose multi-cycle implementation work unless the objective explicitly requests it.
-- The "milestones" become decision-stages of the design (e.g. "Cycle 1: enumerate semantic models X / Y / Z; pick one; mark Future.md item DONE-by-design or split into trigger-tied follow-ups per the choice").
+- The "milestones" become decision-stages of the design (e.g. "Cycle 1: enumerate semantic models X / Y / Z; pick one; close the Backlog ticket as done-by-design or split into trigger-tied follow-ups per the choice").
 - **Confidence** is honest about the design's coherence, not the implementation difficulty.
 
-When the objective is feature-shaped ("ship X via the cleanest available shape"), generate divergent shapes that all ship X — different cycle decompositions, different prerequisite orderings, different scope cuts within the goal.
+When the objective is feature-shaped ("ship X via cleanest available shape"), generate divergent shapes that all ship X — different cycle decompositions, different prerequisite orderings, different scope cuts within the goal.
 
 3-5 approaches is still the right count. If only 1-2 genuinely-different approaches exist for the objective, say so — pad the set with marginal variants only when the option space supports them.
 
@@ -100,7 +100,7 @@ For each campaign:
 **Estimated cycles:** <N> (give a range if uncertain, e.g. "5-7")
 
 **Milestones:**
-- Cycle 1: <description, references to Future.md items by # if applicable>
+- Cycle 1: <description, references to Backlog tickets by key (FWIZ-N) if applicable>
 - Cycle 2: <description>
 - Cycle 3: <description>
 - ... (cap at the estimated cycle count)
@@ -120,7 +120,7 @@ For each campaign:
 ## Divergent Campaign Plans — <YYYY-MM-DD>
 
 ### Project state snapshot
-<one paragraph synthesising what you read: tier composition of Future.md, what's been shipping, current arc status, any active themes>
+<one paragraph synthesising what you read: shape of the Backlog, what's been shipping, current arc status, any active themes>
 
 ### Campaigns
 <3-5 campaigns in the format above>

@@ -208,7 +208,7 @@ Detailed references live in [`docs/`](docs/):
 | [docs/Fitting.md](docs/Fitting.md) | Curve fitting: templates, composition, constant recognition |
 | [docs/CLI.md](docs/CLI.md) | Command-line flags, exit codes, error messages |
 | [docs/Developer.md](docs/Developer.md) | Implementation architecture and conventions |
-| [docs/Future.md](docs/Future.md) | Roadmap and planned features |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Roadmap (planned features live in the ClaudeBoard Backlog) |
 | [docs/Known-Issues.md](docs/Known-Issues.md) | Current limitations |
 | [docs/Testing.md](docs/Testing.md) | Test organization |
 

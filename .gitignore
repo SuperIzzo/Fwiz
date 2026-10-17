@@ -6,3 +6,4 @@ bin/
 # fuzz_corpus/ except *.fw seeds.
 fuzz_corpus/*
 !fuzz_corpus/*.fw
+.tmp-work/

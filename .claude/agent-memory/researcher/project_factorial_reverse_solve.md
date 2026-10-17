@@ -1,11 +1,11 @@
 ---
-name: Factorial reverse-solve Future #94
+name: Factorial reverse-solve FWIZ-136
 description: Trap diagnosis and Fix (d) recommendation for is_in(6,factorial)=false — exists_for_function_section uses resolve instead of resolve_all; depth re-throw bypasses Strategy 6
 metadata:
   type: project
 ---
 
-Factorial-style reverse-solve (Future #94) — cycle 3j research, 2026-06-06.
+Factorial-style reverse-solve (FWIZ-136) — cycle 3j research, 2026-06-06.
 
 The failure: `is_in(6, factorial)` returns false. `exists_for_function_section` calls `sub.resolve("n", {result:6})`. Strategy 2 emits `n = result/prev`, which chains into factorial(n=n-1), saturates `formula_depth_` (1000), and the depth exception is RE-THROWN at system.h:4457 — bypassing Strategy 6 (NUMERIC) entirely.
 

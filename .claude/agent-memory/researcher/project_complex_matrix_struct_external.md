@@ -1,6 +1,6 @@
 ---
 name: Complex/Matrix/Struct CAS external research
-description: How SymPy, Maxima, Mathematica, Maple, SageMath represent complex numbers, matrices, and structs in their expression trees — informs Fwiz Future #13 (complex) and #14 (matrix)
+description: How SymPy, Maxima, Mathematica, Maple, SageMath represent complex numbers, matrices, and structs in their expression trees — informs Fwiz FWIZ-69..FWIZ-73 (complex) and #14 (matrix)
 type: project
 ---
 
@@ -30,7 +30,7 @@ Key findings from the 2026-05-09 external CAS survey for the evaluate_symbolic e
 - No CAS has algebraic dot-path namespacing (`car.velocity.x`) as expression-tree prior art.
 - Mathematica `Association[key->val]` is structured data container for expressions, NOT algebraic.
 - Universal approach: flat naming convention or structured containers holding expressions.
-- Future #15 "syntactic sugar over flattened names" matches all prior art. Do not over-engineer.
+- FWIZ-79 "syntactic sugar over flattened names" matches all prior art. Do not over-engineer.
 
 ## Cross-cutting
 

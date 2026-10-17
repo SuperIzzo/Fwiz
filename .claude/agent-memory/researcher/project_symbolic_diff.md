@@ -1,12 +1,12 @@
 ---
-name: Symbolic Differentiation (Future #6) research findings
-description: Key architectural decisions and empirical findings from the internal codebase audit for Future #6
+name: Symbolic Differentiation (shipped) research findings
+description: Key architectural decisions and empirical findings from the internal codebase audit for symbolic differentiation
 type: project
 ---
 
 Key architectural decisions confirmed by codebase audit + probe runs (2026-04-26):
 
-**Fact:** `symbolic_diff(ExprPtr, string) -> ExprPtr` should be a free function in `expr.h`, analogous to `solve_for`. No new ExprType node needed — Future.md #6 explicitly says "the derivative is itself an ExprPtr that goes through the simplifier."
+**Fact:** `symbolic_diff(ExprPtr, string) -> ExprPtr` should be a free function in `expr.h`, analogous to `solve_for`. No new ExprType node needed — The original symbolic-diff backlog entry explicitly says "the derivative is itself an ExprPtr that goes through the simplifier."
 
 **Why:** Adding `ExprType::DIFF` would require updating 6 dispatch switch sites and breaks the functional-construction pattern. Option B (builtin registry) doesn't fit — `builtin_functions()` maps to `double(*)(double)`, not ExprPtr.
 

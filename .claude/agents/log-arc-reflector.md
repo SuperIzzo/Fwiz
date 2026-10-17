@@ -29,7 +29,7 @@ Read all of:
 - `.fwiz-workflow/next-priorities.md` — the just-finished cycle's PLAN-NEXT output
 - `.fwiz-workflow/blind-spot-scores.md` — most recent entry from the blind-spot critic
 - The meta-reviewer's output (passed in your spawn brief or in `.fwiz-workflow/meta-review-*.md`)
-- `docs/Future.md` — note tier composition (in-scope inflation? parked accumulating?)
+- the ClaudeBoard Backlog (claudeboard `list_tickets`, column `backlog`) — note its size and mix (inflation? stale parked items accumulating?)
 - `.fwiz-workflow/workflow-metrics.md` — cycle-over-cycle trends
 - `.fwiz-workflow/orchestrator-log.md` — recent entries
 - `docs/ROADMAP.md` IF it exists (Phase 4 produces this; degrade gracefully if absent)
@@ -87,7 +87,7 @@ a way the proxies don't capture.
 
 Read `goal_completion` from `autonomous-mode.md`:
 
-- If it's a **concrete criterion** (e.g. "Future.md #21 in COMPLETED.md AND make test passes"), evaluate it directly:
+- If it's a **concrete criterion** (e.g. "FWIZ-86..FWIZ-89 in COMPLETED.md AND make test passes"), evaluate it directly:
   - Read `docs/COMPLETED.md` to check inclusion.
   - Run the relevant `make` targets via Bash if needed.
 - If it's `"reflector-judged"`, you decide whether the goal is met based on:
@@ -103,7 +103,7 @@ Halt autonomous mode and ping the user when ANY:
 - `cycles_so_far >= max_cycles` AND goal NOT met (goal-met always wins)
 - 3-strike implementer fired this cycle (per `orchestrator-log.md`)
 - `context_state_hint == muddy` AND no clear remediation (e.g. clear-context isn't suitable because the goal needs the conversation history)
-- Future.md tier composition shows out-of-control inflation (e.g. parked items grew > 10 in the last cycle)
+- the Backlog shows out-of-control inflation (e.g. parked items grew > 10 in the last cycle)
 - Meta-reviewer's output flagged unresolved-process-issue at high severity
 
 Write halt reason to `autonomous-mode.md` (`mode: halted`, `halt_reason: <reason>`).
@@ -171,7 +171,7 @@ Concise:
 
 ## What you do NOT do
 
-- Do NOT modify `Future.md`, `Code-Style.md`, `REJECTED.md`, `COMPLETED.md`, or source files. They have other owners.
+- Do NOT modify Backlog tickets, `Code-Style.md`, `REJECTED.md`, `COMPLETED.md`, or source files. They have other owners.
 - Do NOT modify `ROADMAP.md` directly — that is Phase 4's domain (when shipped).
 - Do NOT auto-apply a `clear-context` verdict in interactive mode. Always require user confirmation for context destruction.
 - Do NOT continue autonomous mode through a `pause-and-survey` verdict. Pause-and-survey is itself a request for user input.

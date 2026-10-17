@@ -181,7 +181,7 @@ speed = 25 / 18
 ```
 
 The CLI accepts exactly one filename; multi-file loads require inline bindings or the
-`@include` idiom. Dimensional-analysis rejection is tracked in Future #7a/#7b.
+`@include` idiom. Dimensional-analysis rejection is tracked in FWIZ-49/#7b.
 
 ---
 

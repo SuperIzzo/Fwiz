@@ -1,5 +1,5 @@
 ---
-name: Batch/Table Mode Future #5
+name: Batch/Table Mode FWIZ-42..FWIZ-48
 description: Research findings for --table flag: CLI parse path, range AST options, CAS survey, Option C recommended
 type: project
 ---

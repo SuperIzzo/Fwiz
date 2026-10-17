@@ -164,7 +164,7 @@ For each function, the prompts are prepared once at SAMPLE time. Three grader fa
 - `code-explainer-purpose` — documentation of INTENTION.
 - `code-explainer-mechanics` — ROLE of each parameter / variable / control structure.
 
-You CANNOT spawn these. SAMPLE mode emits the prompt for each (with all metadata the orchestrator needs to dispatch correctly). ANALYZE mode reads the orchestrator-collected responses from `.fwiz-workflow/blind-spot-responses.md`.
+You CANNOT spawn these. SAMPLE mode emits the prompt for each (with all metadata orchestrator needs to dispatch correctly). ANALYZE mode reads the orchestrator-collected responses from `.fwiz-workflow/blind-spot-responses.md`.
 
 **Floor — Gemma side (you run via Bash, both modes):**
 
@@ -394,7 +394,7 @@ Skip-when-unchanged: after running, write `git rev-parse HEAD` to `.fwiz-workflo
 
 Two output channels:
 
-**Refactor items** — for each failure (any scope), append to `docs/Future.md` under a `## Refactors` section. The visionary audit tier-classifies on the next cycle.
+**Refactor items** — for each failure (any scope), create a ClaudeBoard Backlog ticket (claudeboard `create_ticket`, column `backlog`, title prefixed `Refactor:`).
 
 Format (function-scope, intervention-validated):
 
@@ -460,8 +460,8 @@ Append three table blocks to `.fwiz-workflow/blind-spot-scores.md` under a new
 ### Functions
 | Function | H-Purp | G-Purp | O-Purp | H-Mech | G-Mech | O-Mech | Gate verdict | Opus-only concern | Interventions | Diagnosis | Refactor # |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| `enumerate_candidates` | wrong-detail/specific | wrong-substance/mech-only | match/specific | wrong-detail/vague | wrong-substance/mech-only | vague-correct/vague | **fail (floor)** | — | rename ✗, comment ✗, split ✓ | cohesion | Future.md #N |
-| `try_u_sub_integrate` | vague-correct/vague | wrong-detail/specific | match/specific | wrong-detail/specific | match/specific | match/specific | **fail (floor — H-mech, G-purp)** | — | rename ✓ (`_u_sub_` and `cse_replace`) | naming | Future.md #N |
+| `enumerate_candidates` | wrong-detail/specific | wrong-substance/mech-only | match/specific | wrong-detail/vague | wrong-substance/mech-only | vague-correct/vague | **fail (floor)** | — | rename ✗, comment ✗, split ✓ | cohesion | Backlog ticket FWIZ-N |
+| `try_u_sub_integrate` | vague-correct/vague | wrong-detail/specific | match/specific | wrong-detail/specific | match/specific | match/specific | **fail (floor — H-mech, G-purp)** | — | rename ✓ (`_u_sub_` and `cse_replace`) | naming | Backlog ticket FWIZ-N |
 | `decompose_quadratic` | match/specific | match/specific | match/specific | match/specific | match/specific | match/specific | pass | — | — | clean | — |
 | `find_numeric_roots` | match/specific | match/specific | vague-correct/vague | match/specific | match/specific | wrong-detail/specific (`magic 1.0 / 1000`) | pass (floor) | **Opus-only concern** — magic numbers logged as `nuanced-refactor-candidate` | — | (subtle: naming/numbering) | logged-only |
 | ... |
@@ -479,7 +479,7 @@ Columns: `H-` Haiku, `G-` Gemma, `O-` Opus-grader. Each cell is `correctness/spe
 | Components | wrong-on-detail | confused two solver classes |
 | Relationships | unsure | call graph not legible from code |
 | Pattern | wrong-on-substance | called it "AST types" but it's mixed-monolithic |
-**Diagnosis:** structure + cohesion. **Refactor filed:** Future.md #N.
+**Diagnosis:** structure + cohesion. **Refactor filed:** Backlog ticket FWIZ-N.
 ```
 
 **Architecture-scope:**
@@ -517,7 +517,7 @@ Return a concise summary across all scopes:
 - Architecture-scope: <pass | failed: diagnosis>
 
 ### Refactors filed
-- K refactor items appended to Future.md (function: <K_f>, file: <K_file>, arch: <K_a>)
+- K refactor Backlog tickets created (function: <K_f>, file: <K_file>, arch: <K_a>)
 
 ### Rules extracted
 - Function: L_f new
@@ -531,7 +531,7 @@ Return a concise summary across all scopes:
 ## What you do NOT do
 
 - Do NOT apply refactors yourself. You file items; the implementer agent applies them in a future cycle.
-- Do NOT modify source files in `src/`. Your writes are confined to `docs/Future.md`, `docs/Code-Style.md`, `docs/Developer.md` (architecture rules only), and `.fwiz-workflow/blind-spot-scores.md`, `.fwiz-workflow/last-file-tested`, `.fwiz-workflow/last-architecture-test-commit`.
+- Do NOT modify source files in `src/`. Your writes are confined to Backlog tickets on ClaudeBoard, `docs/Code-Style.md`, `docs/Developer.md` (architecture rules only), and `.fwiz-workflow/blind-spot-scores.md`, `.fwiz-workflow/last-file-tested`, `.fwiz-workflow/last-architecture-test-commit`.
 - Do NOT pass surrounding context to Haiku that the scope's rule forbids. The test's signal depends on the context starvation.
 - Do NOT propose a rule whose pattern only appears in ≤2 sites. Rules are codebase-wide; one-offs stay as per-function refactor items.
 - Do NOT duplicate existing rules in `docs/Code-Style.md`. Read the file first; cross-check before appending.
