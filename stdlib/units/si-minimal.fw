@@ -2,7 +2,7 @@
 # Each base unit is a dimensionless scalar 1. Prefixes and derived units are
 # parameterised in terms of the base — `km = 1000 * m`, `N = kg * m / s^2` —
 # so values cascade automatically if a downstream design changes the base.
-# Future cycles bring dim-analysis (Future #7b); for now this is the
+# Later cycles bring dim-analysis (docs/COMPLETED.md #7b); for now this is the
 # minimum useful catalog for numeric unit-suffix solving.
 #
 # Load via: ./bin/fwiz 'stdlib/units/si-minimal.fw(mass=100kg, mass=?)'

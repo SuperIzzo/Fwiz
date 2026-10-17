@@ -419,7 +419,7 @@ public:
         return covered_to == INF;
     }
 
-    // Periodic families (Future #12). Render each dedup'd family as
+    // Periodic families (docs/COMPLETED.md #12). Render each dedup'd family as
     // `<base> + k * <period>  # k in Z`. base recognised via fmt_exact_double
     // (so `pi / 6` surfaces); period is symbolic from inception. Render-time
     // dedup collapses {b1,p1} ≡ {b2,p2} when periods agree numerically AND
@@ -703,7 +703,7 @@ inline double eval_div(double l, double r) {
 }
 
 inline const BinOpInfo& binop_info(BinOp op) {
-    // C17-constexpr-eligible: requires constexpr BinOpInfo ctor (Future.md #58).
+    // C17-constexpr-eligible: requires constexpr BinOpInfo ctor (FWIZ-119).
     // The eval field is a plain function pointer (non-capturing lambdas decay
     // cleanly), but BinOpInfo is an aggregate with no constexpr constructor —
     // the brace-init list above is not a constant expression in C++17 because
@@ -1503,7 +1503,7 @@ template<typename Fn>
 //
 // Rationals are the only non-real case handled today. Complex numbers,
 // matrices, and other number types will extend the dispatch here without
-// touching call sites. See docs/Future.md "Extending evaluate_symbolic".
+// touching call sites. See FWIZ-56 and FWIZ-57 (rational propagation through evaluate_symbolic).
 //
 // Numeric callers (Newton/bisection grid scan, condition comparisons,
 // verify-mode equality, CLI arg parsing, solve_recursive bindings commit)
@@ -1803,7 +1803,7 @@ struct CondClause {
     CondOp op;
 };
 
-// Typed-binding predicates for rule conditions (Future #53). A predicate clause
+// Typed-binding predicates for rule conditions (docs/COMPLETED.md #53). A predicate clause
 // is encoded as `CondClause{lhs=FUNC_CALL("is_*", {Var("name"), ...}),
 // rhs=nullptr, op=CondOp::EQ}`. `is_predicate_clause()` recognises this shape
 // structurally — no extra fields on CondClause.
@@ -1885,7 +1885,7 @@ struct Condition {
     }
 };
 
-// Dimension exponent algebra (gen-5 cycle 3c, Future #7b FULL).
+// Dimension exponent algebra (gen-5 cycle 3c, docs/COMPLETED.md #7b FULL).
 // A DimMap maps an atomic dimension name to its integer exponent:
 //   {} = dimensionless; {"mass":1} = mass; {"length":1,"time":-2} = accel.
 // Zero-exponent entries are dropped (dim_zero_clean) so map-equality is the
@@ -1906,7 +1906,7 @@ struct BindingType {
     std::set<std::string> sets;    // membership: {"int"}, {"imaginary"}, ...
 };
 
-// ---- DimMap arithmetic (gen-5 cycle 3c, Future #7b FULL) ----
+// ---- DimMap arithmetic (gen-5 cycle 3c, docs/COMPLETED.md #7b FULL) ----
 // Drop zero-exponent entries so map-equality is the canonical dimension test
 // (e.g. {mass:1,mass:-1} cancels to {} = dimensionless after a divide).
 inline DimMap dim_zero_clean(DimMap m) {
@@ -2002,7 +2002,7 @@ inline ExistenceChecker& solve_existence_checker_();
 // (the literal `n`, or another expression not containing the target)
 // alone does not. Predicate clauses (`is_in`, `is_neg_num`) are walked
 // the same way — their FUNC_CALL lhs args carry the relevant vars.
-// gen-5 cycle 3h (2026-05-16, Future #92).
+// gen-5 cycle 3h (2026-05-16, docs/COMPLETED.md #92).
 [[nodiscard]] inline bool contains_var_in_condition(const Condition& cond,
                                                     const std::string& var) {
     return std::any_of(cond.clauses.begin(), cond.clauses.end(),
@@ -2016,7 +2016,7 @@ inline ExistenceChecker& solve_existence_checker_();
 // for COMPARISON clauses (permissive-true). PREDICATE clauses use fail-safe
 // semantics: unknown binding → false. `expr_bindings` is optional — only rule-
 // condition callers (e.g. `apply_rewrite_rules`) pass it; equation-context callers
-// pass nullptr and predicate clauses then short-circuit to false (Future #53).
+// pass nullptr and predicate clauses then short-circuit to false (docs/COMPLETED.md #53).
 //
 // `set_ctx` (gen-5 cycle 3a) carries the type_map_ + set_definitions_ pointers
 // for the `is_in(_, _)` predicate dispatch. Nullable; null → false (fail-safe).
@@ -2025,7 +2025,7 @@ inline ExistenceChecker& solve_existence_checker_();
                             const std::map<std::string, ExprPtr>* expr_bindings = nullptr,
                             const SimplifyContext* set_ctx = nullptr) {
     auto eval_clause = [&](const CondClause& c) -> std::optional<bool> {
-        // Predicate clauses (Future #53 / gen-5 cycle 3a): typed dispatch on
+        // Predicate clauses (docs/COMPLETED.md #53 / gen-5 cycle 3a): typed dispatch on
         // the bound ExprPtr. Fail-safe semantics — any unknown/missing/
         // wrong-shape arg → false.
         if (is_predicate_clause(c)) {
@@ -2090,7 +2090,7 @@ inline ExistenceChecker& solve_existence_checker_();
                 // and DIM_SECTION enter harmlessly — neither can recurse into
                 // is_in dispatch — so the guard cost is one set insert+erase
                 // per dispatch on those paths. Value-aware dedup parked
-                // (Future #86).
+                // (FWIZ-131).
                 static thread_local std::set<std::string> evaluating_predicates_;
                 if (evaluating_predicates_.count(set_name)) return false;
                 evaluating_predicates_.insert(set_name);
@@ -2184,7 +2184,7 @@ inline ExistenceChecker& solve_existence_checker_();
                         // condition triggers a full solver invocation. For
                         // rules consulting function-sections in tight
                         // matching loops, this can dominate `simplify()`
-                        // time. Memoization deferred — Future #85.
+                        // time. Memoization deferred — FWIZ-130.
                         auto val = evaluate(*bind_it->second);
                         if (!val) return false;
                         const auto& checker = solve_existence_checker_();
@@ -2278,7 +2278,7 @@ inline std::string condition_to_string(const Condition& cond,
         if (i > 0) out += (cond.connectors[i-1] == CondLogic::AND) ? " && " : " || ";
         const auto& c = cond.clauses[i];
         if (is_predicate_clause(c)) {
-            // Predicate clauses (Future #53): render as `is_name(arg)`.
+            // Predicate clauses (docs/COMPLETED.md #53): render as `is_name(arg)`.
             // `expr_to_string` already handles FUNC_CALL pretty-printing.
             out += expr_to_string(c.lhs);
             continue;
@@ -2497,7 +2497,7 @@ struct RewriteRulesGuard {
     // branch retained: needed by tests 10480/11342 (Neg(l) / k pulled out for term cancellation)
     if (is_neg(l))
         return Expr::Neg(Expr::BinOpExpr(BinOp::DIV, l->child, r));
-    // not migratable: rational arithmetic; see Future.md typed-binding-predicates
+    // not migratable: rational arithmetic; see docs/COMPLETED.md #53 (typed-binding predicates)
     // Constant reassociation: (K * a) / K2 or (a * K) / K2
     if (is_num(r) && l->type == ExprType::BINOP && l->op == BinOp::MUL) {
         if (is_num(l->right)) {
@@ -2881,7 +2881,7 @@ constexpr size_t MATRIX_3X3_DIM = 3;
 }
 
 // ============================================================================
-//  Bounded aggregation unroll (gen-6 cycle 1, Future #5 / #5b)
+//  Bounded aggregation unroll (gen-6 cycle 1, docs/COMPLETED.md #5 / FWIZ-43)
 //
 //  Recognizes the six reducers over a static numeric range and expands by
 //  macro-substitution + the existing simplifier — no new evaluator. The shape
@@ -3179,7 +3179,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
                         return make_rational(rn, rd);
                     }
                     // x^0, x^1, x^0.5, (x^a)^b, x^(-n) now in BUILTIN_REWRITE_RULES
-                    // (T3.6 migrated via `is_neg_num(n)` predicate, Future #53)
+                    // (T3.6 migrated via `is_neg_num(n)` predicate, docs/COMPLETED.md #53)
                     return Expr::BinOpExpr(BinOp::POW, l, r);
                 case BinOp::COUNT_: assert(false && "invalid BinOp"); break;
             }
@@ -3246,7 +3246,7 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 // ============================================================
 
 // ============================================================================
-//  Per-builtin metadata registry (Future #49) — shared by symbolic_diff
+//  Per-builtin metadata registry (docs/COMPLETED.md #49) — shared by symbolic_diff
 //  (chain rule) and symbolic_integrate (direct antiderivative table).
 // ============================================================================
 //
@@ -3262,12 +3262,12 @@ inline ExprPtr simplify_once_impl(const ExprPtr& e) {
 //     (e.g. `sin(x^2)`) are u-substitution territory (`try_u_sub_integrate`)
 //     and the IBP layer below.
 //
-// Future consumers (Future #7 units, #9 LaTeX, #53 typed-binding rules) plug
+// Future consumers (units: docs/COMPLETED.md #7; LaTeX: FWIZ-54; typed-binding rules: docs/COMPLETED.md #53) plug
 // in by adding fields to `BuiltinMeta`; the callbacks are currently free
 // functions, but their signatures are stable across the in-tree extension axis.
 //
 // **Why C++ today, not `.fw` rules**: typed-binding predicates (`is_num(...)`,
-// Future #53) are required to express the antiderivative table's pattern guards
+// docs/COMPLETED.md #53) are required to express the antiderivative table's pattern guards
 // — `Var(var)^n iff is_num(n)`. `BuiltinMeta` is the **4th consumer** of #53
 // (after T3.5, T3.6, integration Tier 1). Migration to `.fw` rules waits on #53.
 
@@ -3289,7 +3289,7 @@ struct BuiltinMeta {
     // try IBP or fall through to unevaluated."
     ExprPtr (*integrate)(const std::string& var);
 
-    // Dimension propagation callback (gen-5 cycle 3c, Future #7b FULL).
+    // Dimension propagation callback (gen-5 cycle 3c, docs/COMPLETED.md #7b FULL).
     // Nullable: nullptr = "treat this FUNC_CALL result as dimensionless" — the
     // safe default for transcendental builtins (trig/log/exp) whose argument is
     // required to be dimensionless anyway. Contract: `arg` is the computed dim
@@ -3380,7 +3380,7 @@ inline const std::map<std::string, BuiltinMeta>& builtin_meta() {
 }
 
 // ============================================================================
-//  Dimension propagation (gen-5 cycle 3c, Future #7b FULL)
+//  Dimension propagation (gen-5 cycle 3c, docs/COMPLETED.md #7b FULL)
 // ============================================================================
 //
 // compute_dim folds an expression tree into a DimMap exponent algebra, given a
@@ -3464,18 +3464,18 @@ compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map) {
 }
 
 // ============================================================================
-//  Symbolic differentiation (Future #6)
+//  Symbolic differentiation (docs/COMPLETED.md #6)
 // ============================================================================
 //
 // `symbolic_diff(e, var)` produces d(e)/d(var) as a fresh ExprPtr in the
 // active arena. Per-AST-class switch + `BuiltinMeta` registry lookup for
-// FUNC_CALL (Future #49 — registry extracted M3, 2026-05-10).
+// FUNC_CALL (docs/COMPLETED.md #49 — registry extracted M3, 2026-05-10).
 //
 // Design choices (see .fwiz-workflow/design-proposal.md "Final Design"):
 //   - Plain factories (no smart-builders): `simplify` already folds 0+x, 0*x,
 //     1*x, x/1, etc. — pre-folding here is dead weight on a non-hot path.
 //   - Per-builtin metadata via `builtin_meta()` registry — second consumer
-//     (`symbolic_integrate`) shares the same table. Future #7 (units), #9
+//     (`symbolic_integrate`) shares the same table. units (docs/COMPLETED.md #7), FWIZ-54
 //     (LaTeX) plug in by extending `BuiltinMeta`.
 //   - Returns `nullptr` for unrecognized forms (multi-arg builtins, unknown
 //     function names). Callers (`symbolic_diff_simplified`, the post-load
@@ -3541,7 +3541,7 @@ compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map) {
             auto u  = e.args[0];
             auto du = symbolic_diff(*u, var);
             if (!du) return nullptr;
-            // Registry lookup (Future #49): per-builtin derivative table.
+            // Registry lookup (docs/COMPLETED.md #49): per-builtin derivative table.
             // The callback returns f'(u); chain rule (`* du`) is applied here.
             const auto& reg = builtin_meta();
             const auto it = reg.find(e.name);
@@ -3563,7 +3563,7 @@ compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map) {
 }
 
 // ============================================================================
-//  Symbolic integration (Future #16, M1 — indefinite Tier 1; M2 — u-sub + definite)
+//  Symbolic integration (docs/COMPLETED.md #16, M1 — indefinite Tier 1; M2 — u-sub + definite)
 // ============================================================================
 //
 // Numeric counterpart: `adaptive_simpson` (defined later in §Numerical solvers,
@@ -3605,14 +3605,14 @@ compute_dim(const Expr& e, const std::map<std::string, BindingType>& type_map) {
 //     with HIGHER LIATE rank becomes `u`; the other is `dv`. Single FUNC_CALL
 //     integrands at L/I rank (e.g. `atan(x)`, `log(x)`) without an
 //     antiderivative-table entry get treated as `f(x) * 1` for IBP.
-//   - `BuiltinMeta` registry extracted (Future #49) — diff and integrate share
+//   - `BuiltinMeta` registry extracted (docs/COMPLETED.md #49) — diff and integrate share
 //     the same per-builtin metadata table. See `builtin_meta()` above.
 //
 // Out of scope:
 //   - Cyclic IBP detection (`e^x * sin(x)` family — depth limit catches it).
 //     Reopen trigger: see master-plan.md cross-arc reopen triggers.
 //   - `+ C` constant of integration — never (would not round-trip).
-//   - Domain-aware antiderivative (`log(abs(x))`) — gated on Future #31.
+//   - Domain-aware antiderivative (`log(abs(x))`) — gated on FWIZ-100.
 
 // `try_cancel(expr, factor)` — symbolic division with a cancellation check.
 // Computes `simplify(DIV(expr, factor))` then walks the result to verify the
@@ -3840,7 +3840,7 @@ static_assert(LIATE_MIN_RANK_FOR_IBP_SYNTHESIS >= static_cast<int>(LiateRank::Tr
             if (e.args.size() != 1) return nullptr;
             const Expr* u = e.args[0];
             if (!is_var(u) || u->name != var) return nullptr;
-            // Registry lookup (Future #49): per-builtin antiderivative table.
+            // Registry lookup (docs/COMPLETED.md #49): per-builtin antiderivative table.
             const auto& reg = builtin_meta();
             const auto it = reg.find(e.name);
             if (it != reg.end() && it->second.integrate != nullptr)
@@ -4144,7 +4144,7 @@ struct Solution {
 // known. May return MULTIPLE inverses when the sub-system defines multiple
 // inverse equations for the same input variable (e.g., sin(x) → both
 // `x = asin(result)` AND `x = pi - asin(result)`). Used by solve_by_inversion
-// to emit one Solution per branch — required by Periodicity Detection (Future
+// to emit one Solution per branch — required by Periodicity Detection (docs/COMPLETED.md
 // #12) and by abs / sqrt-style multi-branch inverses.
 // Set by FormulaSystem to resolve via .fw sub-system definitions.
 using FuncInverter = std::function<std::vector<ExprPtr>(const std::string& func_name, const ExprPtr& rhs)>;  // std::function: boundary erasure — typed thread_local registered from system.h, must be storable in a typed variable
@@ -4166,7 +4166,7 @@ inline void solve_set_func_inverter(FuncInverter fn) {
 //
 // Matches FuncInverter precedent immediately above. If profiled hot, both
 // std::function carriers should migrate to fn-ptr+opaque together — single
-// trigger, single migration. See Future #89.
+// trigger, single migration. See FWIZ-134.
 //
 // `using ExistenceChecker = ...` + forward-decl of solve_existence_checker_
 // live up at the SimplifyContext block (so check_condition can call it
@@ -4545,7 +4545,7 @@ template<class F>
 
 // Adaptive Simpson's rule on [a, b] with recursive bisection. Used as the
 // numeric fallback for definite `integral(f, x, a, b)` when the symbolic
-// antiderivative path returns nullptr (Future #16, M2). Paired with
+// antiderivative path returns nullptr (docs/COMPLETED.md #16, M2). Paired with
 // `symbolic_integrate` (defined earlier in §Symbolic integration); dispatch
 // lives in `resolve_integral_calls` (system.h). Standard estimator:
 // |S(a,b) - S(a,m) - S(m,b)| / 15 ≈ error of S(a,b). When the estimate is

@@ -146,7 +146,7 @@ private:
             const double v = peek().numval;
             const std::string num_text = peek().text;
             advance();
-            // Units cycle 1 (Future #7): NUMBER+IDENT adjacency -> `MUL(Num, Var)`,
+            // Units cycle 1 (docs/COMPLETED.md #7): NUMBER+IDENT adjacency -> `MUL(Num, Var)`,
             // or `MUL(Num, FUNC_CALL)` when the IDENT is immediately followed by
             // `(`. Identifier IS a regular Var — stdlib `.fw` files supply
             // semantics via plain bindings like `kg = 1`. Design proposal §"Final
@@ -155,7 +155,7 @@ private:
             // here.
             if (is(TokenType::IDENT)) {
                 const std::string ident_name = peek().text;
-                // Reserved-word denylist for the NUMBER-IDENT desugar (Future
+                // Reserved-word denylist for the NUMBER-IDENT desugar (docs/COMPLETED.md
                 // #76): language keywords (`if`, `iff`) and the Euler constant
                 // `e` cannot serve as unit suffixes. Without this guard,
                 // `y = 2if` would desugar to `MUL(2, Var("if"))` — absorbing
@@ -185,7 +185,7 @@ private:
                     rhs = Expr::Call(ident_name, args);
                 } else {
                     // Parse-time warning: `100m^2` adjacency is the precedence
-                    // trap (Future #74) — desugar wraps the NUMBER+IDENT pair,
+                    // trap (FWIZ-50) — desugar wraps the NUMBER+IDENT pair,
                     // so POW applies to the MUL node and the user gets
                     // `(100 * m)^2`, not `100 * m^2`. Warn so the user notices.
                     // Discriminator: warning fires only when the IDENT is NOT
