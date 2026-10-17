@@ -1,6 +1,6 @@
 # Completed: Shipped Features and Cleanup Cycles
 
-Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. New work and remaining enhancements live in `Future.md`.
+Archive of `Future.md` entries that have shipped. Numbering matches the original `Future.md` numbering so existing cross-references (commits, agent profiles, research artifacts) stay valid. `Future.md` has been removed: new work and remaining enhancements live as tickets in the ClaudeBoard Backlog.
 
 ## Types as Named Sets — user-defined predicate sets (gen-5 cycle 3b) — ✅ SHIPPED (2026-05-16, ROADMAP gen-5)
 
