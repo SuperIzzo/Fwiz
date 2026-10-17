@@ -1,0 +1,24 @@
+{
+  "id": "rev-integral-limit",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "For what positive b does the integral of x^2 from 0 to b equal 9?",
+  "answer": {
+    "var": "b",
+    "values": [
+      3
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-integral-limit.fw": [
+        "a = integral(x^2, x, 0, b)",
+        "b > 0"
+      ]
+    },
+    "command": "'rev-integral-limit.fw(b=?, a=9)'"
+  }
+}

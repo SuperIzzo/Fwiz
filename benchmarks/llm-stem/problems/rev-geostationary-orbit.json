@@ -1,0 +1,25 @@
+{
+  "id": "rev-geostationary-orbit",
+  "category": "reverse-solve",
+  "difficulty": "hard",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A satellite orbits Earth with a period of 86164 s. Using G = 6.674e-11 and Earth mass M = 5.972e24 kg, what is the orbital radius (semi-major axis) in metres?",
+  "answer": {
+    "var": "a",
+    "values": [
+      42163111.82545868
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-geostationary-orbit.fw": [
+        "T = 2*pi*sqrt(a^3 / (6.674e-11 * 5.972e24))",
+        "a > 0"
+      ]
+    },
+    "command": "'rev-geostationary-orbit.fw(a=?, T=86164)'"
+  },
+  "note": "Known-hard: with G and M as named defaults fwiz returns a=0*M (wrong); inline constants work."
+}

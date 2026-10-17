@@ -1,0 +1,22 @@
+{
+  "id": "calc-derivative-at-point",
+  "category": "calculus",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "What is the derivative of x^3 * sin(x) evaluated at x = 1?",
+  "answer": {
+    "var": "d",
+    "values": [
+      3.064715260291829
+    ]
+  },
+  "reference": {
+    "files": {
+      "calc-derivative-at-point.fw": [
+        "f = x^3 * sin(x)",
+        "d = diff(f, x)"
+      ]
+    },
+    "command": "'calc-derivative-at-point.fw(d=?, x=1)'"
+  }
+}

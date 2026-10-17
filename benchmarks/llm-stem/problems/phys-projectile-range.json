@@ -1,0 +1,22 @@
+{
+  "id": "phys-projectile-range",
+  "category": "physics",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "A ball is launched at 20 m/s at 30 degrees above level ground (g = 9.81 m/s^2, no air resistance). How far away does it land, in metres?",
+  "answer": {
+    "var": "range",
+    "values": [
+      35.311943069701876
+    ]
+  },
+  "reference": {
+    "files": {
+      "phys-projectile-range.fw": [
+        "g = 9.81",
+        "range = v^2 * sin(2*theta*pi/180) / g"
+      ]
+    },
+    "command": "'phys-projectile-range.fw(range=?, v=20, theta=30)'"
+  }
+}

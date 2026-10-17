@@ -1,0 +1,21 @@
+{
+  "id": "prob-three-heads",
+  "category": "combinatorics",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "A fair coin is flipped 5 times. What is the probability of getting at least 3 heads?",
+  "answer": {
+    "var": "p",
+    "values": [
+      0.5
+    ]
+  },
+  "reference": {
+    "files": {
+      "prob-three-heads.fw": [
+        "p = sum(product((5-k+i)/i, i in [1..k]) / 2^5, k in [3..5])"
+      ]
+    },
+    "command": "'prob-three-heads.fw(p=?)'"
+  }
+}

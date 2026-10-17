@@ -1,0 +1,21 @@
+{
+  "id": "calc-integral-sin",
+  "category": "calculus",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "Compute the definite integral of sin(x) from 0 to pi.",
+  "answer": {
+    "var": "a",
+    "values": [
+      2
+    ]
+  },
+  "reference": {
+    "files": {
+      "calc-integral-sin.fw": [
+        "a = integral(sin(x), x, 0, pi)"
+      ]
+    },
+    "command": "'calc-integral-sin.fw(a=?)'"
+  }
+}

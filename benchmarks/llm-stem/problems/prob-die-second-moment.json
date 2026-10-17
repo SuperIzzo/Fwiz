@@ -1,0 +1,22 @@
+{
+  "id": "prob-die-second-moment",
+  "category": "combinatorics",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "For a single roll X of a fair six-sided die, what is E[X^2]?",
+  "answer": {
+    "var": "E",
+    "values": [
+      15.166666666666666
+    ]
+  },
+  "reference": {
+    "files": {
+      "prob-die-second-moment.fw": [
+        "E = sum(v^2 / 6, v in [1..6])"
+      ]
+    },
+    "command": "'prob-die-second-moment.fw(E=?)'"
+  },
+  "note": "Iterator `i` is the imaginary unit; i^2 rewrites to -1 before unrolling."
+}

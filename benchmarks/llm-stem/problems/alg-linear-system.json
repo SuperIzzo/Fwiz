@@ -1,0 +1,22 @@
+{
+  "id": "alg-linear-system",
+  "category": "algebra",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "Two numbers add up to 10 and their difference is 2. What is the larger number?",
+  "answer": {
+    "var": "x",
+    "values": [
+      6
+    ]
+  },
+  "reference": {
+    "files": {
+      "alg-linear-system.fw": [
+        "s = x + y",
+        "d = x - y"
+      ]
+    },
+    "command": "'alg-linear-system.fw(x=?, s=10, d=2)'"
+  }
+}

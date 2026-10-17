@@ -1,0 +1,27 @@
+{
+  "id": "multi-launch-angles",
+  "category": "multiple-solutions",
+  "difficulty": "hard",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A projectile is launched at 20 m/s over level ground (g = 9.81 m/s^2, no air resistance) and must land 30 m away. Find every launch angle between 0 and 90 degrees that works, in degrees.",
+  "answer": {
+    "var": "theta",
+    "values": [
+      23.68531408476106,
+      66.31468591523894
+    ]
+  },
+  "reference": {
+    "files": {
+      "multi-launch-angles.fw": [
+        "g = 9.81",
+        "range = v^2 * sin(2*theta*pi/180) / g",
+        "theta > 0",
+        "theta < 90"
+      ]
+    },
+    "command": "'multi-launch-angles.fw(theta=?, range=30, v=20)'"
+  }
+}

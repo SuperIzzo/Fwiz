@@ -1,0 +1,24 @@
+{
+  "id": "phys-ideal-gas-moles",
+  "category": "physics",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A gas occupies 0.0224 m^3 at 101325 Pa and 273.15 K. Using R = 8.314462618 J/(mol K), how many moles of gas are there?",
+  "answer": {
+    "var": "n",
+    "values": [
+      0.9993767483009539
+    ]
+  },
+  "reference": {
+    "files": {
+      "phys-ideal-gas-moles.fw": [
+        "R = 8.314462618",
+        "P = n*R*T / V"
+      ]
+    },
+    "command": "'phys-ideal-gas-moles.fw(n=?, P=101325, V=0.0224, T=273.15)'"
+  }
+}

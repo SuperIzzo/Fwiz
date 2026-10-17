@@ -1,0 +1,22 @@
+{
+  "id": "phys-parallel-current",
+  "category": "physics",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "A 6 ohm and a 3 ohm resistor are connected in parallel across a 12 V battery. What total current flows from the battery, in amperes?",
+  "answer": {
+    "var": "I",
+    "values": [
+      6
+    ]
+  },
+  "reference": {
+    "files": {
+      "phys-parallel-current.fw": [
+        "R = R1*R2 / (R1 + R2)",
+        "I = V / R"
+      ]
+    },
+    "command": "'phys-parallel-current.fw(I=?, R1=6, R2=3, V=12)'"
+  }
+}

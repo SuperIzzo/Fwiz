@@ -1,0 +1,21 @@
+{
+  "id": "fin-compound-interest",
+  "category": "finance",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "$1000 is invested at 5% annual interest compounded monthly. What is it worth after 10 years?",
+  "answer": {
+    "var": "A",
+    "values": [
+      1647.00949769028
+    ]
+  },
+  "reference": {
+    "files": {
+      "fin-compound-interest.fw": [
+        "A = P * (1 + r/n)^(n*t)"
+      ]
+    },
+    "command": "'fin-compound-interest.fw(A=?, P=1000, r=0.05, n=12, t=10)'"
+  }
+}

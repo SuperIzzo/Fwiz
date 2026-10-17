@@ -1,0 +1,22 @@
+{
+  "id": "alg-golden-ratio",
+  "category": "algebra",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "Find the positive number x such that x^2 = x + 1.",
+  "answer": {
+    "var": "x",
+    "values": [
+      1.618033988749895
+    ]
+  },
+  "reference": {
+    "files": {
+      "alg-golden-ratio.fw": [
+        "y = x^2 - x - 1",
+        "x > 0"
+      ]
+    },
+    "command": "'alg-golden-ratio.fw(x=?, y=0)'"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "rev-doubling-time",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "Money is invested at 6% interest compounded once a year. How many years (as a real number) until it doubles?",
+  "answer": {
+    "var": "t",
+    "values": [
+      11.895661045941875
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-doubling-time.fw": [
+        "A = P * (1 + r)^t"
+      ]
+    },
+    "command": "'rev-doubling-time.fw(t=?, A=2, P=1, r=0.06)'"
+  }
+}

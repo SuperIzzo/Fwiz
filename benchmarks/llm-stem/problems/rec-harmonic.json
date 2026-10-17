@@ -1,0 +1,25 @@
+{
+  "id": "rec-harmonic",
+  "category": "recursion",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "Define H(0) = 0 and H(n) = H(n-1) + 1/n. What is H(10)?",
+  "answer": {
+    "var": "answer",
+    "values": [
+      2.9289682539682538
+    ]
+  },
+  "reference": {
+    "files": {
+      "rec-harmonic.fw": [
+        "answer = H(10)",
+        "",
+        "[H(n) -> result]",
+        "result = 0 if n <= 0",
+        "result = H(n-1) + 1/n if n > 0"
+      ]
+    },
+    "command": "'rec-harmonic.fw(answer=?)'"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "comb-poker-hands",
+  "category": "combinatorics",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "How many different 5-card hands can be dealt from a standard 52-card deck?",
+  "answer": {
+    "var": "hands",
+    "values": [
+      2598960
+    ]
+  },
+  "reference": {
+    "files": {
+      "comb-poker-hands.fw": [
+        "@include \"stdlib/combinatorics/nCr.fw\"",
+        "hands = nCr(n=52, k=5, result=?)"
+      ]
+    },
+    "command": "'comb-poker-hands.fw(hands=?)'"
+  }
+}

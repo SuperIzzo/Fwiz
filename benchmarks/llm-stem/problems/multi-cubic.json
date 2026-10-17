@@ -1,0 +1,23 @@
+{
+  "id": "multi-cubic",
+  "category": "multiple-solutions",
+  "difficulty": "medium",
+  "tags": [],
+  "statement": "Find all real roots of x^3 - 6x^2 + 11x - 6 = 0.",
+  "answer": {
+    "var": "x",
+    "values": [
+      1,
+      2,
+      3
+    ]
+  },
+  "reference": {
+    "files": {
+      "multi-cubic.fw": [
+        "y = x^3 - 6*x^2 + 11*x - 6"
+      ]
+    },
+    "command": "'multi-cubic.fw(x=?, y=0)'"
+  }
+}

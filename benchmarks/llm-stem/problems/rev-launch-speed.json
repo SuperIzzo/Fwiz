@@ -1,0 +1,25 @@
+{
+  "id": "rev-launch-speed",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A projectile launched at 45 degrees over level ground (g = 9.81 m/s^2, no air resistance) lands 100 m away. What was its launch speed in m/s?",
+  "answer": {
+    "var": "v",
+    "values": [
+      31.32091952673165
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-launch-speed.fw": [
+        "g = 9.81",
+        "range = v^2 * sin(2*theta*pi/180) / g",
+        "v > 0"
+      ]
+    },
+    "command": "'rev-launch-speed.fw(v=?, range=100, theta=45)'"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "id": "rev-rolls-for-ninety",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse",
+    "projection"
+  ],
+  "statement": "What is the smallest number of rolls of a fair die that gives at least a 90% chance of rolling at least one six?",
+  "answer": {
+    "var": "n",
+    "values": [
+      13
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-rolls-for-ninety.fw": [
+        "p = 1 - (5/6)^n"
+      ]
+    },
+    "command": "'rev-rolls-for-ninety.fw(n=?min in [1..100], p>=0.9)'"
+  }
+}

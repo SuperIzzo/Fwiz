@@ -1,0 +1,27 @@
+{
+  "id": "rev-loan-rate",
+  "category": "reverse-solve",
+  "difficulty": "hard",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A $250,000 loan is repaid with 360 equal monthly payments of $1500 (monthly compounding). What is the annual interest rate, as a decimal (e.g. 0.05 for 5%)?",
+  "answer": {
+    "var": "rate",
+    "values": [
+      0.0600699000811488
+    ],
+    "rel_tol": 1e-06
+  },
+  "reference": {
+    "files": {
+      "rev-loan-rate.fw": [
+        "i = rate / 12",
+        "N = years * 12",
+        "payment = principal * i / (1 - (1 + i)^(-N))"
+      ]
+    },
+    "command": "'rev-loan-rate.fw(rate=?, payment=1500, principal=250000, years=30)'"
+  },
+  "note": "Adding the global condition `rate > 0` makes fwiz print the range `rate : (0, +inf)` instead of solving."
+}

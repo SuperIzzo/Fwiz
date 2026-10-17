@@ -1,0 +1,23 @@
+{
+  "id": "fin-break-even",
+  "category": "finance",
+  "difficulty": "easy",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "A product sells for $25 per unit, costs $15 per unit to make, and the business has $12,000 of fixed costs. How many units must be sold to break even?",
+  "answer": {
+    "var": "units",
+    "values": [
+      1200
+    ]
+  },
+  "reference": {
+    "files": {
+      "fin-break-even.fw": [
+        "profit = units * (price - cost) - fixed"
+      ]
+    },
+    "command": "'fin-break-even.fw(units=?, profit=0, price=25, cost=15, fixed=12000)'"
+  }
+}

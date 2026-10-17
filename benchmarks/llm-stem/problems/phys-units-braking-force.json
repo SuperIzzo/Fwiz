@@ -1,0 +1,26 @@
+{
+  "id": "phys-units-braking-force",
+  "category": "physics",
+  "difficulty": "medium",
+  "tags": [
+    "units"
+  ],
+  "statement": "A 1500 kg car accelerates uniformly from rest to 100 km/h in 8 seconds. What is the average net force on it, in newtons?",
+  "answer": {
+    "var": "F",
+    "values": [
+      5208.333333333333
+    ]
+  },
+  "reference": {
+    "files": {
+      "phys-units-braking-force.fw": [
+        "@include \"stdlib/units/si-minimal.fw\"",
+        "v = 100*km/hr",
+        "F = mass * v / time"
+      ]
+    },
+    "command": "'phys-units-braking-force.fw(F=?, mass=1500, time=8)'"
+  },
+  "note": "With si-minimal included, naming the mass `m` shadows the metre unit."
+}

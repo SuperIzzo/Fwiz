@@ -1,0 +1,22 @@
+{
+  "id": "multi-quadratic",
+  "category": "multiple-solutions",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "Find all real solutions of x^2 - 5x + 6 = 0.",
+  "answer": {
+    "var": "x",
+    "values": [
+      2,
+      3
+    ]
+  },
+  "reference": {
+    "files": {
+      "multi-quadratic.fw": [
+        "y = x^2 - 5*x + 6"
+      ]
+    },
+    "command": "'multi-quadratic.fw(x=?, y=0)'"
+  }
+}

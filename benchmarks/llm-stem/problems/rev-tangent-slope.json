@@ -1,0 +1,25 @@
+{
+  "id": "rev-tangent-slope",
+  "category": "reverse-solve",
+  "difficulty": "medium",
+  "tags": [
+    "reverse"
+  ],
+  "statement": "At what positive x does the curve y = x^3 - 3x have slope 9?",
+  "answer": {
+    "var": "x",
+    "values": [
+      2
+    ]
+  },
+  "reference": {
+    "files": {
+      "rev-tangent-slope.fw": [
+        "f = x^3 - 3*x",
+        "slope = diff(f, x)",
+        "x > 0"
+      ]
+    },
+    "command": "'rev-tangent-slope.fw(x=?, slope=9)'"
+  }
+}

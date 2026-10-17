@@ -1,0 +1,25 @@
+{
+  "id": "rec-fibonacci",
+  "category": "recursion",
+  "difficulty": "easy",
+  "tags": [],
+  "statement": "With F(0) = 0, F(1) = 1 and F(n) = F(n-1) + F(n-2), what is F(20)?",
+  "answer": {
+    "var": "answer",
+    "values": [
+      6765
+    ]
+  },
+  "reference": {
+    "files": {
+      "rec-fibonacci.fw": [
+        "answer = fib(20)",
+        "",
+        "[fib(n) -> result]",
+        "result = n if n <= 1",
+        "result = fib(n-1) + fib(n-2) if n >= 2"
+      ]
+    },
+    "command": "'rec-fibonacci.fw(answer=?)'"
+  }
+}
