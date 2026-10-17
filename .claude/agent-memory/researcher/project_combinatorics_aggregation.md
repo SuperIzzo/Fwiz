@@ -9,7 +9,7 @@ Arc driven by PNF card-game design-inversion use case. Brief at `.fwiz-workflow/
 
 **Key findings:**
 
-1. **P0b (bignum) is NOT a blocker for PNF.** All C(n,k) for n<=54 fit in double exactly (max C(54,27)=1.95e15 < 2^53=9.0e15). The proposal's claim that "choose(52,k) overflows double" is false for all k. The only real overflow risk is naive factorial materialization (n! for n>=19 overflows double) — but int64-backed accumulation (same as existing `make_rational`) handles up to 20! and the safe alternating-mul/div nCr avoids materializing n! entirely. P0b remains Future #17 (planned, unscheduled) for crypto/number-theory but is NOT P0 for this arc.
+1. **P0b (bignum) is NOT a blocker for PNF.** All C(n,k) for n<=54 fit in double exactly (max C(54,27)=1.95e15 < 2^53=9.0e15). The proposal's claim that "choose(52,k) overflows double" is false for all k. The only real overflow risk is naive factorial materialization (n! for n>=19 overflows double) — but int64-backed accumulation (same as existing `make_rational`) handles up to 20! and the safe alternating-mul/div nCr avoids materializing n! entirely. P0b remains FWIZ-28 (planned, unscheduled) for crypto/number-theory but is NOT P0 for this arc.
 
 2. **parse_range (system.h:4712) is NOT reusable directly for in-expression aggregation.** It materializes a `vector<double>` at CLI-parse time; `sum(i, 1..n)` must fold at simplify-time with bindings available. The grammar (start..stop @ step) and the idea transfer; the implementation doesn't.
 
@@ -19,6 +19,6 @@ Arc driven by PNF card-game design-inversion use case. Brief at `.fwiz-workflow/
 
 **No existing Future item for P0a (bounded aggregation as evaluable builtin).** Nearest is #5b (parked, about vec materialization from ranges, not reduction). #5b's "second consumer" trigger fires with P0a — they share range grammar but serve different purposes.
 
-**Roadmap:** closes/advances stdlib `combinatorics/permutations.fw` (Future.md:472-473) and `probability/expected_value.fw` (Future.md:477-478). Fires #80 (@include) reopen trigger. Does NOT close #94 (factorial reverse-solve) or #17 (bignum).
+**Roadmap:** closes/advances stdlib `combinatorics/permutations.fw` (old follow-ups file) and `probability/expected_value.fw` (old follow-ups file). Fires #80 (@include) reopen trigger. Does NOT close #94 (factorial reverse-solve) or #17 (bignum).
 
 **Why:** PNF card-game design-inversion requires closed-form combinatorics (not recursion) for cheap bidirectional solve. Recursive factorial/nCr work forward but are NP-hard to invert.

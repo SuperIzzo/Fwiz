@@ -98,7 +98,7 @@ If rate-limited or interrupted before cleanup: findings MUST list every remainin
 - **Do NOT implement a fix.** One-line fixes go in Recommended Follow-up; orchestrator spawns an implementer round.
 - **Do NOT commit.** Session ends with working tree = findings + intentional instrumentation + nothing else.
 - **Do NOT skip cleanup.** Leftover `DEBUGGER_HACK` comments = failed session (next cycle can't tell investigation from real).
-- **Do NOT run `make analyze` / `make sanitize`** — implementer's quality bar, not yours. Verify via the reproducer.
+- **Do NOT run `make analyze` / `make sanitize`** — implementer's quality bar, not yours. Verify via reproducer.
 - **Do NOT widen scope.** Note secondary bugs in findings; keep investigating the primary. Orchestrator decides on follow-up.
 
 ## Failure Protocol

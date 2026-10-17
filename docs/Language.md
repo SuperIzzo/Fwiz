@@ -86,9 +86,9 @@ mass = 100
 Warning: '100m^...' uses NUMBER-IDENT desugar before '^'; did you mean '100 * m^2'?
 ```
 
-Use explicit parentheses or a space: `100 * m^2`. This is a known limitation; see Future #74.
+Use explicit parentheses or a space: `100 * m^2`. This is a known limitation; see FWIZ-50.
 
-**CLI-arg unit suffixes** work end-to-end when the unit identifier resolves after file load (since 2026-05-13, cycle 2). `parse_cli_query` defers any RHS expression whose `evaluate` returns empty (because the identifier is unbound at CLI-parse time) to post-load resolution via the `synthetic_equations` channel — the same mechanism used by `diff`/`integral` CLI queries. Example:
+**CLI-arg unit suffixes** work end-to-end when the unit identifier resolves after file load (since 2026-05-13, cycle 2). `parse_cli_query` defers any RHS expression whose `evaluate` returns empty (because the identifier is unbound at CLI-parse time) to post-load resolution via `synthetic_equations` channel — the same mechanism used by `diff`/`integral` CLI queries. Example:
 
 ```bash
 $ fwiz 'stdlib/units/si-minimal.fw(distance=10km, time=2hr, speed=?, speed_eqn=distance/time, speed_eqn=speed)'
@@ -676,7 +676,7 @@ Fail-safe semantics: if the wildcard is not bound, or the binding does not satis
 
 ## 11. Built-in Functions
 
-Defined via the built-in section mechanism (§6.4). All accept real arguments and return real values; complex results are NaN.
+Defined via built-in section mechanism (§6.4). All accept real arguments and return real values; complex results are NaN.
 
 | Function | Description | Domain |
 |----------|-------------|--------|
@@ -837,7 +837,7 @@ z = -1
 
 The simplifier applies the builtin rewrite rules `i * i = -1` and `i^2 = -1`. Any expression containing `i` that reaches the numeric evaluator returns empty (`evaluate()` returns empty), so the numeric solver, conditions, and verify mode all reject complex operands — they never silently produce a real approximation.
 
-**Current scope:** single-step reductions like `i^2 → -1` work. Multi-step complex arithmetic like `(1+i)*(1-i) → 2` requires distributing MUL over ADD first, which is not yet implemented. See `docs/Future.md` for the planned follow-up.
+**Current scope:** single-step reductions like `i^2 → -1` work. Multi-step complex arithmetic like `(1+i)*(1-i) → 2` requires distributing MUL over ADD first, which is not yet implemented. See FWIZ-70 for the planned follow-up.
 
 ---
 
@@ -949,8 +949,8 @@ Both legacy forms still work — the engine normalizes them at parse time. All p
 ### 17.5 Current Scope and Limitations
 
 - Atomic annotations, intersection annotations, four built-in named sets, and user-defined predicate sets ship as of cycle 3b.
-- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`, `NEG`) shipped in cycle 3c (2026-06-06, Future #7b FULL DONE). `is_in(expr, mass)` works for compound expressions like `kg*2`, not only bare annotated Vars.
-- Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — Future #81.
+- `compute_dim` propagation through compound expressions (`MUL`, `DIV`, `POW`, `NEG`) shipped in cycle 3c (2026-06-06, shipped, see docs/COMPLETED.md #7b FULL DONE). `is_in(expr, mass)` works for compound expressions like `kg*2`, not only bare annotated Vars.
+- Named compound-dimension aliases (`[speed] := length/time`) are not yet supported — FWIZ-51.
 - Function-section sets (`x:fibonacci` triggers existential solve) are planned for cycle 3d.
 - Stdlib `.fw` files do not yet wrap SI base units in dim sections — a natural cycle-3c follow-on.
 
@@ -1038,14 +1038,14 @@ Since the static-domain aggregate unrolls into an ordinary expression at load ti
 total = sum(dmg(atk=f, def=k), f in [1..6])
 ```
 
-With `total=21`, query `k`: the solver numerically scans `k` via the system-probe path (Strategy 6) and finds `k ~ 1`.
+With `total=21`, query `k`: the solver numerically scans `k` via system-probe path (Strategy 6) and finds `k ~ 1`.
 
-Use `resolve_all` (the `x=?` query form) for piecewise-body aggregations — `resolve()` first-wins can return a spurious root through multi-branch formula calls (Future #102). The algebraic `=` display (instead of `~`) for linear inverses is a planned quality upgrade (Future #101).
+Use `resolve_all` (the `x=?` query form) for piecewise-body aggregations — `resolve()` first-wins can return a spurious root through multi-branch formula calls (FWIZ-30). The algebraic `=` display (instead of `~`) for linear inverses is a planned quality upgrade (FWIZ-29).
 
 ### 18.7 Planned / Deferred
 
 - Boundary brackets `[`/`(`/`]`/`)` for open/closed intervals — designed, not yet parsed
-- Multi-iterator cartesian and dependent ranges (`sum(f(i,j), j in [1..6], i in [j..6])`) — deferred to a later cycle (Future #103)
+- Multi-iterator cartesian and dependent ranges (`sum(f(i,j), j in [1..6], i in [j..6])`) — deferred to a later cycle (FWIZ-31)
 - Solve-for-the-range-bound (`sum(i in [1..n]) = 15`, solve `n`) — deferred
 
 ---
@@ -1123,7 +1123,7 @@ result = acc + elem
 result = acc * elem
 ```
 
-**Cross-file invariant:** the op section must be in the same file as the `foldl` call (or pre-registered via `@include`). Cross-file op resolution requires a named section to be in scope at fold time (see Future #110).
+**Cross-file invariant:** the op section must be in the same file as the `foldl` call (or pre-registered via `@include`). Cross-file op resolution requires a named section to be in scope at fold time (see FWIZ-38).
 
 `foldl` is resolved by the `resolve_foldl_in_equations` post-load pass. A `foldl` over an unresolved symbolic collection stays unevaluated until the collection materializes.
 
@@ -1158,7 +1158,7 @@ Since 2026-06-25, two additional query forms complement the standard `var=?` sol
 
 ### 20.1 Numeric Fallback for Buried Unknowns
 
-A `var=?` query on a variable that is buried behind derived-variable indirection (not directly in any equation's RHS or LHS, but reachable via the system-probe) now resolves via the existing numeric root-finder and returns an approximate result flagged with `~`.
+A `var=?` query on a variable that is buried behind derived-variable indirection (not directly in any equation's RHS or LHS, but reachable via system-probe) now resolves via existing numeric root-finder and returns an approximate result flagged with `~`.
 
 **Example — affordability model:**
 
@@ -1212,4 +1212,4 @@ no value of r in [1..5] satisfies the constraint
 
 **Mutual exclusion:** `?max`/`?min` projections are mutually exclusive with `--table`, `--derive`, `--verify`, and `--fit`.
 
-**Deferred — domain inference (Future #112):** today you must supply `in [lo..hi]` explicitly. Inferring the sweep domain from the model's aggregation range node is planned.
+**Deferred — domain inference (FWIZ-40):** today you must supply `in [lo..hi]` explicitly. Inferring the sweep domain from the model's aggregation range node is planned.

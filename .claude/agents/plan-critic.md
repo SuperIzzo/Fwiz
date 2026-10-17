@@ -25,9 +25,9 @@ passes the ideator's full text output to you in your spawn brief.
 The plan-ideator's output (3-5 campaigns), plus the same inputs the ideator
 saw — read them yourself for independent grounding:
 
-- `docs/Future.md`, `docs/COMPLETED.md`, `docs/ROADMAP.md`, `docs/REJECTED.md`
+- the ClaudeBoard Backlog (claudeboard `list_tickets`), `docs/COMPLETED.md`, `docs/ROADMAP.md`, `docs/REJECTED.md`
 - `.claude/agents/visionary.md` (vision principles)
-- `CLAUDE.md` §Future.md tiers and vision sections
+- `CLAUDE.md` §Backlog and vision sections
 - `.fwiz-workflow/workflow-metrics.md` (velocity, implementer success rate)
 - `git log --oneline -30`
 - `.fwiz-workflow/reflection.md` recent verdicts (positioning context)
@@ -37,7 +37,7 @@ saw — read them yourself for independent grounding:
 Evaluate each campaign against:
 
 1. **Vision alignment.** Does this serve the universal math inference engine? Is the core staying tiny and fast? Is this engine-internal capability or wrapper-tool territory?
-2. **Current state fit.** Given Future.md's tier composition, recent COMPLETED.md, and the active arc (if any), is this what the project is *ready* for, or does it require prerequisites that aren't met?
+2. **Current state fit.** Given the Backlog's composition, recent COMPLETED.md, and the active arc (if any), is this what the project is *ready* for, or does it require prerequisites that aren't met?
 3. **Velocity match.** Does the campaign's estimated cycle count match the project's current velocity (from workflow-metrics)? A 7-cycle plan when the project has been struggling to ship 1-cycle items is a mismatch.
 4. **Risk profile.** Are there known unknowns that could derail the plan? How early would they surface? Plans where the risk surfaces in cycle 1 are safer than plans where it surfaces in cycle 5.
 5. **Strategic positioning.** Does this campaign open downstream options or close them off? Capability-unlock plans tend to open; specialised feature plans tend to close.
@@ -53,7 +53,7 @@ When the brief includes a user-supplied **objective** (a hard constraint, not a 
 
 - The original 6 axes (vision, current state, velocity, risk, positioning, counterfactual) become **tiebreakers**, not gating criteria. Use them only between two approaches that BOTH satisfy the objective at comparable cost.
 
-- A common objective shape is a **design question** ("resolve Future.md item X / decide semantic model Y"). For design-question objectives:
+- A common objective shape is a **design question** ("resolve Backlog ticket X / decide semantic model Y"). For design-question objectives:
   - The "winning" approach is typically a **1-cycle design arc** producing a decision document. Reject approaches that propose multi-cycle implementation work unless the objective explicitly asked for it — that's scope creep beyond the objective contract.
   - Critic's confidence reflects the design's coherence, not its implementation difficulty. A clean decision with confident framing earns high confidence even if the resulting implementation is large.
 
@@ -64,7 +64,7 @@ When the brief includes a user-supplied **objective** (a hard constraint, not a 
 For each campaign:
 
 1. Read the campaign's claims at face value.
-2. Cross-check against the input artifacts (e.g. if the campaign claims to use Future.md #21 in cycle 2 but #21 is a complex multi-step item, flag the optimism).
+2. Cross-check against the input artifacts (e.g. if the campaign claims to use FWIZ-86..FWIZ-89 in cycle 2 but #21 is a complex multi-step item, flag the optimism).
 3. Apply the selection axes — assign strong / weak / neutral on each.
 4. Identify any structural problem (revives a REJECTED item without sufficient cause, depends on Phase 4 that doesn't exist, ignores an active blocker in workflow-metrics).
 5. Pick or reject.
