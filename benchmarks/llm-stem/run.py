@@ -5,7 +5,7 @@ The LLM replies with fenced blocks:
     ```fw name.fw        -> file written to the scratch dir
     ```fwiz <arguments>  -> run as `fwiz <arguments>` (no shell)
 The runner feeds fwiz output back, up to --max-runs fwiz runs, and stops early once
-the last output prints a value for the answer variable.
+the last output scores as correct.
 """
 import argparse
 import datetime
@@ -28,7 +28,7 @@ Reply protocol (plain text, no tools available):
 - To create a file, write a fenced block whose first line is "```fw NAME.fw" followed by the file contents.
 - To run fwiz, write a fenced block whose first line is "```fwiz ARGS" (arguments after `fwiz`, shell-quoted, e.g. "```fwiz 'NAME.fw(x=?, y=3)'"). The block body is ignored.
 - You may use at most {max_runs} fwiz runs; outputs are returned to you so you can fix errors.
-- Stop once fwiz prints a value for the answer variable. The final answer must be printed by fwiz as `{var} = value`.
+- Stop once fwiz prints the correct value for the answer variable. The final answer must be printed by fwiz as `{var} = value`.
 
 === DOCS ===
 {docs}
@@ -96,7 +96,7 @@ def llm_attempt(problem, args, docs):
                 break
             batch = [bench.run_fwiz(wd, c) for c in cmds[:args.max_runs - len(runs)]]
             runs.extend(batch)
-            if bench.extract_values(batch[-1]["stdout"], var):
+            if bench.score(problem, batch[-1]["stdout"])["pass"]:
                 break
             transcript += f"\n[assistant]\n{reply}\n\n[fwiz output]\n{format_feedback(batch)}\n"
     return files, runs, turns, replies
