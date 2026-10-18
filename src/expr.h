@@ -659,17 +659,19 @@ inline Expr* ExprArena::alloc() {
 // 128-bit GCD — used by the additive rational accumulator, whose intermediate
 // numerator/denominator products can exceed int64 before reduction. __int128 is
 // a GCC/Clang extension (fine for this codebase's GCC 7+/Clang 5+ target).
-[[nodiscard]] inline __int128 gcd_abs_i128(__int128 a, __int128 b) {
+__extension__ typedef __int128 i128;  // __extension__ keeps -Wpedantic quiet
+
+[[nodiscard]] inline i128 gcd_abs_i128(i128 a, i128 b) {
     if (a < 0) a = -a;
     if (b < 0) b = -b;
-    while (b) { __int128 t = a % b; a = b; b = t; }
+    while (b) { i128 t = a % b; a = b; b = t; }
     return a;
 }
 
 // Does a 128-bit value fit in int64_t?
-[[nodiscard]] inline bool fits_int64(__int128 v) {
-    return v >= static_cast<__int128>(INT64_MIN)
-        && v <= static_cast<__int128>(INT64_MAX);
+[[nodiscard]] inline bool fits_int64(i128 v) {
+    return v >= static_cast<i128>(INT64_MIN)
+        && v <= static_cast<i128>(INT64_MAX);
 }
 
 // Build a normalized rational expression: GCD-reduced, sign in numerator.
@@ -2373,7 +2375,7 @@ struct RewriteRulesGuard {
     double constant = 0;
     std::vector<std::pair<double, ExprPtr>> symbolic;
     // Rational accumulator: combine integers and structural fractions exactly.
-    // Each combination is computed in __int128 (intermediate num/den products can
+    // Each combination is computed in i128 (intermediate num/den products can
     // exceed int64 — e.g. summing large coprime-denominator fractions from a
     // factorial/aggregation), GCD-reduced in 128-bit, then checked to fit int64.
     // If the REDUCED rational genuinely overflows int64 (arbitrary precision is
@@ -2395,8 +2397,8 @@ struct RewriteRulesGuard {
             if (is_integer_value(c)) {
                 const int64_t n = static_cast<int64_t>(c);
                 // rat += n/1 : num = rat_num + n*rat_den (den unchanged)
-                const __int128 num = static_cast<__int128>(rat_num)
-                    + static_cast<__int128>(n) * rat_den;
+                const i128 num = static_cast<i128>(rat_num)
+                    + static_cast<i128>(n) * rat_den;
                 if (fits_int64(num)) {
                     rat_num = static_cast<int64_t>(num);
                     has_rational = true;
@@ -2412,10 +2414,10 @@ struct RewriteRulesGuard {
             auto [p, q] = to_rational(b);
             const int64_t ic = static_cast<int64_t>(c);
             // rat += (ic*p)/q : num = rat_num*q + ic*p*rat_den ; den = rat_den*q
-            __int128 num = static_cast<__int128>(rat_num) * q
-                + static_cast<__int128>(ic) * p * rat_den;
-            __int128 den = static_cast<__int128>(rat_den) * q;
-            const __int128 g = gcd_abs_i128(num, den);
+            i128 num = static_cast<i128>(rat_num) * q
+                + static_cast<i128>(ic) * p * rat_den;
+            i128 den = static_cast<i128>(rat_den) * q;
+            const i128 g = gcd_abs_i128(num, den);
             if (g > 1) { num /= g; den /= g; }
             if (fits_int64(num) && fits_int64(den)) {
                 rat_num = static_cast<int64_t>(num);
