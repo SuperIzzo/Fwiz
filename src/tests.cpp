@@ -7755,6 +7755,30 @@ void test_f2_threshold_sweep() {
         ASSERT(WIFEXITED(rc2), "F2 BLOCKING: no-solution case does not crash");
     }
 
+    // FWIZ-152: when no row can be evaluated, say so (not "no value satisfies").
+    {
+        write_fw("/tmp/sweep_unbound.fw", "f = g * n\n");
+        int rc = system("./bin/fwiz '/tmp/sweep_unbound(n=?max in [0..3], f>=5)' 2>&1 "
+                        "| grep -qiE \"could not compute f\"");
+        ASSERT(WEXITSTATUS(rc) == 0, "FWIZ-152: all rows unevaluable -> 'could not compute f'");
+        int rc2 = system("./bin/fwiz '/tmp/sweep_unbound(n=?max in [0..3], f>=5)' 2>&1 "
+                        "| grep -qiE 'no value of n satisfies'");
+        ASSERT(WEXITSTATUS(rc2) != 0, "FWIZ-152: no misleading 'no value satisfies'");
+        // Some rows evaluate, none satisfy -> old message kept.
+        write_fw("/tmp/sweep_unbound2.fw", "f = g * n\n");
+        int rc3 = system("./bin/fwiz '/tmp/sweep_unbound2(n=?max in [0..3], f>=5, g=1)' 2>&1 "
+                        "| grep -qiE 'no value of n satisfies f>=5 over'");
+        ASSERT(WEXITSTATUS(rc3) == 0, "FWIZ-152: evaluable rows, none satisfy -> old message");
+    }
+
+    // FWIZ-41: bracket shows every constraint's value.
+    {
+        int rc = system("./bin/fwiz '/tmp/aff_f2(r=?max in [1..5], can_pay>=0.40, "
+                        "cannot_pay<=0.9, D=54, K=13, W=2, h=5)' 2>/dev/null "
+                        "| grep -qE 'can_pay=0.4278.*cannot_pay=0.5721.*at r=2.*can_pay=0.1243.*cannot_pay=0.8756.*at r=3'");
+        ASSERT(WEXITSTATUS(rc) == 0, "FWIZ-41: multi-constraint bracket shows all constraint values");
+    }
+
     // [BLOCKING] mutually exclusive with --table.
     {
         int rc = system("./bin/fwiz --table '/tmp/aff_f2(r=?max in [1..5], "
