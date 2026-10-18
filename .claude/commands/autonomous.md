@@ -11,7 +11,7 @@ user intervention until the goal in `$ARGUMENTS` is met (or a safety brake fires
 `$ARGUMENTS` is the goal description in plain language. Examples:
 
 - `/autonomous implement #21 nested formula calls`
-- `/autonomous ship the rational propagation in evaluate (Future.md #10)`
+- `/autonomous ship the rational propagation in evaluate (FWIZ-56)`
 - `/autonomous green clang-tidy on src/system.h`
 
 If the user added an explicit completion criterion (e.g. `... — done when X`),
@@ -39,7 +39,7 @@ spend a short amount of reasoning on what completion looks like for this goal.
 Pick the most concrete, mechanically-checkable criterion that captures "done."
 Common shapes:
 
-- For Future.md items: `Future.md #N moves to COMPLETED.md AND make test passes`
+- For Backlog tickets: `FWIZ-N is Done on the board AND make test passes`
 - For cleanup goals: `make analyze-fast clean AND grep for the targeted pattern returns 0`
 - For perf goals: `<benchmark> < <target>`
 - Default fallback: `reflector-judged` (reflector evaluates per cycle)
@@ -53,7 +53,7 @@ Default for most goals: `[continue, new-cycle keep-context, new-cycle clear-cont
 
 Special cases:
 
-- If goal is "tiny / single feature": exclude `new-arc`. Implementing one Future.md item shouldn't replan the whole roadmap.
+- If goal is "tiny / single feature": exclude `new-arc`. Implementing one Backlog ticket shouldn't replan the whole roadmap.
 - If goal is "explore / research": exclude `clear-context`. Conversation history matters more for exploratory work.
 
 Default `max_cycles`:

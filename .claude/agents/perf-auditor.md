@@ -78,7 +78,7 @@ Read the first heading of `.fwiz-workflow/implementation-log.md` (or use the cyc
 
 ## Reporting Performance Follow-ups
 
-When you flag a hot-path concern that is bounded (only matters at large N, only fires on a specific feature surface, only applies to a defined input shape), do NOT report it as a vague "optimize later" note. Return it as a **trigger-tied Future.md item proposal** the orchestrator can paste verbatim. Each follow-up must include:
+When you flag a hot-path concern that is bounded (only matters at large N, only fires on a specific feature surface, only applies to a defined input shape), do NOT report it as a vague "optimize later" note. Return it as a **trigger-tied Backlog ticket proposal** the orchestrator can file verbatim as a ClaudeBoard Backlog ticket. Each follow-up must include:
 
 - **What** — one-line concrete description (`bindings-copy-per-row deep-copies std::map every iteration`).
 - **Where** — `file:line` of the call site.
@@ -86,11 +86,11 @@ When you flag a hot-path concern that is bounded (only matters at large N, only 
 - **Cost shape** — Big-O or magnitude estimate at a concrete N (`O(N×M) red-black-tree node allocations; 5M alloc/free pairs at N=1M, M=5`).
 - **Reopen trigger** — the empirical condition that re-prioritizes the item (`user latency report at N≥100K rows`, `user memory-pressure report`, `numeric-equation table at ≥100K rows`). Not a date, not a vague "if it becomes a problem" — a concrete observable signal.
 
-Format each item under a "### Future.md follow-ups" sub-heading inside your audit output. The orchestrator pastes these into `docs/Future.md` with the perf-auditor cycle slug as provenance.
+Format each item under a "### Backlog follow-ups" sub-heading inside your audit output. The orchestrator files these as ClaudeBoard Backlog tickets (claudeboard `create_ticket`, column `backlog`) with the perf-auditor cycle slug as provenance.
 
-Canonical anchor: Future #5 Batch/Table cycle 2026-05-11 — perf-auditor returned 3 follow-ups (#5e bindings-copy at N≥100K, #5f arena accumulation at 1M-row, #5g numeric_memo_ at 100K+ numeric), each with concrete disassembly anchor + N-conditioned trigger. Compare to vague "may want to optimize the map copy someday" notes from earlier cycles — those required a separate research cycle to re-establish what the original auditor saw. Trigger-tied items survive intact across cycle turnover.
+Canonical anchor: FWIZ-42..FWIZ-48 Batch/Table cycle 2026-05-11 — perf-auditor returned 3 follow-ups (#5e bindings-copy at N≥100K, #5f arena accumulation at 1M-row, #5g numeric_memo_ at 100K+ numeric), each with concrete disassembly anchor + N-conditioned trigger. Compare to vague "may want to optimize the map copy someday" notes from earlier cycles — those required a separate research cycle to re-establish what the original auditor saw. Trigger-tied items survive intact across cycle turnover.
 
-This applies to WARN findings, not FAIL — a FAIL blocks ship and goes inline in the audit output, not into Future.md.
+This applies to WARN findings, not FAIL — a FAIL blocks ship and goes inline in the audit output, not into a Backlog ticket.
 
 ## What You Do NOT Do
 
@@ -98,4 +98,4 @@ This applies to WARN findings, not FAIL — a FAIL blocks ship and goes inline i
 - Do NOT suggest algorithmic changes — only flag performance regressions
 - Do NOT audit every file — focus on hot paths (expr.h, system.h resolve/simplify/evaluate)
 - Do NOT run benchmarks unless the changes are significant enough to warrant it
-- Do NOT report bounded WARN findings as inline-only notes; format them as trigger-tied Future.md item proposals per the §Reporting Performance Follow-ups section above.
+- Do NOT report bounded WARN findings as inline-only notes; format them as trigger-tied Backlog ticket proposals per the §Reporting Performance Follow-ups section above.

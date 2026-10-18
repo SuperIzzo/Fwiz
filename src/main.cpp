@@ -70,8 +70,8 @@ int main(int argc, const char* argv[]) {
         std::string verify_arg;
         std::string output_file;
         std::string query_str;
-        std::vector<std::string> include_dirs;  // Future #80: -I dirs (order-preserving)
-        bool strict_includes = true;             // Future #80 M3: explicit @include is the default
+        std::vector<std::string> include_dirs;  // docs/COMPLETED.md #80: -I dirs (order-preserving)
+        bool strict_includes = true;             // docs/COMPLETED.md #80 M3: explicit @include is the default
 
         for (int i = 1; i < argc; i++) {
             const std::string arg = argv[i];
@@ -133,7 +133,7 @@ int main(int argc, const char* argv[]) {
                 else { std::cerr << "Error: --verify requires an argument (all or var1,var2,...)\n"; return 1; }
             }
             else if (arg == "-I") {
-                // Future #80: @include / cross-file search directory (repeatable).
+                // docs/COMPLETED.md #80: @include / cross-file search directory (repeatable).
                 if (i + 1 < argc) include_dirs.emplace_back(argv[++i]);
                 else { std::cerr << "Error: -I requires a directory\n"; return 1; }
             }
@@ -151,7 +151,7 @@ int main(int argc, const char* argv[]) {
         }
 
         const bool has_verify = !verify_arg.empty();
-        // Future #5: --table is a row-shaped output mode; incompatible with
+        // docs/COMPLETED.md #5: --table is a row-shaped output mode; incompatible with
         // anything that produces non-row-shaped output (symbolic equations,
         // verification report, fit equation, full enumeration). Inverted
         // enumeration (one guard naming all conflicting modes) keeps the
@@ -178,9 +178,9 @@ int main(int argc, const char* argv[]) {
         sys.approximate_mode = approximate_mode;
         sys.numeric_samples = sys_samples;
         sys.fit_depth = fit_depth;
-        sys.strict_includes_ = strict_includes;  // Future #80 M3 (default-on; --legacy-implicit opts out)
+        sys.strict_includes_ = strict_includes;  // docs/COMPLETED.md #80 M3 (default-on; --legacy-implicit opts out)
 
-        // Future #80: @include / cross-file search path. -I dirs first (CLI
+        // docs/COMPLETED.md #80: @include / cross-file search path. -I dirs first (CLI
         // order), then FWIZ_PATH dirs (split on ':' and ';' for portability),
         // appended after. base_dir (the file's own directory) is always tried
         // before either inside resolve_file_path.
@@ -198,7 +198,7 @@ int main(int argc, const char* argv[]) {
             if (!cur.empty()) sys.include_dirs.push_back(cur);
         }
 
-        // ExprArena scope for parse_cli_query is required by Future #21
+        // ExprArena scope for parse_cli_query is required by docs/COMPLETED.md #21
         // (nested form): a nested-call binding like `inner(p=3)` parses
         // `Expr::Num(3)` into the active arena, and the resulting
         // `FormulaCall` is later moved into `sys.formula_calls`. Allocating
@@ -232,7 +232,7 @@ int main(int argc, const char* argv[]) {
             sys.load_file(query.filename, query.section);
         }
 
-        // Future #67: post-load synthetic equations from CLI sugar
+        // docs/COMPLETED.md #67: post-load synthetic equations from CLI sugar
         // (`integral(...)=?[alias]`, `diff(...)=?[alias]`, or binding RHS
         // `<name>=integral(...)` / `<name>=diff(...)`). Loaded as a single
         // chunk; the system's post-load passes (`resolve_diff_in_equations`,
@@ -242,7 +242,7 @@ int main(int argc, const char* argv[]) {
         if (!query.synthetic_equations.empty())
             sys.load_string(query.synthetic_equations, "<cli-resolve-at-load>");
 
-        // Future #21 (nested form): inject CLI-supplied nested formula calls
+        // docs/COMPLETED.md #21 (nested form): inject CLI-supplied nested formula calls
         // into the loaded system. Strategy 3 (FORMULA_FWD) and strategy 5
         // (FORMULA_REV) read `formula_calls` at solve time, so the inner call
         // is resolved through the same path as `.fw`-file-declared calls. The
@@ -307,55 +307,79 @@ int main(int argc, const char* argv[]) {
 
                 // Feasibility test for one candidate value of the projection var.
                 // Forward-evaluate each constrained output, bind it, check ALL
-                // constraints. Returns {feasible, first-constraint-output-value}.
-                auto eval_candidate = [&](double cand, double& out_val) -> bool {
+                // constraints. Fills outs with each constraint's output value
+                // (NaN when it can't be computed). Returns feasibility.
+                auto eval_candidate = [&](double cand, std::vector<double>& outs) -> bool {
                     auto bindings = query.bindings;
                     bindings[pv.variable] = cand;
-                    bool first = true;
-                    for (const auto& pc : constraints) {
-                        double ov = std::numeric_limits<double>::quiet_NaN();
+                    outs.assign(constraints.size(), std::numeric_limits<double>::quiet_NaN());
+                    bool computed = true;
+                    for (size_t ci = 0; ci < constraints.size(); ci++) {
                         try {
-                            ov = sys.resolve(pc.out_var, bindings);
+                            outs[ci] = sys.resolve(constraints[ci].out_var, bindings);
                         } catch (const std::exception&) {
-                            return false;  // can't evaluate constraint output → infeasible
+                            outs[ci] = std::numeric_limits<double>::quiet_NaN();
                         }
-                        if (std::isnan(ov)) return false;
-                        if (first) { out_val = ov; first = false; }
+                        if (std::isnan(outs[ci])) computed = false;
+                    }
+                    if (!computed) return false;  // can't evaluate constraint output → infeasible
+                    for (size_t ci = 0; ci < constraints.size(); ci++) {
                         auto cbind = bindings;
-                        cbind[pc.out_var] = ov;
-                        if (!check_condition(pc.cond, cbind)) return false;
+                        cbind[constraints[ci].out_var] = outs[ci];
+                        if (!check_condition(constraints[ci].cond, cbind)) return false;
                     }
                     return true;
                 };
 
                 const bool want_max = (pv.projection == CLIQueryVar::Projection::MAX);
                 bool found = false;
-                double best_cand = 0.0, best_val = 0.0;
+                double best_cand = 0.0;
+                std::vector<double> best_vals;
                 // bracketing: the value just past the boundary that fails.
                 bool have_bracket = false;
-                double bracket_cand = 0.0, bracket_val = 0.0;
+                double bracket_cand = 0.0;
+                std::vector<double> bracket_vals;
 
                 // Sweep in domain order; track the projected (max/min) feasible
                 // candidate. For ?max the bracket is the next-higher infeasible
                 // value; for ?min the next-lower. We record per-candidate output
                 // values to construct the bracket after projecting.
-                std::vector<std::pair<double, double>> evaluated;  // (cand, out_val)
+                std::vector<std::pair<double, std::vector<double>>> evaluated;  // (cand, out_vals)
                 evaluated.reserve(pv.sweep_values.size());
                 for (const double cand : pv.sweep_values) {
-                    double ov = std::numeric_limits<double>::quiet_NaN();
+                    std::vector<double> ov;
                     const bool ok = eval_candidate(cand, ov);
-                    evaluated.emplace_back(cand, ov);
                     if (ok) {
-                        if (!found) { found = true; best_cand = cand; best_val = ov; }
+                        if (!found) { found = true; best_cand = cand; best_vals = ov; }
                         else if (want_max ? (cand > best_cand) : (cand < best_cand)) {
-                            best_cand = cand; best_val = ov;
+                            best_cand = cand; best_vals = ov;
                         }
                     }
+                    evaluated.emplace_back(cand, std::move(ov));
                 }
 
                 const ExprArena::Scope proj_fmt_scope(sys.arena);
                 sys.populate_aliases_();
+                const auto all_computed = [](const std::vector<double>& v) {
+                    return std::none_of(v.begin(), v.end(),
+                                        [](double d) { return std::isnan(d); });
+                };
                 if (!found) {
+                    const bool any_row_computed = std::any_of(
+                        evaluated.begin(), evaluated.end(),
+                        [&](const auto& e) { return all_computed(e.second); });
+                    if (!any_row_computed) {
+                        // Name the first constraint variable that failed on the first row.
+                        std::string bad = constraints.front().out_var;
+                        for (size_t ci = 0; ci < constraints.size(); ci++)
+                            if (std::isnan(evaluated.front().second[ci])) {
+                                bad = constraints[ci].out_var;
+                                break;
+                            }
+                        std::cout << "could not compute " << bad << " for any value of "
+                                  << pv.alias << " (is every input it depends on bound?)\n";
+                        return 0;
+                    }
                     std::ostringstream rng;
                     rng << '[' << fmt_num(pv.sweep_values.front()) << ".."
                         << fmt_num(pv.sweep_values.back()) << ']';
@@ -377,21 +401,32 @@ int main(int argc, const char* argv[]) {
                 // threshold (e.g. ?min h=9 brackets against h=8, not h=1).
                 for (const auto& [cand, ov] : evaluated) {
                     const bool past = want_max ? (cand > best_cand) : (cand < best_cand);
-                    if (!past || std::isnan(ov)) continue;
+                    if (!past || !all_computed(ov)) continue;
                     const bool nearer = !have_bracket
                         || (want_max ? (cand < bracket_cand) : (cand > bracket_cand));
                     if (nearer) {
-                        have_bracket = true; bracket_cand = cand; bracket_val = ov;
+                        have_bracket = true; bracket_cand = cand; bracket_vals = ov;
                     }
                 }
 
                 std::cout << pv.alias << " = "
                           << fmt_solve_result(best_cand, !approximate_mode, sys.aliases_);
                 if (have_bracket) {
-                    const std::string& cvar = constraints.front().out_var;
-                    std::cout << "  (" << cvar << "=" << fmt_num(best_val)
+                    const auto fmt_vals = [&](const std::vector<double>& vals) {
+                        std::string out;
+                        for (size_t ci = 0; ci < constraints.size(); ci++) {
+                            if (ci) out += ", ";
+                            if (constraints.size() > 1)
+                                out += constraints[ci].out_var + "=";
+                            out += fmt_num(vals[ci]);
+                        }
+                        return out;
+                    };
+                    const std::string first_label =
+                        constraints.size() > 1 ? "" : constraints.front().out_var + "=";
+                    std::cout << "  (" << first_label << fmt_vals(best_vals)
                               << " at " << pv.alias << "=" << fmt_num(best_cand)
-                              << "; " << fmt_num(bracket_val)
+                              << "; " << fmt_vals(bracket_vals)
                               << " at " << pv.alias << "=" << fmt_num(bracket_cand) << ")";
                 }
                 std::cout << '\n';
@@ -399,7 +434,7 @@ int main(int argc, const char* argv[]) {
             }
         }
 
-        // --- Table mode (Future #5) ---
+        // --- Table mode (docs/COMPLETED.md #5) ---
         if (table_mode) {
             if (query.range_bindings.empty())
                 throw std::runtime_error(
@@ -408,7 +443,7 @@ int main(int argc, const char* argv[]) {
             // Cartesian-product row-count soft cap. Warn-and-continue (NOT a
             // hard error) — a user requesting `[1..1000] x [1..1000]` already
             // knows they want 1M rows. `--table-max-rows N` is a parked
-            // Future.md item (reopen trigger: friction report).
+            // as FWIZ-42 (reopen trigger: friction report).
             constexpr size_t TABLE_WARN_ROWS = 1'000'000;
             if (!zip_mode) {
                 size_t total_rows = 1;
@@ -731,7 +766,7 @@ int main(int argc, const char* argv[]) {
                         }
                     }
                 } catch (const std::exception& e) {
-                    // Future #67: free-variable case for synthetic-equation
+                    // docs/COMPLETED.md #67: free-variable case for synthetic-equation
                     // aliases (diff/integral CLI sugar). Print the
                     // (post-load-rewritten) symbolic RHS so users still get
                     // an answer like `slope = velocity` instead of a thrown

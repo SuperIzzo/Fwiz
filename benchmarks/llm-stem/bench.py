@@ -17,7 +17,11 @@ RUN_TIMEOUT = 60
 
 def load_problems(pattern="*"):
     paths = sorted(glob.glob(os.path.join(HERE, "problems", pattern + ".json")))
-    return [dict(json.load(open(p)), _path=p) for p in paths]
+    problems = []
+    for p in paths:
+        with open(p) as f:
+            problems.append(dict(json.load(f), _path=p))
+    return problems
 
 
 def write_files(workdir, files):

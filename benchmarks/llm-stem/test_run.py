@@ -34,6 +34,16 @@ class RunnerTests(unittest.TestCase):
         reply = "```fw p.fw\nx = 7\n```\n```fwiz 'p.fw(x=?)'\n```"
         r = run.run_problem(self.problem, args(lambda *a: reply), "")
         self.assertFalse(r["pass"])
+        self.assertEqual(r["fwiz_runs"], 3)  # a wrong printed value must not stop the run
+
+    def test_wrong_then_right_recovers(self):
+        replies = iter([
+            "```fw p.fw\nx = 7\n```\n```fwiz 'p.fw(x=?)'\n```",
+            "```fw p.fw\ns = x + y\nd = x - y\n```\n```fwiz 'p.fw(x=?, s=10, d=2)'\n```",
+        ])
+        r = run.run_problem(self.problem, args(lambda *a: next(replies)), "")
+        self.assertTrue(r["pass"], r)
+        self.assertEqual(r["turns"], 2)
 
     def test_backend_error_recorded(self):
         def boom(*a):

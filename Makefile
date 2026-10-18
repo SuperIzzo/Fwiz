@@ -16,6 +16,16 @@ $(TEST): src/tests.cpp $(HEADERS) | bin
 test: $(TARGET) $(TEST)
 	./$(TEST)
 
+# LLM-ergonomics benchmark: runs benchmarks/llm-stem/run.py (costs LLM tokens) and appends a
+# dated row to .fwiz-workflow/llm-benchmark-history.md. Needs the `claude` CLI on PATH.
+# BENCH_ARGS passes extra run.py flags (e.g. BENCH_ARGS="--problems 'alg-*'" or --dry-run).
+BENCH_OUT = benchmarks/llm-stem/results/trend-latest
+benchmark: $(TARGET)
+	@command -v claude > /dev/null 2>&1 || { echo "make benchmark: the 'claude' CLI is not on PATH (needed to run the LLM); use BENCH_ARGS=--dry-run to skip the LLM" >&2; exit 1; }
+	@rm -rf $(BENCH_OUT)
+	python3 benchmarks/llm-stem/run.py --out $(BENCH_OUT) $(BENCH_ARGS) || [ $$? -eq 1 ]
+	python3 benchmarks/llm-stem/append_trend.py $(BENCH_OUT)
+
 # Compiles + runs the test suite under clang++ with the same warning flag set
 # as GCC. Catches Clang-specific issues (e.g. stricter [[nodiscard]] handling,
 # C++20 extension warnings). Soft-skip if clang++ is not on PATH.

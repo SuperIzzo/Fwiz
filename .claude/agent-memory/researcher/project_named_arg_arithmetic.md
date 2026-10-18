@@ -1,10 +1,10 @@
 ---
-name: Named-arg in arithmetic Future #91
+name: Named-arg in arithmetic shipped, see docs/COMPLETED.md #91
 description: Parser surface research for func(arg=value) inside arithmetic expressions — Option A token pre-pass in parse_line; ~50-80 LOC; positional form is a distinct bug
 type: project
 ---
 
-Named-arg in arithmetic (Future #91) — parser surface research, cycle 3i 2026-05-17.
+Named-arg in arithmetic (shipped, see docs/COMPLETED.md #91) — parser surface research, cycle 3i 2026-05-17.
 
 **Key findings:**
 - Parse error fires at parser.h:163 (`expect(RPAREN)`) when `=` appears inside a FUNC_CALL arg list without `?`

@@ -82,7 +82,7 @@ struct CrossFileResolutionCycleError : std::exception {
 };
 
 // Thrown when a cross-file formula call cannot be resolved in --strict-includes
-// mode (Future #80 M2). Intentionally NOT derived from std::runtime_error so the
+// mode (docs/COMPLETED.md #80 M2). Intentionally NOT derived from std::runtime_error so the
 // many `catch (const std::runtime_error&)` sites in the solver
 // (extract_positional_calls, unfold_formula_call_body, ...) don't swallow it —
 // the helpful "add @include" message must propagate to the top-level caller
@@ -309,7 +309,7 @@ struct FormulaDepthExceededError : std::runtime_error {
     return out;
 }
 
-// Periodicity Detection (Future #12):
+// Periodicity Detection (docs/COMPLETED.md #12):
 // `trig_period(name)` — symbolic-table lookup mapping a periodic builtin
 // function name to its period as ExprPtr. Returns nullptr for non-periodic
 // names. ExprArena::Scope must be active (uses Expr::Num / Expr::BinOpExpr).
@@ -325,7 +325,7 @@ struct FormulaDepthExceededError : std::runtime_error {
 // equation of shape `result = FUNC_CALL(name in {sin,cos,tan}, args=[Var(target)])`.
 // Returns the function name when matched (so trig_period can be looked up),
 // or empty string otherwise. Compound-arg cases (sin(2*x+1)) deferred to
-// Future #12a.
+// FWIZ-61.
 [[nodiscard]] inline std::string detect_trig_origin(
         const std::string& target,
         const std::vector<Equation>& eqs) {
@@ -369,19 +369,19 @@ public:
     std::map<std::string, std::string> custom_function_defs_;  // name → .fw definition
 
     std::string base_dir;
-    // @include search path (Future #80, M1 — COEXIST infra). Populated from
+    // @include search path (docs/COMPLETED.md #80, M1 — COEXIST infra). Populated from
     // the CLI `-I <dir>` flag (order-preserving) then `FWIZ_PATH` env-var dirs.
     // Searched AFTER the file-relative `base_dir` by both `@include` resolution
     // (process_includes / resolve_file_path) and — as a COEXIST fallback —
     // cross-file formula-call resolution (load_sub_system). Propagated to
     // sub-systems via copy_metadata_to_sub.
     std::vector<std::string> include_dirs;
-    // Canonical abs_paths registered by @include directives (Future #80, M1).
+    // Canonical abs_paths registered by @include directives (docs/COMPLETED.md #80, M1).
     // Records every file pulled in by process_includes so strict-mode (M2/M3)
     // can use it as the cross-file-call allow-list. In M1 (COEXIST) it is
     // populated but not yet gating. Propagated via copy_metadata_to_sub.
     std::set<std::string> included_files_;
-    // Future #80 M2: explicit-include enforcement flag (default false). When
+    // docs/COMPLETED.md #80 M2: explicit-include enforcement flag (default false). When
     // true, cross-file formula-call resolution in load_sub_system SKIPS the
     // base_dir filesystem auto-probe entirely — a call resolves ONLY via the
     // in-system / custom @def: cache, the @include allow-list (included_files_),
@@ -389,7 +389,7 @@ public:
     // StrictIncludeError naming the call and suggesting @include. Set by the
     // CLI `--strict-includes` flag; propagated via copy_metadata_to_sub so a
     // strict parent's sub-systems inherit strict resolution. Default is true
-    // since M3 (Future #80 final); --legacy-implicit opts back into the old
+    // since M3 (docs/COMPLETED.md #80 final); --legacy-implicit opts back into the old
     // implicit base_dir filesystem auto-probe for one backward-compat release.
     bool strict_includes_ = true;
     // Human-readable source label — file stem for load_file, the passed
@@ -433,7 +433,7 @@ public:
     // under-constrained triangle queries) while never firing on legitimate
     // hard problems. A principled reduction would require shrinking
     // NUMERIC_DEFAULT_SAMPLES or refining the system-probe fallback — logged
-    // as a follow-up in docs/Future.md if it becomes a user complaint.
+    // as a Backlog ticket if it becomes a user complaint.
     static constexpr int MAX_SOLVE_BUDGET = 100000;
     static inline thread_local int solve_budget_remaining_ = 0;
     static inline thread_local int solve_budget_depth_ = 0; // nesting depth
@@ -486,7 +486,7 @@ public:
     // `var:type = expr` annotation parse (atomic OR intersection form).
     // Propagated to sub-systems on load_sub_system. Read by `check_condition`'s
     // `is_in` predicate path (see expr.h). The `.dim` field is a DimMap
-    // exponent algebra (gen-5 cycle 3c, Future #7b FULL) — see expr.h.
+    // exponent algebra (gen-5 cycle 3c, docs/COMPLETED.md #7b FULL) — see expr.h.
     std::map<std::string, BindingType> type_map_;
     // Cycle 3a (gen-5, 2026-05-15): named-set registry. Built-ins
     // (int/real/rational/imaginary) registered in load_builtins(); dim
@@ -502,7 +502,7 @@ public:
     // skips already-rewritten equations. Eliminates redundant double-walk on
     // the CLI diff path (perf-auditor WARN, polish-pass Item 5).
     size_t diff_resolved_up_to_ = 0;
-    // Symmetric dirty-flag for resolve_integral_in_equations (Future #16).
+    // Symmetric dirty-flag for resolve_integral_in_equations (docs/COMPLETED.md #16).
     size_t integral_resolved_up_to_ = 0;
     // Symmetric dirty-flag for resolve_aggregate_in_equations (gen-6 Step C):
     // unrolls formula-bodied aggregations (sum(score(roll), …)) into N concrete
@@ -648,7 +648,7 @@ public:
                 //
                 // gen-5 cycle 3i (Fix W): include the line content alongside
                 // the line number so `--steps` traces let users/LLMs see what
-                // was discarded (Future #95 surface-gap PARKED — the named-arg
+                // was discarded (FWIZ-137 surface-gap PARKED — the named-arg
                 // call to an unknown formula section is one common cause).
                 trace.step("  warning: skipping line " + std::to_string(line_num)
                            + " '" + line + "': " + e.what());
@@ -721,7 +721,7 @@ public:
         //
         // Note: this guard closes the auto-binding side-channel for NaN-valued
         // builtin constants. The deeper `flatten_additive` NaN-propagation bug
-        // (Future.md #13c) remains; it is unreachable from user-facing input
+        // (FWIZ-72) remains; it is unreachable from user-facing input
         // *while `i` is the only NaN-bound constant*. A second NaN-valued
         // builtin (e.g. imaginary infinity) would require fixing #13c first.
         if (std::isnan(it->second)) return false;
@@ -802,7 +802,7 @@ i ^ 2 = -1
 x^a / x^b = x^(a - b) iff x != 0
 abs(x) / x = sign(x) iff x != 0
 abs(x) / x = undefined iff x = 0
-# Negative-exponent canonicalization (T3.6, Future #53): x^(-N) → 1/x^N.
+# Negative-exponent canonicalization (T3.6, docs/COMPLETED.md #53): x^(-N) → 1/x^N.
 # The `is_neg_num(n)` predicate gates firing on numeric-negative exponents only,
 # so symbolic exponents (`x^y`) do not trigger infinite rewrite loops.
 x^n = 1 / x^(-n) iff is_neg_num(n)
@@ -1102,7 +1102,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // Multi-arg formula sections (`args.size() > 1`) are explicitly excluded:
     // `is_in(3, add)` would be semantically ambiguous (which arg maps to 3?).
     // They remain callable as functions via `add(a=1, b=2)` syntax but NOT
-    // set-testable. Future multi-arg relation syntax is Future #88.
+    // set-testable. Future multi-arg relation syntax is FWIZ-133.
     //
     // Complete section-shape disambiguation (cycle 3d):
     //   `[name]`           → dim section       (args empty, no return)  cycle 3a
@@ -1269,20 +1269,20 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // above). Keeping the pair adjacent preserves the historical comment
         // attribution.
         custom_function_defs_[s.name] = oss.str();
-        // gen-5 cycle 3i (Fix Z, closes Future #91 positional-body gap):
+        // gen-5 cycle 3i (Fix Z, closes docs/COMPLETED.md #91 positional-body gap):
         // resolve_positional_calls converts direct-body positional recursive
         // forms like `result = fibonacci(n-1) + fibonacci(n-2)` into
         // FormulaCall entries at load time. The normal load path runs this
         // from load_with_sections (line ~1236); the pre-cache path silently
         // skipped it. Same shape of substrate gap as cycle 3h Fix A's
-        // copy_metadata_to_sub — see Future #96 PARKED for the consolidation
+        // copy_metadata_to_sub — see FWIZ-138 PARKED for the consolidation
         // trigger (third such pass = extract finalize_sub_after_load_lines).
         sub->resolve_positional_calls();
         // Pre-cache the parsed sub so load_sub_system's first lookup returns
         // it immediately.
         //
         // Cycle-3d caveat: this pre-cache disables the LOAD-time cross-file
-        // cycle guard for single-arg FUNCTION_SECTION-eligible files (Future
+        // cycle guard for single-arg FUNCTION_SECTION-eligible files (docs/COMPLETED.md
         // #69 narrows). Self-recursive function sections like `[fib(n)->r] =
         // fib(n-1) + fib(n-2)` are accepted at load time; their reverse-solve
         // (n given r) is bounded by max_formula_depth at resolve time. Pure-
@@ -1303,7 +1303,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         //     so this restriction is invisible. These cases work end-to-end
         //     (verified in M3 C4/C5/C8 tests).
         // Recursive function-section reverse-solve requires formula-call
-        // memoization — Future #85. Documented as cycle-3d limitation.
+        // memoization — FWIZ-130. Documented as cycle-3d limitation.
         const std::string cache_key = "@def:" + s.name;
         sub_systems[cache_key] = sub;
         // Register the SetDef. `parameter` carries the formal arg name;
@@ -1318,7 +1318,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         set_definitions_[s.name] = std::move(sd);
     }
 
-    // ──────────────── @include support (Future #80, M1 — COEXIST) ────────────────
+    // ──────────────── @include support (docs/COMPLETED.md #80, M1 — COEXIST) ────────────────
     //
     // Resolve a file reference against the search path. When `is_literal` is
     // true (used by `@include "path.fw"`) the reference is used verbatim — no
@@ -1332,7 +1332,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // to `searched` (if non-null) so the caller can build a "not found" error
     // that names the searched locations.
     //
-    // `exclude_base_dir` (Future #80 M2): when true, step (2) is skipped so the
+    // `exclude_base_dir` (docs/COMPLETED.md #80 M2): when true, step (2) is skipped so the
     // base_dir co-location auto-probe does NOT participate. Used by strict-mode
     // cross-file resolution, where co-location alone is not a valid channel —
     // only the -I/FWIZ_PATH search path and the @include allow-list are.
@@ -1377,7 +1377,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         return "";
     }
 
-    // Future #80 M2: strict-mode cross-file resolution. Scans the @include
+    // docs/COMPLETED.md #80 M2: strict-mode cross-file resolution. Scans the @include
     // allow-list (included_files_) for an entry whose filename stem matches
     // `stem`, returning its canonical abs_path or "" on miss. This is the ONLY
     // filesystem channel a strict-mode formula call may use (the base_dir
@@ -1391,7 +1391,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         return inc != included_files_.end() ? *inc : std::string{};
     }
 
-    // Future #80 M2: comma-joined stems of every @include'd file, for the
+    // docs/COMPLETED.md #80 M2: comma-joined stems of every @include'd file, for the
     // strict-mode "currently included" diagnostic. Empty string when nothing
     // has been @include'd yet.
     [[nodiscard]] std::string list_included_stems() const {
@@ -1403,7 +1403,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         return out;
     }
 
-    // Future #80 M2: the helpful strict-mode resolution error. Names the call,
+    // docs/COMPLETED.md #80 M2: the helpful strict-mode resolution error. Names the call,
     // explains why it failed, and tells the user exactly how to fix it.
     [[nodiscard]] std::string build_strict_include_error(const std::string& file_part) const {
         std::string searched_dirs = base_dir.empty() ? "." : base_dir;
@@ -1482,7 +1482,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
 
     void load_with_sections(const std::vector<std::string>& all_lines, const std::string& section) {
         auto filtered = all_lines;        // mutable copy; @include lines blanked in-place
-        process_includes(filtered);       // Future #80 M1: resolve + merge @include directives
+        process_includes(filtered);       // docs/COMPLETED.md #80 M1: resolve + merge @include directives
         sections_ = split_sections(filtered);
         // gen-3 cycle 2 (2026-05-14) / gen-5 cycle 3a (2026-05-15): walk
         // sections BEFORE top-level/section load so type_map_ is populated
@@ -1514,8 +1514,8 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             load_section(section);
         resolve_positional_calls();
         compute_rewrite_groups();  // regroup after user rules loaded
-        resolve_diff_in_equations();  // Future #6: rewrite diff(...) calls
-        resolve_integral_in_equations();  // Future #16 (M1): rewrite integral(...) calls
+        resolve_diff_in_equations();  // docs/COMPLETED.md #6: rewrite diff(...) calls
+        resolve_integral_in_equations();  // docs/COMPLETED.md #16 (M1): rewrite integral(...) calls
         // gen-6 cycle 1 collection passes — ORDER IS LOAD-BEARING (gate-(a)):
         // map FIRST (materialize map(score(i),...) -> seq before any reducer sees
         // it), then foldl (fold a materialized seq via its op section), then the
@@ -1528,15 +1528,15 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     }
 
     // ------------------------------------------------------------------------
-    // Generic post-load tree-rewriting primitive (Future.md #48, extracted
-    // 2026-05-10 as part of Future #16 M1). Walks every equation RHS from
+    // Generic post-load tree-rewriting primitive (docs/COMPLETED.md #48, extracted
+    // 2026-05-10 as part of docs/COMPLETED.md #16 M1). Walks every equation RHS from
     // `up_to` onward through `rewriter`, then advances `up_to` to the new
     // tail. Equations only ever grow, so subsequent load_string calls skip
     // already-rewritten equations.
     //
     // Two consumers today: `resolve_diff_in_equations` and
     // `resolve_integral_in_equations`. Future tree-rewriting passes (e.g.
-    // typed-binding predicates per Future #53) plug in here.
+    // typed-binding predicates per docs/COMPLETED.md #53) plug in here.
     // ------------------------------------------------------------------------
     template <typename Rewriter>
     void resolve_at_load(Rewriter rewriter, size_t& up_to) {
@@ -1548,7 +1548,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     }
 
     // ------------------------------------------------------------------------
-    // Post-load symbolic differentiation (Future #6).
+    // Post-load symbolic differentiation (docs/COMPLETED.md #6).
     //
     // Rewrites every `diff(target, var)` call in equation RHS expressions to
     // its derivative tree. Three cases (in order of preference):
@@ -1576,7 +1576,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             diff_resolved_up_to_);
     }
 
-    // Post-load symbolic integration (Future #16, M1). Same 3-case dispatch
+    // Post-load symbolic integration (docs/COMPLETED.md #16, M1). Same 3-case dispatch
     // shape as diff (named-var → equation RHS / FormulaCall output / literal),
     // dispatching through `symbolic_integrate_simplified`. Unrecognized forms
     // preserve the original `integral(...)` FUNC_CALL.
@@ -1799,6 +1799,168 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         return clone.output_var;
     }
 
+    // Produce ONE per-domain term for a formula-bodied iteration (gen-6 cycle 1,
+    // shared between the aggregate Shape-A fold and the map materialization).
+    // Substitutes `iter_var -> Num(v)` into `body`, then runs
+    // extract_positional_calls so any nested formula call (score(v)) becomes a
+    // FormulaCall registered in formula_calls. The aggregate pass folds the
+    // returned terms; the map pass wraps them in seq(...).
+    [[nodiscard]] ExprPtr unroll_term_with_calls(
+            const ExprPtr& body, const std::string& iter_var, double v) {
+        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
+        std::vector<FormulaCall> term_calls;
+        term = extract_positional_calls(term, term_calls);
+        // not std::transform: move-append into a different container
+        for (auto& c : term_calls)
+            // cppcheck-suppress useStlAlgorithm
+            formula_calls.push_back(std::move(c));
+        return term;
+    }
+
+    // Shape S: arity-1 reducer over a materialized seq (gen-6 cycle 1) —
+    // `sum(seq(_fc0, _fc1, _fc2))`. This is the shape produced when an inner
+    // map materializes inside a reducer (gate-(a): sum(map(score(i), ...))).
+    // Fold the seq elements directly via the shared fold-policy table; the
+    // elements may be _fcN Vars referencing FormulaCalls, which the solver
+    // resolves in the folded ADD/MUL tree. count(seq(...)) -> |elements|.
+    // Returns nullptr when `node` is not this shape.
+    [[nodiscard]] ExprPtr unroll_over_seq(ExprPtr node) {
+        if (node->args.size() != 1
+                || node->args[0]->type != ExprType::FUNC_CALL
+                || node->args[0]->name != "seq")
+            return nullptr;
+        const std::string& name = node->name;
+        const std::vector<ExprPtr>& elems = node->args[0]->args;
+        if (name == "count")
+            return Expr::Num(static_cast<double>(elems.size()));
+        std::vector<double> idx(elems.size());
+        for (size_t k = 0; k < elems.size(); ++k) idx[k] = static_cast<double>(k);
+        ExprPtr folded = fold_aggregate(name, idx,
+            [&](double k) { return elems[static_cast<size_t>(k)]; });
+        return folded ? folded : node;
+    }
+
+    // Shape A-named: the body is a bare Var("_fcN") naming a formula call
+    // extracted at PARSE time (`sum(dmg(atk=f, def=k), f in ...)` — named-arg
+    // calls are pre-extracted, so the iterator `f` lives in the call's BINDINGS,
+    // not in the body expression). Substituting the inert body would never touch
+    // `f`; instead CLONE the call per domain value with `iter_var → Num(v)`
+    // applied to its bindings — exactly Shape B's clone mechanism, generalized
+    // to an explicit (rather than range-literal-derived) iterator. ONE-LEVEL
+    // only: bindings are `atk=Num(i), def=Var("k")`; nested/chained call
+    // bindings are out of scope (cartesian/nested cycle).
+    // Returns nullptr when `body` is not a call whose bindings mention `iter_var`.
+    [[nodiscard]] ExprPtr unroll_named_call_iterator(
+            ExprPtr node, const std::vector<double>& values,
+            const std::string& iter_var, const ExprPtr& body) {
+        if (!is_var(body)) return nullptr;
+        const FormulaCall* orig = nullptr;
+        // not std::find_if: needs the element's address to snapshot it
+        for (const auto& c : formula_calls)
+            // cppcheck-suppress useStlAlgorithm
+            if (c.output_var == body->name) { orig = &c; break; }
+        if (!orig || !formula_call_bindings_contain(body, iter_var)) return nullptr;
+
+        const std::string tmpl_var = body->name;
+        const FormulaCall tmpl = *orig;  // snapshot (vector may grow)
+        ExprPtr folded = fold_aggregate(node->name, values, [&](double v) {
+            return Expr::Var(clone_call_with_subst(tmpl, iter_var, v));
+        });
+        // Drop the original template call: it still carries the
+        // UN-substituted iterator binding (`atk=f`, f unbound), and
+        // it is no longer referenced by any equation (the fold uses
+        // the per-value clones). Leaving it would let the solver
+        // probe its unbound iterator across the whole numeric range
+        // during a reverse solve, returning spurious roots.
+        // not std::remove_if: single-element removal by output_var
+        for (auto it = formula_calls.begin(); it != formula_calls.end(); ++it)
+            // cppcheck-suppress useStlAlgorithm
+            if (it->output_var == tmpl_var) { formula_calls.erase(it); break; }
+        return folded ? folded : node;
+    }
+
+    // Shape A: explicit iterator (bodied 3-arg `sum(body, iter, range)`, or
+    // count's body-free 2-arg `count(iter, range)`). Delegates to Shape A-named
+    // when the body is a pre-extracted named-binding call; otherwise substitutes
+    // the iterator into the body per domain value (unroll_term_with_calls).
+    // Returns nullptr when `node` is not this shape.
+    [[nodiscard]] ExprPtr unroll_explicit_iterator(ExprPtr node) {
+        const bool is_count = (node->name == "count");
+        const size_t want_arity = is_count ? 2 : 3;
+        if (node->args.size() != want_arity) return nullptr;
+        const ExprPtr iter = is_count ? node->args[0] : node->args[1];
+        const ExprPtr rng  = is_count ? node->args[1] : node->args[2];
+        if (!is_var(iter)) return nullptr;
+
+        std::vector<double> values;
+        if (!extract_range_values(rng, values)) return node;  // symbolic → unevaluated
+        const std::string iter_var = iter->name;
+        const ExprPtr body = is_count ? nullptr : node->args[0];
+
+        if (!is_count) {
+            if (ExprPtr named = unroll_named_call_iterator(node, values, iter_var, body))
+                return named;
+        }
+
+        ExprPtr folded = fold_aggregate(node->name, values,
+            is_count ? std::function<ExprPtr(double)>(nullptr)
+                     : std::function<ExprPtr(double)>([&](double v) {
+                return unroll_term_with_calls(body, iter_var, v);
+            }));
+        return folded ? folded : node;
+    }
+
+    // Shape B: broadcast — arity-1 reducer over a FormulaCall output var carrying
+    // a range-literal binding (`sum(dmg(atk=[1..6], ...))`). Returns nullptr when
+    // `node` is not this shape; returns `node` (unevaluated) for 0 or 2+ ranges.
+    [[nodiscard]] ExprPtr unroll_broadcast_over_call(ExprPtr node) {
+        const std::string& name = node->name;
+        if (node->args.size() != 1 || !is_var(node->args[0])) return nullptr;
+        const std::string fc_name = node->args[0]->name;
+        FormulaCall* orig = nullptr;
+        // not std::find_if: needs the element's address (&c) to read bindings below
+        for (auto& c : formula_calls)
+            // cppcheck-suppress useStlAlgorithm
+            if (c.output_var == fc_name) { orig = &c; break; }
+        if (!orig) return nullptr;  // not a formula call → unsupported shape
+
+        // Count range-literal bindings; remember the single range param + domain.
+        std::string range_param;
+        std::vector<double> values;
+        int range_count = 0;
+        for (auto& [param, val] : orig->bindings) {
+            std::vector<double> v;
+            if (extract_range_values(val, v)) {
+                range_count++;
+                range_param = param;
+                values = v;
+            }
+        }
+        if (range_count == 0) return node;       // 0 ranges → unevaluated
+        if (range_count >= 2) {                   // 2+ ranges → unevaluated + warn
+            std::cerr << "warning: aggregation over multiple ranges ("
+                      << range_param << ", …) is not supported (cartesian product "
+                         "is a future step); leaving "
+                      << name << "(...) unevaluated\n";
+            return node;
+        }
+
+        // Snapshot the template (orig may dangle as formula_calls grows below).
+        const FormulaCall tmpl = *orig;
+        ExprPtr folded = fold_aggregate(name, values, [&](double v) {
+            FormulaCall clone = tmpl;
+            clone.output_var = "_fc" + std::to_string(next_call_id_++);
+            for (auto& [param, val] : clone.bindings) {
+                if (param == range_param) val = Expr::Num(v);          // range → concrete
+                else if (is_var(val) && val->name == range_param)
+                    val = Expr::Num(v);                                // lockstep (def=atk)
+            }
+            formula_calls.push_back(clone);
+            return Expr::Var(clone.output_var);
+        });
+        return folded ? folded : node;
+    }
+
     // Unroll one aggregate node whose body may contain formula calls. Shapes:
     //
     //   Shape A — explicit iterator: sum(body, Var(iter), range(lo, hi[, step])).
@@ -1826,150 +1988,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // contains a reducer for a numeric-bound formula body (graceful-degrade:
     // missing sub-systems become unresolved FUNC_CALLs in the fold, not a
     // surviving sum() that simplify-unroll would mis-fold as N*body(last)).
-    // Produce ONE per-domain term for a formula-bodied iteration (gen-6 cycle 1,
-    // shared between the aggregate Shape-A fold and the map materialization).
-    // Substitutes `iter_var -> Num(v)` into `body`, then runs
-    // extract_positional_calls so any nested formula call (score(v)) becomes a
-    // FormulaCall registered in formula_calls. The aggregate pass folds the
-    // returned terms; the map pass wraps them in seq(...).
-    [[nodiscard]] ExprPtr unroll_term_with_calls(
-            const ExprPtr& body, const std::string& iter_var, double v) {
-        ExprPtr term = simplify(substitute(body, iter_var, Expr::Num(v)));
-        std::vector<FormulaCall> term_calls;
-        term = extract_positional_calls(term, term_calls);
-        // not std::transform: move-append into a different container
-        for (auto& c : term_calls)
-            // cppcheck-suppress useStlAlgorithm
-            formula_calls.push_back(std::move(c));
-        return term;
-    }
-
     [[nodiscard]] ExprPtr try_unroll_aggregate_with_calls(ExprPtr node) {
-        const std::string& name = node->name;
-
-        // Shape S (gen-6 cycle 1): arity-1 reducer over a materialized seq —
-        // `sum(seq(_fc0, _fc1, _fc2))`. This is the shape produced when an inner
-        // map materializes inside a reducer (gate-(a): sum(map(score(i), ...))).
-        // Fold the seq elements directly via the shared fold-policy table; the
-        // elements may be _fcN Vars referencing FormulaCalls, which the solver
-        // resolves in the folded ADD/MUL tree. count(seq(...)) -> |elements|.
-        if (node->args.size() == 1
-                && node->args[0]->type == ExprType::FUNC_CALL
-                && node->args[0]->name == "seq") {
-            const std::vector<ExprPtr>& elems = node->args[0]->args;
-            if (name == "count")
-                return Expr::Num(static_cast<double>(elems.size()));
-            std::vector<double> idx(elems.size());
-            for (size_t k = 0; k < elems.size(); ++k) idx[k] = static_cast<double>(k);
-            ExprPtr folded = fold_aggregate(name, idx,
-                [&](double k) { return elems[static_cast<size_t>(k)]; });
-            return folded ? folded : node;
-        }
-
-        // Shape A: explicit iterator (bodied 3-arg, or count 2-arg body-free).
-        const bool is_count = (name == "count");
-        const size_t want_arity = is_count ? 2 : 3;
-        if (node->args.size() == want_arity) {
-            const ExprPtr iter = is_count ? node->args[0] : node->args[1];
-            const ExprPtr rng  = is_count ? node->args[1] : node->args[2];
-            if (is_var(iter)) {
-                std::vector<double> values;
-                if (!extract_range_values(rng, values)) return node;  // symbolic → unevaluated
-                const std::string iter_var = iter->name;
-                const ExprPtr body = is_count ? nullptr : node->args[0];
-
-                // Shape A-named: the body is a bare Var("_fcN") naming a formula
-                // call extracted at PARSE time (`sum(dmg(atk=f, def=k), f in ...)`
-                // — named-arg calls are pre-extracted, so the iterator `f` lives
-                // in the call's BINDINGS, not in the body expression). Substituting
-                // the inert body would never touch `f`; instead CLONE the call per
-                // domain value with `iter_var → Num(v)` applied to its bindings —
-                // exactly Shape B's clone mechanism, generalized to an explicit
-                // (rather than range-literal-derived) iterator. ONE-LEVEL only:
-                // bindings are `atk=Num(i), def=Var("k")`; nested/chained call
-                // bindings are out of scope (cartesian/nested cycle).
-                if (!is_count && is_var(body)) {
-                    const FormulaCall* orig = nullptr;
-                    // not std::find_if: needs the element's address to snapshot it
-                    for (const auto& c : formula_calls)
-                        // cppcheck-suppress useStlAlgorithm
-                        if (c.output_var == body->name) { orig = &c; break; }
-                    if (orig && formula_call_bindings_contain(body, iter_var)) {
-                        const std::string tmpl_var = body->name;
-                        const FormulaCall tmpl = *orig;  // snapshot (vector may grow)
-                        ExprPtr folded = fold_aggregate(name, values, [&](double v) {
-                            return Expr::Var(clone_call_with_subst(tmpl, iter_var, v));
-                        });
-                        // Drop the original template call: it still carries the
-                        // UN-substituted iterator binding (`atk=f`, f unbound), and
-                        // it is no longer referenced by any equation (the fold uses
-                        // the per-value clones). Leaving it would let the solver
-                        // probe its unbound iterator across the whole numeric range
-                        // during a reverse solve, returning spurious roots.
-                        // not std::remove_if: single-element removal by output_var
-                        for (auto it = formula_calls.begin(); it != formula_calls.end(); ++it)
-                            // cppcheck-suppress useStlAlgorithm
-                            if (it->output_var == tmpl_var) { formula_calls.erase(it); break; }
-                        return folded ? folded : node;
-                    }
-                }
-
-                ExprPtr folded = fold_aggregate(name, values,
-                    is_count ? std::function<ExprPtr(double)>(nullptr)
-                             : std::function<ExprPtr(double)>([&](double v) {
-                        return unroll_term_with_calls(body, iter_var, v);
-                    }));
-                return folded ? folded : node;
-            }
-        }
-
-        // Shape B: broadcast — arity-1 reducer over a FormulaCall output var.
-        if (node->args.size() == 1 && is_var(node->args[0])) {
-            const std::string fc_name = node->args[0]->name;
-            FormulaCall* orig = nullptr;
-            // not std::find_if: needs the element's address (&c) to read bindings below
-            for (auto& c : formula_calls)
-                // cppcheck-suppress useStlAlgorithm
-                if (c.output_var == fc_name) { orig = &c; break; }
-            if (!orig) return node;  // not a formula call → unsupported shape
-
-            // Count range-literal bindings; remember the single range param + domain.
-            std::string range_param;
-            std::vector<double> values;
-            int range_count = 0;
-            for (auto& [param, val] : orig->bindings) {
-                std::vector<double> v;
-                if (extract_range_values(val, v)) {
-                    range_count++;
-                    range_param = param;
-                    values = v;
-                }
-            }
-            if (range_count == 0) return node;       // 0 ranges → unevaluated
-            if (range_count >= 2) {                   // 2+ ranges → unevaluated + warn
-                std::cerr << "warning: aggregation over multiple ranges ("
-                          << range_param << ", …) is not supported (cartesian product "
-                             "is a future step); leaving "
-                          << name << "(...) unevaluated\n";
-                return node;
-            }
-
-            // Snapshot the template (orig may dangle as formula_calls grows below).
-            const FormulaCall tmpl = *orig;
-            ExprPtr folded = fold_aggregate(name, values, [&](double v) {
-                FormulaCall clone = tmpl;
-                clone.output_var = "_fc" + std::to_string(next_call_id_++);
-                for (auto& [param, val] : clone.bindings) {
-                    if (param == range_param) val = Expr::Num(v);          // range → concrete
-                    else if (is_var(val) && val->name == range_param)
-                        val = Expr::Num(v);                                // lockstep (def=atk)
-                }
-                formula_calls.push_back(clone);
-                return Expr::Var(clone.output_var);
-            });
-            return folded ? folded : node;
-        }
-
+        if (ExprPtr r = unroll_over_seq(node))            return r;  // Shape S
+        if (ExprPtr r = unroll_explicit_iterator(node))   return r;  // Shape A / A-named
+        if (ExprPtr r = unroll_broadcast_over_call(node)) return r;  // Shape B
         return node;  // unsupported shape — leave unevaluated
     }
 
@@ -2155,7 +2177,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
     // LIMITATION: when a sub-system has multiple equations defining the
     // output (piecewise/conditional formulas like `abs` defined via two
     // `iff` branches), only the FIRST matching equation is used. This
-    // silently uses one branch's derivative. See Future #51 for the
+    // silently uses one branch's derivative. See FWIZ-114 for the
     // multi-branch follow-up.
     [[nodiscard]] ExprPtr unfold_formula_call_body(
             const FormulaCall& call,
@@ -2529,7 +2551,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
         // semantic non-duplicates that 3 close primes cannot distinguish (e.g.
         // `b*sin(X)/4` vs `sin(pi - asin(c*sin(X)/4)) * b/c`, which coincide
         // on small-magnitude inputs but diverge when the asin argument exits
-        // [-1, 1] for one variant but not the other). Resolves Future.md #12f.
+        // [-1, 1] for one variant but not the other). Resolves FWIZ-66.
         //
         // For >2 free vars, the 3rd column onward uses the original
         // cyclic-prime scheme — geometry-domain heuristics don't apply
@@ -2968,7 +2990,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                     const std::string input_var = sec.positional_args[0];
                     const std::string return_var = sec.return_var.empty() ? "result" : sec.return_var;
                     // Collect ALL inverse equations (multiple inverses for sin/cos
-                    // give the second principal-cycle branch — Future #12).
+                    // give the second principal-cycle branch — docs/COMPLETED.md #12).
                     for (auto& eq : sub.equations) {
                         if (eq.lhs_var == input_var)
                             branches.push_back(simplify(substitute(eq.rhs, return_var, rhs)));
@@ -3201,7 +3223,7 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             return combined;
         }
         if (!exact_results.empty()) {
-            // Periodicity Detection (Future #12): when target's source equation
+            // Periodicity Detection (docs/COMPLETED.md #12): when target's source equation
             // is a single periodic builtin call (sin/cos/tan), wrap each root
             // as a PeriodicFamily with the symbolic period.
             const std::string trig_name = detect_trig_origin(target, equations);
@@ -3484,7 +3506,7 @@ private:
 
     // --- Formula call extraction ---
     // These helpers are public so that the free function `parse_cli_query`
-    // (Future #21, nested form) can reuse the same token-level primitive
+    // (docs/COMPLETED.md #21, nested form) can reuse the same token-level primitive
     // `.fw`-file equation parsing uses (see `parse_line` at the call site
     // around system.h:2340). They are pure functions over tokens — no
     // instance state — so exposing them does not widen the class API
@@ -3580,7 +3602,7 @@ public:
             }
         }
 
-        // gen-5 cycle 3i (Fix Y, closes Future #91): no-`?` call sites are now
+        // gen-5 cycle 3i (Fix Y, closes docs/COMPLETED.md #91): no-`?` call sites are now
         // legal — extract_formula_calls' unified outer loop dispatches the
         // named-arg-only flavor (`func(a=expr, b=expr)` in arithmetic context)
         // separately. parse_call_args returns the populated bindings; the
@@ -3709,7 +3731,7 @@ public:
                     i = rparen + 1;
                     continue;
                 }
-                // gen-5 cycle 3i (Fix Y, closes Future #91): no-? named-arg form.
+                // gen-5 cycle 3i (Fix Y, closes docs/COMPLETED.md #91): no-? named-arg form.
                 // Dispatch via try_extract_named_call which handles
                 // builtin/custom_functions_ skip, load_sub_system try/catch
                 // fallback, return_var lookup, and synthetic output_var
@@ -3843,7 +3865,7 @@ public:
                 }
             }
 
-            // Predicate-clause form (Future #53 / gen-5 cycle 3a): no comparison
+            // Predicate-clause form (docs/COMPLETED.md #53 / gen-5 cycle 3a): no comparison
             // operator + parses as a FUNC_CALL whose head name is a recognised
             // predicate. Mirror `is_predicate_clause` in expr.h. Encoded as
             // `CondClause{lhs=FUNC_CALL(name,{args...}), rhs=nullptr,
@@ -3959,7 +3981,7 @@ private:
         if (tok.size() < 2) return;
 
         // Extract formula calls before expression parsing. Pass `this` so the
-        // named-arg flavor (cycle 3i, Future #91 — `func(name=expr)` in
+        // named-arg flavor (cycle 3i, docs/COMPLETED.md #91 — `func(name=expr)` in
         // arithmetic position with no `?`) fires; CLI consumer at
         // parse_cli_query passes nullptr and gets `?`-only behavior.
         auto [mod_tok, calls] = extract_formula_calls(tok, this);
@@ -4143,7 +4165,7 @@ private:
     // --- Sub-system loading ---
 
     // ------------------------------------------------------------------------
-    // Settings-propagation helper (gen-5 cycle 3h, 2026-05-16, closes Future #83).
+    // Settings-propagation helper (gen-5 cycle 3h, 2026-05-16, closes docs/COMPLETED.md #83).
     //
     // Mirrors the parent's solver-affecting state into a freshly constructed
     // sub-system: trace flag, numeric_mode, approximate_mode, custom_functions_
@@ -4163,7 +4185,7 @@ private:
     // USER_PREDICATE arena-lifetime invariant (cycle 3b) applies: the parent
     // owns the sub via `sub_systems` shared_ptr, so the parent arena outlives
     // any sub reference. See `load_sub_system`'s comment block for the
-    // PARKED Future #87 reopen trigger.
+    // PARKED FWIZ-132 reopen trigger.
     // ------------------------------------------------------------------------
     void copy_metadata_to_sub(FormulaSystem& sub) const {
         sub.trace = trace;
@@ -4172,9 +4194,9 @@ private:
         sub.custom_functions_ = custom_functions_;
         sub.type_map_ = type_map_;
         sub.set_definitions_ = set_definitions_;
-        sub.include_dirs = include_dirs;          // Future #80 M1: @include search path
-        sub.included_files_ = included_files_;    // Future #80 M1: include allow-list
-        sub.strict_includes_ = strict_includes_;  // Future #80 M2: strict-mode propagation
+        sub.include_dirs = include_dirs;          // docs/COMPLETED.md #80 M1: @include search path
+        sub.included_files_ = included_files_;    // docs/COMPLETED.md #80 M1: include allow-list
+        sub.strict_includes_ = strict_includes_;  // docs/COMPLETED.md #80 M2: strict-mode propagation
     }
 
     [[nodiscard]] const FormulaSystem& load_sub_system(const std::string& file_stem) const {
@@ -4211,7 +4233,7 @@ private:
 
         std::string abs_path;
         if (strict_includes_ && !def_source) {
-            // Future #80 M2 (strict-includes mode): the base_dir filesystem
+            // docs/COMPLETED.md #80 M2 (strict-includes mode): the base_dir filesystem
             // auto-probe is SKIPPED entirely. A cross-file call may resolve ONLY
             // via the @def: cache (handled above), the @include allow-list, or
             // the -I/FWIZ_PATH search path. Co-location alone is no longer
@@ -4231,7 +4253,7 @@ private:
             try { abs_path = std::filesystem::weakly_canonical(path).string(); }
             catch (const std::filesystem::filesystem_error&) { abs_path = path; }
 
-            // Future #80 M1 (COEXIST): if the base_dir probe does not point at an
+            // docs/COMPLETED.md #80 M1 (COEXIST): if the base_dir probe does not point at an
             // existing file, fall back to the @include search path so that a
             // formula call resolves a section file found via `-I`/FWIZ_PATH (or a
             // file previously pulled in by @include) WITHOUT requiring co-location.
@@ -4255,7 +4277,7 @@ private:
         auto it = sub_systems.find(cache_key);
         if (it != sub_systems.end()) return *it->second;
 
-        // Future #69: cross-file resolution cycle detection. Each cross-file
+        // docs/COMPLETED.md #69: cross-file resolution cycle detection. Each cross-file
         // load creates a NEW FormulaSystem with its own sub_systems cache, so
         // the cache check above never catches recursion (e.g. matmul.fw
         // containing `matmul(A, B)`). A thread-local set keyed on cache_key
@@ -4276,7 +4298,7 @@ private:
         LoadGuard _guard{currently_loading, cache_key};
 
         auto sub = std::make_shared<FormulaSystem>();
-        copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes Future #83) — see helper docstring
+        copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes docs/COMPLETED.md #83) — see helper docstring
         // Cross-file lifetime of USER_PREDICATE entries (cycle 3b):
         // USER_PREDICATE SetDef carries a Condition with ExprPtrs pointing
         // into THIS (parent) system's arena. Parent owns the sub via
@@ -4284,7 +4306,7 @@ private:
         // reference. `load_sub_system` returns `FormulaSystem&` (not
         // `shared_ptr<FormulaSystem>`) — the API does not let the caller
         // extend a sub beyond parent lifetime, so the borrow is safe.
-        // PARKED Future #87: if the API ever exposes shared_ptr<FormulaSystem>
+        // PARKED FWIZ-132: if the API ever exposes shared_ptr<FormulaSystem>
         // or sub-system cache eviction lands, USER_PREDICATE entries must
         // either be re-bound to sub's arena or deep-copied.
 
@@ -4306,7 +4328,7 @@ private:
                 sub->load_string(*def_source, "@def:" + file_part);
             }
         }
-        // Future #80 M2 (explicit-systems model): in strict mode a callable
+        // docs/COMPLETED.md #80 M2 (explicit-systems model): in strict mode a callable
         // cross-file system MUST be an explicit `[name(args) -> ret]` section.
         // A FLAT .fw file (bare equations, no header) that was @include'd merges
         // its equations but is NOT callable by stem — calling it errors with the
@@ -4336,7 +4358,7 @@ private:
             }
             if (!auto_section.empty()) {
                 sub = std::make_shared<FormulaSystem>();
-                copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes Future #83) — see helper docstring
+                copy_metadata_to_sub(*sub);  // gen-5 cycle 3h (closes docs/COMPLETED.md #83) — see helper docstring
                 if (def_source)
                     sub->load_string(*def_source, "@def:" + file_part, auto_section);
                 else
@@ -4533,7 +4555,7 @@ private:
 
         // Strategy 5: reverse formula call (target appears in a binding)
         //
-        // gen-5 cycle 3h (2026-05-16, Future #92): exclude the self-circular
+        // gen-5 cycle 3h (2026-05-16, docs/COMPLETED.md #92): exclude the self-circular
         // case where `sub_var == target` AND the binding expression is
         // compound (not a pure `Var(target)`). The compound case — e.g.
         // `n = n-1` inside `[fibonacci(n)->result]` recursing on itself —
@@ -4649,7 +4671,7 @@ private:
 
         // Strategy 6: numeric root-finding (--numeric only)
         //
-        // gen-5 cycle 3h (2026-05-16, Future #92): condition-aware emission.
+        // gen-5 cycle 3h (2026-05-16, docs/COMPLETED.md #92): condition-aware emission.
         // An equation like `result = n if n <= 1` is structurally probeable
         // for `n` (the condition constrains n's domain), but the original
         // skip-predicate `lhs_var != target && !contains_var(rhs, target)`
@@ -5135,7 +5157,7 @@ private:
             // (e.g. nCr(n=N, k=5) with N bound) is structurally under-determined
             // to reverse-solve; probing it sweeps the bound input across a grid and
             // re-runs the whole forward chain per point (see commit history /
-            // Future: nCr var-arg timeout). The former "any bound var" loop was
+            // the nCr var-arg timeout fix). The former "any bound var" loop was
             // removed for exactly this reason.
 
             // Suppress trace during probe scans — each probe point calls
@@ -5216,7 +5238,7 @@ private:
         // RAII: erase `target` on BOTH normal return and exception unwind so the
         // by-reference `visited` always reflects the path-from-root, matching the
         // prior by-value isolation. Load-bearing for the catch-and-retry path in
-        // try_resolve (see Future #98 sibling-leak regression test). Placed after
+        // try_resolve (see docs/COMPLETED.md #98 sibling-leak regression test). Placed after
         // the early-throws above so cycle-detected / dead-end pre-insert exits are
         // not covered (target was not inserted on those paths).
         struct VisitedGuard {
@@ -5311,7 +5333,7 @@ private:
                 // alive by `sub_systems` for the parent's lifetime — the
                 // ExprPtr is arena-allocated in the sub-system's arena;
                 // safe to read here. Replace with typed FORMULA_CALL nodes
-                // when Future #20 lands (then this 5-line bridge deletes).
+                // when FWIZ-85 lands (then this 5-line bridge deletes).
                 ExprPtr sub_sym = nullptr;
                 if (!used_extern) {
                     if (auto sit = sub_sys.solved_symbolic_.find(resolve_var);
@@ -5610,20 +5632,20 @@ struct CLIQuery {
     std::string inline_source;  // inline equations (query-first format)
     std::vector<CLIQueryVar> queries;
     std::map<std::string, double> bindings;
-    // Future #5: table-mode range bindings — CLI-order-preserving (parallel to
+    // docs/COMPLETED.md #5: table-mode range bindings — CLI-order-preserving (parallel to
     // `queries`). Each entry is (var_name, expanded values). Populated only
     // when a `..`-bearing bracketed value (e.g. `a=[1..10]`) is parsed; empty
     // for all existing CLI paths.
     std::vector<std::pair<std::string, std::vector<double>>> range_bindings;
     std::map<std::string, std::string> symbolic; // formula_var -> output_name (derive mode)
-    // Future #21 (nested form): top-level args that are themselves formula
+    // docs/COMPLETED.md #21 (nested form): top-level args that are themselves formula
     // calls — `outer(result=?, inner(z=?x, p=3))`. Parsed via the same
     // `extract_formula_calls` token-level primitive `.fw` files use, then
     // injected into `sys.formula_calls` by main.cpp before the first solve
     // dispatch. The synthetic alias (`x` above) routes the inner call's
     // result into the parent scope as a regular variable.
     std::vector<FormulaCall> nested_calls;
-    // Future #67: post-load synthetic equations from CLI sugar.
+    // docs/COMPLETED.md #67: post-load synthetic equations from CLI sugar.
     // Populated by parse_cli_query when an arg is recognised as a resolve-at-
     // load FUNC_CALL (currently `integral(...)`/`diff(...)` — same set as the
     // load_with_sections post-load passes). Loaded by main.cpp via
@@ -5644,7 +5666,7 @@ struct CLIQuery {
     std::vector<std::string> constraints;
 };
 
-// Future #5: parse a bracketed range value like `[1..10]`, `[1..10 @ 0.5]`, or
+// docs/COMPLETED.md #5: parse a bracketed range value like `[1..10]`, `[1..10 @ 0.5]`, or
 // the compound form `[1..5, 6..10]`. Returns the expanded numeric sequence.
 // Sub-range grammar: `start..stop[ @ step]`. Defaults: step=1 when ascending
 // and unspecified; descending REQUIRES explicit negative step (refuses silent
@@ -5813,7 +5835,7 @@ struct CLIQuery {
     }
 
     // Split arguments by comma (respecting nested parens AND brackets).
-    // Future #5: bracket-depth fix — vec/mat literals and table ranges embed
+    // docs/COMPLETED.md #5: bracket-depth fix — vec/mat literals and table ranges embed
     // commas inside `[...]`; without bracket tracking, `a=[1..5, 6..10]` would
     // split incorrectly at the inner comma. Mirrors the integral inner scanner
     // below at the `integral(...)` 4-arg piece split.
@@ -5835,7 +5857,7 @@ struct CLIQuery {
         arg = trim(arg);
         if (arg.empty()) continue;
 
-        // Future #21 (nested form): a top-level arg may itself be a formula
+        // docs/COMPLETED.md #21 (nested form): a top-level arg may itself be a formula
         // call, e.g. `nc_inner(z=?x, p=3)`. The cheap shape check is "starts
         // with bare-IDENT immediately followed by `(`". If it matches, lex
         // the arg and run `extract_formula_calls` — the same token-level
@@ -5931,7 +5953,7 @@ struct CLIQuery {
         if (name.empty())
             throw std::runtime_error("Missing variable name in '" + arg + "'");
 
-        // Future #6 + #67: `diff(target_expr, var)=?[alias]` — synthesised
+        // docs/COMPLETED.md #6 + #67: `diff(target_expr, var)=?[alias]` — synthesised
         // into a regular equation `<alias> = diff(target, var)` and a regular
         // `CLIQueryVar` so the standard Pass 2 query loop handles dispatch.
         // The post-load `resolve_diff_in_equations` pass rewrites it after
@@ -5962,7 +5984,7 @@ struct CLIQuery {
             continue;
         }
 
-        // Future #16 (M1+M2) + #67: `integral(target_expr, var)=?[alias]` or
+        // docs/COMPLETED.md #16 (M1+M2) + #67: `integral(target_expr, var)=?[alias]` or
         // 4-arg `integral(target_expr, var, lo, hi)=?[alias]`. Synthesised
         // into a regular equation + a regular query alias, the same way diff
         // above is. The split harvests ALL top-level commas (paren AND bracket
@@ -6063,14 +6085,14 @@ struct CLIQuery {
         } else if (val.empty()) {
             throw std::runtime_error("Missing value for '" + name + "'");
         } else if (val.front() == '[' && val.find("..") != std::string::npos) {
-            // Future #5: bracketed value containing '..' → range binding.
+            // docs/COMPLETED.md #5: bracketed value containing '..' → range binding.
             // The `..` token is invalid Lexer input; route to `parse_range`
             // BEFORE any Lexer call. Vec literals `[1,2,3]` lack `..` and
             // fall through to the existing expression-parse path below.
             q.range_bindings.emplace_back(name, parse_range(val));
             continue;
         } else {
-            // Future #67: `<name>=integral(...)` / `<name>=diff(...)` binding
+            // docs/COMPLETED.md #67: `<name>=integral(...)` / `<name>=diff(...)` binding
             // RHS. The value side carries a resolve-at-load FUNC_CALL — emit
             // a synthetic equation so the post-load passes rewrite it just
             // like an in-file `<name> = integral(...)`. The syntactic check
@@ -6117,7 +6139,7 @@ struct CLIQuery {
                         q.symbolic[name] = val;
                         continue;
                     }
-                    // Future #73: parser succeeded but `evaluate` returned empty.
+                    // docs/COMPLETED.md #73: parser succeeded but `evaluate` returned empty.
                     // The RHS references Vars that will bind after the file
                     // loads — typical case is unit suffixes like `100kg` where
                     // `kg` resolves from `stdlib/units/si-minimal.fw`. Emit as

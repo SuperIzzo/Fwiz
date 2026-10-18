@@ -45,9 +45,9 @@ sweep.
 
 ## Do NOT
 
-- Do NOT auto-apply any refactor proposals — they go into `docs/Future.md` for
-  the visionary audit and the implementer to act on in future cycles.
+- Do NOT auto-apply any refactor proposals — they become ClaudeBoard Backlog tickets for
+  the implementer to act on in future cycles.
 - Do NOT skip the post-run commit-hash update. Without it, the next per-cycle
   run will redo a chunk of the sweep's work.
 - Do NOT modify source files. The blind-spot critic's writes are confined to
-  `docs/Future.md`, `docs/Code-Style.md`, and `.fwiz-workflow/blind-spot-scores.md`.
+  Backlog tickets, `docs/Code-Style.md`, and `.fwiz-workflow/blind-spot-scores.md`.

@@ -1,13 +1,13 @@
 # Rejected: Out-of-Vision Ideas
 
-Case-law sidecar to `docs/Future.md`. Items land here when a visionary audit
+Case-law sidecar to the ClaudeBoard Backlog (follow-up work lives there as tickets). Items land here when a visionary audit
 determines they fall outside Fwiz's vision (universal math inference engine;
 tiny fast core; tools wrap around the engine, not inside it).
 
-> **Numbering matches `Future.md` and `COMPLETED.md`.** A number that ends up
+> **Numbering matches `COMPLETED.md`.** A number that ends up
 > here is retired from active planning unless explicitly reopened. If a reopen
 > trigger fires (vision shifts, a new dependent surfaces), move the entry back
-> to `Future.md` under the appropriate tier.
+> to a new Backlog ticket on ClaudeBoard.
 
 ## Entry format
 
@@ -16,7 +16,7 @@ the date, and (optionally) a concrete reopen condition.
 
     ## #N. Title (rejected YYYY-MM-DD)
 
-    **Original proposal:** short summary, or a brief paste from Future.md.
+    **Original proposal:** short summary, or a brief paste from the original ticket.
 
     **Vision principle violated:** which principle (cite visionary.md or CLAUDE.md).
 
@@ -33,7 +33,7 @@ the date, and (optionally) a concrete reopen condition.
 **Vision principle violated:** "Remove > Add." Per CLAUDE.md core principles: "a general pattern replacing two specializations beats adding a third." The `_` separator adds a specialized prefix-multiplication syntax where the general mechanism (`*` operator + `:` annotation) already covers it.
 
 **Rationale:**
-The hybrid dim model decided in gen-3 cycle 1 (Future #78 DONE-by-design) covers both motivating use cases without requiring a new separator:
+The hybrid dim model decided in gen-3 cycle 1 (shipped, see docs/COMPLETED.md #78 DONE-by-design) covers both motivating use cases without requiring a new separator:
 - **Expression position**: `i * km` works directly. After cycle 2 of the gen-3 arc lands, dim propagation gives `dim(i * km) = dim(i) × dim(km) = dimensionless × length = length`. The complex nature is preserved via `i`'s NaN binding and the `i^2 = -1` rewrite rule.
 - **Binding-level annotation**: `c:(complex, length) = i * km` uses the intersection annotation grammar. Declares `c` as both complex-typed AND length-dimensioned via two AND-connected predicate clauses.
 

@@ -11,7 +11,7 @@
 # §Cycle-Completion Checklist step 6). Two modes:
 #
 #   # 1. Append a per-cycle header + one-line summary, and BUMP the counter.
-#   tools/metrics-append.sh CYCLE "gen-5 3c — Future #7b FULL; 3805->3831 tests"
+#   tools/metrics-append.sh CYCLE "gen-5 3c — docs/COMPLETED.md #7b FULL; 3805->3831 tests"
 #
 #   # 2. Bump the counter only (when the full table is authored separately).
 #   tools/metrics-append.sh BUMP

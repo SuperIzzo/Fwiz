@@ -47,7 +47,7 @@ x = y^(1 / 3)
 
 `resolve()` returns `double`; `fmt_solve_result` in `main.cpp` reconstructs exact-form display (fractions, `pi`, `sqrt(2)`, etc.) heuristically via `fmt_exact_double` → `recognize_fraction`/`recognize_constant`. The former `is_power_of_10` stopgap (which rendered `981 / 10` as `98.1`) has been removed in favour of the explicit `--approximate` flag — see [Solver.md §9](Solver.md#9-output-formatting). Default mode is now consistently exact (`weight = 1000.5` renders as `2001 / 2`); users who want the decimal form pass `--approximate`.
 
-**Path B structural fix (2026-04-26):** `FormulaSystem` now carries a parallel `mutable std::map<std::string, ExprPtr> solved_symbolic_` alongside the numeric `bindings` map. At the binding-commit point (T10, `try_resolve`), `expr_recognize_constants` is applied once to the solver's `simplified` ExprPtr and the result is stored in `solved_symbolic_[target]`. Trace sites (T4/T7/T8/T9) read from this map via the unified `fmt_trace(double, ExprPtr=nullptr, key="")` helper. By construction, trace and final output cannot disagree — both render from the same stored ExprPtr.
+**Path B structural fix (2026-04-26):** `FormulaSystem` now carries a parallel `mutable std::map<std::string, ExprPtr> solved_symbolic_` alongside the numeric `bindings` map. At the binding-commit point (T10, `try_resolve`), `expr_recognize_constants` is applied once to the solver's `simplified` ExprPtr and the result is stored in `solved_symbolic_[target]`. Trace sites (T4/T7/T8/T9) read from this map via unified `fmt_trace(double, ExprPtr=nullptr, key="")` helper. By construction, trace and final output cannot disagree — both render from the same stored ExprPtr.
 
 The fix extends to cross-formula traces via a 5-line sub-system bridge at T7: after `sub_sys.resolve()`, the parent looks up `sub_sys.solved_symbolic_[resolve_var]` and adopts the ExprPtr, so formula-call results render symbolically in the parent trace. Confirmed working on 4 tests, including an adversarial case (`x = y / 401` with `y = 803`) where `RECOGNIZE_FRACTION_MAX_DEN = 360` would have blocked heuristic recovery — the structural carrier gave `803 / 401` directly.
 
@@ -68,11 +68,11 @@ x = log(y) / log(2)
 
 `fwiz --derive` previously produced hundreds of semantically-equivalent output lines (294 for the triangle reproducer) in arbitrary order. Resolved in two cycles: (1) semantic fingerprint dedup in `derive_all` — `fingerprint_expr` evaluates each candidate at prime-cycled test points; candidates sharing a fingerprint are merged, retaining the most canonical form via `canonicity_score`; (2) results now emitted in ascending `canonicity_score` order (`{leaf_count, non_integer_num_count}`) so the simplest formula appears first and always-NaN sentinel forms appear last. `--derive N` caps output at N results after sorting. The `sqrt(x)^2 = x iff x >= 0` rewrite rule (2026-04-20) eliminates all `sqrt(...)^2` tautologies from the output.
 
-The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `rebuild_multiplicative` split-by-sign cycle eliminated one redundant line). The remaining output comes from two sources: (a) genuinely-distinct algebraic forms (different branch-cut coverage at obtuse-angle test points — correct behavior, not duplication), and (b) ~143 Category C "self-substitution" lines where the derivation strategy over-enumerates via cross-equation substitution, producing forms that are semantically equivalent to shorter canonical ones but fingerprint-distinctly at the chosen test points. Category C is an active investigation; see Future #32 and `docs/research/category-c-investigation.md`.
+The triangle reproducer is now at 158 lines (159 → 158 after the 2026-04-24 `rebuild_multiplicative` split-by-sign cycle eliminated one redundant line). The remaining output comes from two sources: (a) genuinely-distinct algebraic forms (different branch-cut coverage at obtuse-angle test points — correct behavior, not duplication), and (b) ~143 Category C "self-substitution" lines where the derivation strategy over-enumerates via cross-equation substitution, producing forms that are semantically equivalent to shorter canonical ones but fingerprint-distinctly at the chosen test points. Category C is an active investigation; see FWIZ-101 and `docs/research/category-c-investigation.md`.
 
-## 9. CSE-I3 roundtrip perf regression post-M1 cascade (Future.md #12g)
+## 9. CSE-I3 roundtrip perf regression post-M1 cascade (FWIZ-67)
 
-M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 to 649 lines (4×); reloading and re-solving the 654-line intermediate `.fw` file exceeds 60s wall-clock. The CSE-I3 test now wraps the roundtrip call with `timeout 10` and accepts either a correct numeric result (A ≈ 15–16) or a timeout-bound empty output — real correctness is not lost, but perf is degraded. Investigation needed before next derive-heavy cycle; see Future.md #12g.
+M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 to 649 lines (4×); reloading and re-solving the 654-line intermediate `.fw` file exceeds 60s wall-clock. The CSE-I3 test now wraps the roundtrip call with `timeout 10` and accepts either a correct numeric result (A ≈ 15–16) or a timeout-bound empty output — real correctness is not lost, but perf is degraded. Investigation needed before next derive-heavy cycle; see FWIZ-67.
 
 ## 11. Complex numbers (`i`) and vectors/matrices — current scope and limitations (2026-05-09/10)
 
@@ -81,12 +81,12 @@ M1's branch-multiplicity cascade grew triangle `--derive --cse` output from 158 
 **Works:** `simplify("i * i") == "(-1)"`, `simplify("i ^ 2") == "(-1)"`, `simplify("3 * i * i") == "(-3)"`. `evaluate()` on any `i`-containing expression returns empty `Checked<double>{}`. `i` is never wildcard-matched in rewrite-rule patterns. Equations containing `i` (e.g. `y = 2*i`) correctly produce "Cannot solve" rather than a wrong real result.
 
 **Does not work yet:**
-- `(1+i)*(1-i)` does not simplify to `2` — requires MUL-over-ADD distribution (Future #13a).
-- `i^4` does not simplify to `1` — no power-cascade rule for `i^N` with N ≥ 4 (Future #13b).
+- `(1+i)*(1-i)` does not simplify to `2` — requires MUL-over-ADD distribution (FWIZ-70).
+- `i^4` does not simplify to `1` — no power-cascade rule for `i^N` with N ≥ 4 (FWIZ-71).
 - `sqrt(-1)` does not produce `i` — requires rule-parser support for negative-literal LHS.
 - Complex root-finding (`resolve_all` on `x^2+1=0` returning `i`-containing forms) is not supported.
 
-The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than propagating NaN — a pre-existing bug made reachable by the NaN-binding for `i`. It is closed off from user input by the `is_active_builtin` NaN-skip, but remains latent; see Future #13c.
+The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than propagating NaN — a pre-existing bug made reachable by the NaN-binding for `i`. It is closed off from user input by the `is_active_builtin` NaN-skip, but remains latent; see FWIZ-72.
 
 ## 12. Vectors and matrices (`vec`/`mat`) — current scope (2026-05-10)
 
@@ -95,19 +95,19 @@ The `flatten_additive` simplifier silently drops `Num(NaN)` terms rather than pr
 **Works:** vector/matrix literals; element-wise add/sub (`[1,2]+[3,4] == [4,6]`); scalar-mul (`2*[1,2,3] == [2,4,6]`); `matmul`, `det` (2×2 and 3×3), `inv` (2×2), `transpose` (general). Symbolic arguments are preserved throughout — `det([[a,b],[c,d]])` returns `a*d - b*c`. Shape mismatch on any operation propagates `Var("undefined")`.
 
 **Does not work yet:**
-- `inv` for 3×3 and larger — returns `undefined` (Future #14 reopen trigger).
+- `inv` for 3×3 and larger — returns `undefined` (FWIZ-74..FWIZ-78 reopen trigger).
 - `det` for 4×4 and larger — returns `undefined`.
-- Matrix-valued CLI bindings: `bindings` is `map<string, double>`; matrix variables cannot be bound to concrete values in CLI queries (Future #10a bindings-parameter extension).
-- Complex-element matrices (e.g. `[[1+i, 0],[0, 1-i]]`) — depends on Future #13a.
+- Matrix-valued CLI bindings: `bindings` is `map<string, double>`; matrix variables cannot be bound to concrete values in CLI queries (FWIZ-57 bindings-parameter extension).
+- Complex-element matrices (e.g. `[[1+i, 0],[0, 1-i]]`) — depends on FWIZ-70.
 - `evaluate()` always returns empty for vec/mat expressions — no real-valued projection exists. Numeric solver and condition comparisons cannot consume matrix values.
 
 **Ragged matrix literals** (rows with differing column counts, e.g. `[[1,2],[3]]`) are caught at parse time as of 2026-05-13 with an explicit `"Ragged matrix literal: row 0 has N columns, row R has M columns"` error. Previously they parsed silently and propagated `undefined` downstream.
 
-**Shape mismatch behavior** is deliberate for runtime operations: fwiz's domain-boundary idiom propagates `undefined` rather than throwing, consistent with `x/x = undefined iff x = 0`. Equations containing undefined operands fail to solve cleanly at the `resolve()` boundary. Runtime shape-mismatch diagnostics for `matmul`/`det`/`inv`/`transpose` remain `undefined`-propagation (no message) — tracked as Future #70.
+**Shape mismatch behavior** is deliberate for runtime operations: fwiz's domain-boundary idiom propagates `undefined` rather than throwing, consistent with `x/x = undefined iff x = 0`. Equations containing undefined operands fail to solve cleanly at the `resolve()` boundary. Runtime shape-mismatch diagnostics for `matmul`/`det`/`inv`/`transpose` remain `undefined`-propagation (no message) — tracked as FWIZ-128.
 
-## 10. M3-6 fingerprint dedup relaxed post-M1 cascade (Future.md #12f)
+## 10. M3-6 fingerprint dedup relaxed post-M1 cascade (FWIZ-66)
 
-`derive_all` uses a 3-point Schwartz–Zippel fingerprint; the M3-6 test uses 5 branch-distinguishing points. Post-M1 (added sin/cos second inverse branches), 4 candidates collide on `derive_all`'s 3 test points but diverge on the test's 5 — `derive_all` retains them (correct under its resolution); the original `dup_count == 0` assertion was too strict. The test now allows `dup_count <= 4` with a comment explaining the cascade. Underlying fix (extend test points or add structural canonicalization, ~30-50 LOC) tracked in Future.md #12f.
+`derive_all` uses a 3-point Schwartz–Zippel fingerprint; the M3-6 test uses 5 branch-distinguishing points. Post-M1 (added sin/cos second inverse branches), 4 candidates collide on `derive_all`'s 3 test points but diverge on the test's 5 — `derive_all` retains them (correct under its resolution); the original `dup_count == 0` assertion was too strict. The test now allows `dup_count <= 4` with a comment explaining the cascade. Underlying fix (extend test points or add structural canonicalization, ~30-50 LOC) tracked in FWIZ-66.
 
 ## 13. Symbolic integration — current scope (M1+M2+M3, 2026-05-10)
 
@@ -119,21 +119,21 @@ Three-cycle Integrals arc complete. M1: indefinite Tier 1; M2: u-substitution, d
 - Cyclic IBP (`e^x*sin(x)` family) — depth limit catches the recursion; result stays unevaluated by design. Reopen trigger: user reports family unevaluated in real reproducer AND cleanly-layered detection mechanism identified.
 - IBP depth > 3 chains — depth limit is a deliberate bounds guard, not an algorithm limit; lifting it requires cyclic-IBP detection first.
 - `+ C` constant of integration — deliberately excluded (would not round-trip as `.fw`).
-- Risch algorithm, improper integrals, multi-variable integration, trig substitution, partial fractions, special functions — see cross-arc reopen triggers in Future #16.
+- Risch algorithm, improper integrals, multi-variable integration, trig substitution, partial fractions, special functions — see cross-arc reopen triggers in FWIZ-80..FWIZ-83.
 
 **Adaptive Simpson failure modes:** `adaptive_simpson` (expr.h, `ADAPTIVE_SIMPSON_MAX_DEPTH=30`) short-circuits to NaN whenever the integrand evaluator returns NaN at any sample point. A NaN result causes `resolve_integral_calls` to preserve the unevaluated `integral(...)` FUNC_CALL rather than return a numeric approximation. Depth exhaustion (more than 2^30 sub-intervals) produces a best-effort approximation without error indication — only integrands with rapid oscillation or near-singularities at bounded-away sample points are expected to hit this.
 
-**Domain assumption:** `integral(1/x, x)` emits `log(x)`, not `log(abs(x))`. The mathematically complete antiderivative for unknown-sign `x` requires `abs(x)`, but emitting it unconditionally pessimises concrete-domain cases. Deferred to a domain-aware pass gated on Future #31 (global-condition propagation). See Future #63.
+**Domain assumption:** `integral(1/x, x)` emits `log(x)`, not `log(abs(x))`. The mathematically complete antiderivative for unknown-sign `x` requires `abs(x)`, but emitting it unconditionally pessimises concrete-domain cases. Deferred to a domain-aware pass gated on FWIZ-100 (global-condition propagation). See FWIZ-123.
 
-**No `--integrate` flag:** integration is a per-query operation with natural in-file syntax; no global render mode exists. See Future #64 for the deferred-flag rationale.
+**No `--integrate` flag:** integration is a per-query operation with natural in-file syntax; no global render mode exists. See FWIZ-124 for the deferred-flag rationale.
 
 ## 14. `--table` performance at large row counts (2026-05-11)
 
 Two known performance limitations for very large tables:
 
-**Arena accumulation:** the `ExprArena::Scope` wrapping the table driver loop grows across all rows without a flush point. For tables reaching the 1M-row soft-warning threshold with constant-recognizable output, arena RSS can reach ~960 MB. Mitigation tracked in Future.md #5f (checkpoint/reset API or string-direct `fmt_exact_double` variant).
+**Arena accumulation:** the `ExprArena::Scope` wrapping the table driver loop grows across all rows without a flush point. For tables reaching the 1M-row soft-warning threshold with constant-recognizable output, arena RSS can reach ~960 MB. Mitigation tracked in FWIZ-47 (checkpoint/reset API or string-direct `fmt_exact_double` variant).
 
-**Bindings-copy-per-row:** `emit_row` (main.cpp) copies the full fixed-bindings map (`query.bindings`, O(M) for M fixed variables) before overlaying the K range-dimension values. For M ≥ 5 fixed bindings and N ≥ 100K rows this is N×M unnecessary copies. Mitigation tracked in Future.md #5e (pre-allocated base copy held outside the loop). Neither limitation affects correctness.
+**Bindings-copy-per-row:** `emit_row` (main.cpp) copies the full fixed-bindings map (`query.bindings`, O(M) for M fixed variables) before overlaying the K range-dimension values. For M ≥ 5 fixed bindings and N ≥ 100K rows this is N×M unnecessary copies. Mitigation tracked in FWIZ-46 (pre-allocated base copy held outside the loop). Neither limitation affects correctness.
 
 ## 8. `--cse 3` default is over-aggressive on dense formula sets — RESOLVED
 
