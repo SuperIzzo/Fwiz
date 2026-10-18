@@ -231,6 +231,12 @@ int main(int argc, const char* argv[]) {
         } else {
             sys.load_file(query.filename, query.section);
         }
+        if (query.section.empty()) {  // FWIZ-151: section-only file queried by name
+            std::vector<std::string> query_vars(query.queries.size());
+            std::transform(query.queries.begin(), query.queries.end(), query_vars.begin(),
+                           [](const CLIQueryVar& q) { return q.variable; });
+            sys.load_sole_section_for_query(query_vars);
+        }
 
         // docs/COMPLETED.md #67: post-load synthetic equations from CLI sugar
         // (`integral(...)=?[alias]`, `diff(...)=?[alias]`, or binding RHS

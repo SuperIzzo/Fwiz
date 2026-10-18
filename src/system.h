@@ -669,7 +669,12 @@ public:
             // Load nothing extra (top-level only)
             return;
         }
+        load_section_chain(section);
+    }
 
+    // Load `section` and its dotted ancestors ("a.b" → [a], [a.b]) on top of
+    // whatever is already loaded.
+    void load_section_chain(const std::string& section) {
         // Build inheritance chain: "a.b.c" → ["a", "a.b", "a.b.c"]
         std::vector<std::string> chain;
         size_t pos = 0;
@@ -1512,6 +1517,10 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
             load_lines(filtered);  // @include lines blanked by process_includes
         else
             load_section(section);
+        run_post_load_passes();
+    }
+
+    void run_post_load_passes() {
         resolve_positional_calls();
         compute_rewrite_groups();  // regroup after user rules loaded
         resolve_diff_in_equations();  // docs/COMPLETED.md #6: rewrite diff(...) calls
@@ -2275,6 +2284,34 @@ x^n = 1 / x^(-n) iff is_neg_num(n)
                 trace.step(s + ")");
             }
         }
+    }
+
+    // FWIZ-151: a file queried by name (no `file.section`) whose top level
+    // never mentions a queried variable falls back to its formula sections.
+    // Exactly one → load it on top of the top level, same as `file.section`.
+    // Several → picking one would be a guess, so error naming them and the
+    // two ways to call one.
+    void load_sole_section_for_query(const std::vector<std::string>& query_vars) {
+        const auto top_vars = all_variables();
+        if (query_vars.empty() || std::any_of(query_vars.begin(), query_vars.end(),
+                [&](const std::string& v) { return top_vars.count(v) > 0; }))
+            return;
+        std::vector<std::string> names;
+        for (const auto& s : sections_)
+            if (!s.name.empty() && !s.return_var.empty()) names.push_back(s.name);
+        if (names.empty()) return;
+        if (names.size() > 1) {
+            std::string list;
+            for (size_t i = 0; i < names.size(); i++) list += (i ? ", " : "") + names[i];
+            throw std::runtime_error(
+                "Nothing at the top level of '" + source_label_ + "' defines '" + query_vars[0]
+                + "'; the file only has sections " + list + ". Query one directly, e.g. '"
+                + source_label_ + "." + names[0] + "(...)', or add a top-level equation that "
+                "calls it, e.g. 'answer = " + names[0] + "(...)'");
+        }
+        const ExprArena::Scope scope(arena);
+        load_section_chain(names[0]);
+        run_post_load_passes();
     }
 
     // ────────────── Subsection: CLI orchestration helpers ──────────────
