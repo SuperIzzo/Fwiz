@@ -19579,6 +19579,76 @@ void test_include_m3() {
     fs::remove_all(base);
 }
 
+// FWIZ-151: a file holding only function sections, queried by file name with
+// no `file.section` selector. One section → query it directly; several →
+// error naming them and how to call one.
+void test_section_only_file_query() {
+    SECTION("FWIZ-151: query a file that only defines a section");
+
+    namespace fs = std::filesystem;
+    const std::string base = "/tmp/fwiz_151";
+    fs::remove_all(base);
+    fs::create_directories(base);
+
+    // S1: sole section, file stem differs from the section name.
+    write_fw(base + "/fibs.fw",
+             "[fib(n) -> result]\n"
+             "result = n if n <= 1\n"
+             "result = fib(n-1) + fib(n-2) if n >= 2\n");
+    {
+        const std::string out = capture_cmd(
+            "./bin/fwiz '" + base + "/fibs.fw(n=10, result=?)' 2>&1");
+        ASSERT(out.find("result = 55") != std::string::npos,
+               "S1: sole-section file queried by name prints result = 55 (got: " + out + ")");
+    }
+
+    // S2 (FWIZ-152 shape): stem == section name, custom return var, `=` condition.
+    write_fw(base + "/fib.fw",
+             "[fib(n) -> f]\n"
+             "f = 0 if n = 0\n"
+             "f = 1 if n = 1\n"
+             "f = fib(n-1) + fib(n-2) if n >= 2\n");
+    {
+        const std::string out = capture_cmd(
+            "./bin/fwiz '" + base + "/fib.fw(n=10, f=?)' 2>&1");
+        ASSERT(out.find("f = 55") != std::string::npos,
+               "S2: fib.fw(n=10, f=?) prints f = 55 (got: " + out + ")");
+    }
+
+    // S3: several sections, nothing top-level → error naming them + how to call one.
+    write_fw(base + "/seqs.fw",
+             "[fib(n) -> result]\n"
+             "result = n if n <= 1\n"
+             "result = fib(n-1) + fib(n-2) if n >= 2\n"
+             "[double(n) -> result] = 2 * n\n");
+    {
+        const std::string out = capture_cmd(
+            "./bin/fwiz '" + base + "/seqs.fw(n=10, result=?)' 2>&1");
+        ASSERT(out.find("fib") != std::string::npos && out.find("double") != std::string::npos,
+               "S3: multi-section error names both sections (got: " + out + ")");
+        ASSERT(out.find("seqs.fib(") != std::string::npos,
+               "S3: error shows the file.section query form (got: " + out + ")");
+        ASSERT(out.find("answer = fib(") != std::string::npos,
+               "S3: error shows the top-level-equation form (got: " + out + ")");
+    }
+
+    // S4: a top-level equation answers the query → no section fallback.
+    {
+        write_fw(base + "/top.fw",
+                 "answer = fib(k)\n"
+                 "[fib(n) -> result]\n"
+                 "result = n if n <= 1\n"
+                 "result = fib(n-1) + fib(n-2) if n >= 2\n"
+                 "[double(n) -> result] = 2 * n\n");
+        const std::string out = capture_cmd(
+            "./bin/fwiz '" + base + "/top.fw(k=10, answer=?)' 2>&1");
+        ASSERT(out.find("answer = 55") != std::string::npos,
+               "S4: top-level equation answers; no multi-section error (got: " + out + ")");
+    }
+
+    fs::remove_all(base);
+}
+
 int main() {
     ExprArena test_arena;
     ExprArena::Scope arena_scope(test_arena);
@@ -19956,6 +20026,8 @@ int main() {
     test_include_m1();
     test_include_m2();
     test_include_m3();
+
+    test_section_only_file_query();  // FWIZ-151
 
     std::cout << "\n===============\n";
     std::cout << "Total: " << tests_run
